@@ -2,23 +2,37 @@
 //  ContentView.swift
 //  fileSearchForntend
 //
-//  Created by Ethan Pan on 10/19/25.
+//  Main app layout with NavigationSplitView (Sidebar + Detail)
 //
 
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        NavigationSplitView {
+            // Sidebar with navigation items
+            SidebarView()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+        } detail: {
+            // Detail area switches based on sidebar selection
+            Group {
+                switch model.selection {
+                case .home, .none:
+                    HomeView()
+                case .jobs:
+                    JobsView()
+                case .settings:
+                    SettingsView()
+                }
+            }
         }
-        .padding()
+        .navigationSplitViewStyle(.balanced)
     }
 }
 
 #Preview {
     ContentView()
+        .environment(AppModel())
 }
