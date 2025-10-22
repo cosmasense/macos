@@ -16,8 +16,9 @@ struct fileSearchForntendApp: App {
             ContentView()
                 .environment(appModel)
                 .frame(minWidth: 900, minHeight: 600)
+                .containerBackground(.ultraThinMaterial, for: .window)
         }
         .windowStyle(.automatic)
-        .defaultSize(width: 1200, height: 800)
+        .defaultSize(width: 900, height: 600)
     }
 }

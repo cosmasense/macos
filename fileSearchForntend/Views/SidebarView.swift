@@ -29,7 +29,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("File Organizer")
+        .navigationTitle("AI File Finder")
         .scrollContentBackground(.hidden)
     }
 

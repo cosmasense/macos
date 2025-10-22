@@ -52,6 +52,8 @@ struct JobsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Jobs")
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],

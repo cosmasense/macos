@@ -3,19 +3,22 @@
 //  fileSearchForntend
 //
 //  Search view with tokenized @folder support and recent searches
-//  Redesigned for macOS 26 with Liquid Glass aesthetics
+//  Redesigned for macOS 26 with Liquid Glass aesthetics and keyboard navigation
+//  Enhanced with simplified backspace deletion and improved visibility
 //
 
 import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @FocusState private var searchFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 32) {
             // Search area with generous top padding
-            SearchFieldView()
-                .frame(maxWidth: 680)
+            SearchFieldView(isFocused: $searchFieldFocused)
+                .frame(minWidth: 400, maxWidth: 680)
+                .padding(.horizontal, 40)
                 .padding(.top, 80)
 
             Divider()
@@ -23,26 +26,36 @@ struct HomeView: View {
 
             // Recent searches
             RecentSearchesView()
-                .frame(maxWidth: 680)
+                .frame(minWidth: 400, maxWidth: 680)
+                .padding(.horizontal, 40)
 
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            searchFieldFocused = false
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Search Files")
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .background(.ultraThinMaterial)
     }
+    
 }
 
 // MARK: - Search Field Component
 
 struct SearchFieldView: View {
     @Environment(AppModel.self) private var model
-    @FocusState private var isFocused: Bool
+    @FocusState.Binding var isFocused: Bool
+    @State private var selectedSuggestionIndex: Int = 0
 
     var body: some View {
         @Bindable var model = model
 
         VStack(alignment: .leading, spacing: 12) {
-            // Main search field with Liquid Glass material
+            // Main search field with enhanced Liquid Glass material and focus animation
             HStack(spacing: 12) {
                 // Search icon
                 Image(systemName: "magnifyingglass")
@@ -58,18 +71,31 @@ struct SearchFieldView: View {
                         }
                     }
 
-                    // Text field
+                    // Text field with keyboard handling
                     TextField("Search files or type @folder...", text: $model.searchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .focused($isFocused)
                         .onSubmit {
-                            if !model.searchText.isEmpty || !model.searchTokens.isEmpty {
-                                model.performSearch()
-                            }
+                            handleEnterKey()
                         }
                         .onChange(of: model.searchText) { oldValue, newValue in
-                            checkForTokenCreation()
+                            handleTextChange(oldValue: oldValue, newValue: newValue)
+                        }
+                        .onKeyPress(.tab) {
+                            handleTabKey()
+                            return .handled
+                        }
+                        .onKeyPress(.upArrow) {
+                            handleUpArrow()
+                            return .handled
+                        }
+                        .onKeyPress(.downArrow) {
+                            handleDownArrow()
+                            return .handled
+                        }
+                        .onKeyPress(.delete) {
+                            return handleBackspace()
                         }
                 }
 
@@ -88,20 +114,117 @@ struct SearchFieldView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+            // Layered Liquid Glass for enhanced visibility
+            .background {
+                ZStack {
+                    // Bottom layer - more opaque
+                    RoundedRectangle(cornerRadius: 24)
+                        .fill(.regularMaterial)
+
+                    // Top layer - ultra thin for glass effect
+                    RoundedRectangle(cornerRadius: 24)
+                        .fill(.ultraThinMaterial)
+                }
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 24)
-                    .strokeBorder(.quaternary.opacity(0.5), lineWidth: 0.5)
+                    .strokeBorder(
+                        isFocused
+                            ? Color.accentColor.opacity(0.5)
+                            : Color.white.opacity(0.2),
+                        lineWidth: isFocused ? 2 : 1
+                    )
+                    .animation(.easeInOut(duration: 0.2), value: isFocused)
             )
-            .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+            .shadow(
+                color: isFocused
+                    ? Color.accentColor.opacity(0.3)
+                    : Color.black.opacity(0.08),
+                radius: isFocused ? 16 : 12,
+                x: 0,
+                y: isFocused ? 6 : 4
+            )
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
 
             // Folder suggestions dropdown
             if model.searchText.contains("@") {
-                FolderSuggestionsView()
+                FolderSuggestionsView(selectedIndex: $selectedSuggestionIndex)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: model.searchText.contains("@"))
+        .onChange(of: model.searchText.contains("@")) { oldValue, newValue in
+            if !newValue {
+                selectedSuggestionIndex = 0
+            }
+        }
+    }
+
+    // MARK: - Keyboard Handlers
+
+    private func handleTextChange(oldValue: String, newValue: String) {
+        selectedSuggestionIndex = 0
+        checkForTokenCreation()
+    }
+
+    private func handleBackspace() -> KeyPress.Result {
+        // Delete the last token when text field is empty
+        // Return .ignored to allow normal text deletion when text exists
+        if model.searchText.isEmpty && !model.searchTokens.isEmpty {
+            // Prevent default backspace behavior and delete the token
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.searchTokens.removeLast()
+            }
+            // Return .handled to prevent the default backspace action
+            return .handled
+        }
+        // Return .ignored to allow normal text deletion
+        return .ignored
+    }
+
+    private func handleEnterKey() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.searchText.contains("@") {
+            // Select the highlighted suggestion
+            selectFolder(suggestions[selectedSuggestionIndex])
+        } else if !model.searchText.isEmpty || !model.searchTokens.isEmpty {
+            model.performSearch()
+        }
+    }
+
+    private func handleTabKey() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.searchText.contains("@") {
+            // Autocomplete with first suggestion
+            selectFolder(suggestions[0])
+        }
+    }
+
+    private func handleUpArrow() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.searchText.contains("@") {
+            selectedSuggestionIndex = max(0, selectedSuggestionIndex - 1)
+        }
+    }
+
+    private func handleDownArrow() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.searchText.contains("@") {
+            selectedSuggestionIndex = min(suggestions.count - 1, selectedSuggestionIndex + 1)
+        }
+    }
+
+    private func getSuggestions() -> [WatchedFolder] {
+        let words = model.searchText.split(separator: " ")
+        guard let lastWord = words.last else { return [] }
+
+        let word = String(lastWord)
+        guard word.hasPrefix("@"), word.count > 1 else { return [] }
+
+        let query = String(word.dropFirst()).lowercased()
+        return model.watchedFolders.filter {
+            $0.name.lowercased().hasPrefix(query)
+        }
     }
 
     private func removeToken(_ token: SearchToken) {
@@ -138,6 +261,24 @@ struct SearchFieldView: View {
         model.searchText = model.searchText
             .replacingOccurrences(of: "@\(folderName)", with: "")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func selectFolder(_ folder: WatchedFolder) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            let newToken = SearchToken(kind: .folder, value: folder.name)
+            if !model.searchTokens.contains(newToken) {
+                model.searchTokens.append(newToken)
+            }
+            // Remove @ and the partial folder name from text
+            let words = model.searchText.split(separator: " ")
+            var newText = model.searchText
+            if let lastWord = words.last, String(lastWord).hasPrefix("@") {
+                newText = model.searchText
+                    .replacingOccurrences(of: String(lastWord), with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            model.searchText = newText
+        }
     }
 }
 
@@ -182,6 +323,7 @@ struct TokenChipView: View {
 
 struct FolderSuggestionsView: View {
     @Environment(AppModel.self) private var model
+    @Binding var selectedIndex: Int
 
     var body: some View {
         let suggestions = getSuggestions()
@@ -205,13 +347,14 @@ struct FolderSuggestionsView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
+                        .background(
+                            index == selectedIndex
+                                ? Color.accentColor.opacity(0.15)
+                                : Color.clear
+                        )
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .background(Color.primary.opacity(0.0001))
-                    .onHover { hovering in
-                        // Optional: add hover effect
-                    }
 
                     if index < suggestions.count - 1 {
                         Divider()
@@ -306,50 +449,61 @@ struct RecentSearchRowView: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: {
-            model.loadRecentSearch(search)
-        }) {
-            HStack(spacing: 14) {
-                Image(systemName: "clock")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20)
+        HStack(spacing: 14) {
+            // Click to load search
+            Button(action: {
+                model.loadRecentSearch(search)
+            }) {
+                HStack(spacing: 14) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20)
 
-                VStack(alignment: .leading, spacing: 3) {
                     Text(search.rawQuery)
                         .font(.system(size: 14))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(search.date, style: .relative)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.quaternary)
+                        .opacity(isHovered ? 1 : 0)
                 }
-
-                Spacer()
-
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.quaternary)
-                    .opacity(isHovered ? 1 : 0)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isHovered = hovering
+                }
             }
+
+            // Delete button
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.recentSearches.removeAll { $0.id == search.id }
+                }
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+        )
     }
 }
 
 #Preview {
+    @Previewable @FocusState var focused: Bool
+
     HomeView()
         .environment(AppModel())
         .frame(width: 1000, height: 700)

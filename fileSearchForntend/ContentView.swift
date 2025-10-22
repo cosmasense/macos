@@ -29,10 +29,13 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(.ultraThinMaterial)
+        
     }
 }
 
-#Preview {
+#Preview(traits: .sizeThatFitsLayout) {
     ContentView()
         .environment(AppModel())
+        .frame(width: 1000, height: 600)
 }

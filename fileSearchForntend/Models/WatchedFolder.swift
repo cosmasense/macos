@@ -21,4 +21,5 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
     var path: String
     var progress: Double // 0.0...1.0
     var status: IndexStatus
+    var lastModified: Date = Date()
 }
