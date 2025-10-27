@@ -19,7 +19,7 @@ struct HomeView: View {
             SearchFieldView(isFocused: $searchFieldFocused)
                 .frame(minWidth: 400, maxWidth: 680)
                 .padding(.horizontal, 40)
-                .padding(.top, 80)
+                .padding(.top, 40)
 
             Divider()
                 .padding(.horizontal, 40)
@@ -327,7 +327,7 @@ struct FolderSuggestionsView: View {
 
     var body: some View {
         let suggestions = getSuggestions()
-
+        
         if !suggestions.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, folder in
@@ -410,35 +410,40 @@ struct RecentSearchesView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if model.recentSearches.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.quaternary)
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if model.recentSearches.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.quaternary)
 
-                    Text("No recent searches")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
+                            Text("No recent searches")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.secondary)
 
-                    Text("Try typing @FolderName to scope your search")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 60)
-            } else {
-                Text("Recent Searches")
-                    .font(.system(size: 18, weight: .semibold))
-                    .padding(.horizontal, 4)
+                            Text("Try typing @FolderName to scope your search")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 60)
+                    } else {
+                        Text("Recent Searches")
+                            .font(.system(size: 18, weight: .semibold))
+                            .padding(.horizontal, 4)
 
-                VStack(spacing: 8) {
-                    ForEach(model.recentSearches) { search in
-                        RecentSearchRowView(search: search)
+                        VStack(spacing: 8) {
+                            ForEach(model.recentSearches.prefix(25)) { search in //prefix(n) = first n items to display in RecentSearchesView
+                                RecentSearchRowView(search: search)
+                            }
+                        }
                     }
                 }
             }
+            .frame(height: geometry.size.height)
         }
     }
 }
@@ -473,12 +478,7 @@ struct RecentSearchRowView: View {
                 }
             }
             .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isHovered = hovering
-                }
-            }
-
+            
             // Delete button
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -494,10 +494,16 @@ struct RecentSearchRowView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .contentShape(Rectangle()) //onHover includes whitespace between search and x button
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
         )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
     }
 }
 
