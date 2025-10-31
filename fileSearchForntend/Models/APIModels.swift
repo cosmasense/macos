@@ -10,7 +10,7 @@ import Foundation
 // MARK: - File Response
 
 /// Shared API response model for file metadata across endpoints
-struct FileResponse: Codable, Identifiable {
+struct FileResponse: Codable, Identifiable, Equatable {
     let filePath: String
     let filename: String
     let fileExtension: String
@@ -52,7 +52,7 @@ struct SearchRequest: Codable {
 }
 
 /// A single search result
-struct SearchResultItem: Codable, Identifiable {
+struct SearchResultItem: Codable, Identifiable, Equatable {
     let file: FileResponse
     let relevanceScore: Float
     
@@ -61,6 +61,10 @@ struct SearchResultItem: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case file
         case relevanceScore = "relevance_score"
+    }
+    
+    static func == (lhs: SearchResultItem, rhs: SearchResultItem) -> Bool {
+        lhs.id == rhs.id && lhs.relevanceScore == rhs.relevanceScore
     }
 }
 
