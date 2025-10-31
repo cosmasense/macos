@@ -6,14 +6,28 @@
 //
 
 import SwiftUI
+import HotKey
 
 @main
 struct fileSearchForntendApp: App {
     @State private var appModel = AppModel()
+    @State private var showingPanel = false
+    
+    private var hotKey: HotKey
+    
+    init() {
+        // Create a binding wrapper to capture the state
+        let binding = Binding<Bool>(
+            get: { false },
+            set: { _ in }
+        )
+        
+        hotKey = HotKey(key: .z, modifiers: [.control, .command])
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(showingPanel: $showingPanel, hotKey: hotKey)
                 .environment(appModel)
                 .frame(minWidth: 900, minHeight: 600)
                 .containerBackground(.ultraThinMaterial, for: .window)

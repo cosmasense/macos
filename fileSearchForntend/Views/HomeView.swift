@@ -24,10 +24,19 @@ struct HomeView: View {
             Divider()
                 .padding(.horizontal, 40)
 
-            // Recent searches
-            RecentSearchesView()
-                .frame(minWidth: 400, maxWidth: 680)
-                .padding(.horizontal, 40)
+            // Show search results if available, otherwise show recent searches
+            if !model.searchResults.isEmpty || model.isSearching || model.searchError != nil {
+                SearchResultsView()
+                    .frame(minWidth: 400, maxWidth: 680)
+                    .padding(.horizontal, 40)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else {
+                // Recent searches
+                RecentSearchesView()
+                    .frame(minWidth: 400, maxWidth: 680)
+                    .padding(.horizontal, 40)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             Spacer()
         }
@@ -40,6 +49,8 @@ struct HomeView: View {
         .navigationTitle("Search Files")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
+        .animation(.easeInOut(duration: 0.3), value: model.searchResults.isEmpty)
+        .animation(.easeInOut(duration: 0.3), value: model.isSearching)
     }
     
 }
