@@ -15,6 +15,7 @@ struct ContentView: View {
             // Sidebar with navigation items
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+                
         } detail: {
             // Detail area switches based on sidebar selection
             Group {
@@ -29,7 +30,7 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .background(.ultraThinMaterial)
+        .background(.windowBackground)
         
     }
 }
