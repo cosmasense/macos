@@ -10,18 +10,6 @@ import HotKey
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @Binding var showingPanel: Bool
-    let hotKey: HotKey
-    @State private var searchText = ""
-    @State private var floatingPanelResults: [SearchResultItem] = []
-    @State private var isSearching = false
-    @FocusState private var isSearchFieldFocused: Bool
-    @Environment(\.floatingPanel) private var floatingPanel
-    
-    init(showingPanel: Binding<Bool>, hotKey: HotKey) {
-            self._showingPanel = showingPanel
-            self.hotKey = hotKey
-        }
 
     var body: some View {
         NavigationSplitView {
@@ -43,88 +31,6 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(.ultraThinMaterial)
-        .onAppear {
-            hotKey.keyDownHandler = {
-                NSApp.activate(ignoringOtherApps: true)
-                showingPanel.toggle()
-            }
-        }
-        .floatingPanel(
-            isPresented: $showingPanel,
-            contentRect: {
-                let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? CGRect.zero
-                let panelWidth: CGFloat = 900
-                let panelHeight: CGFloat = floatingPanelResults.isEmpty ? 60 : 280
-                
-                return CGRect(
-                    x: screen.midX - (panelWidth / 2),  // Center horizontally
-                    y: screen.minY + 10,                 // Bottom of screen
-                    width: panelWidth,
-                    height: panelHeight
-                )
-            }(),
-            content: {
-                FloatingPanelContentView(
-                    searchText: $searchText,
-                    results: $floatingPanelResults,
-                    isSearching: $isSearching,
-                    isSearchFieldFocused: $isSearchFieldFocused,
-                    onSearch: performFloatingSearch,
-                    onClear: clearFloatingSearch
-                )
-            }
-        )
-        .onChange(of: showingPanel) { oldValue, newValue in
-            if newValue {
-                // Focus search field when panel opens
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isSearchFieldFocused = true
-                }
-            } else {
-                // Clear search when panel closes
-                clearFloatingSearch()
-            }
-        }
-    }
-    
-    // MARK: - Floating Panel Search Functions
-    
-    private func performFloatingSearch() {
-        print("🔍 performFloatingSearch called with query: '\(searchText)'")
-        
-        guard !searchText.isEmpty else {
-            print("⚠️ Search text is empty, clearing")
-            clearFloatingSearch()
-            return
-        }
-        
-        isSearching = true
-        print("⏳ isSearching set to true")
-        
-        Task {
-            do {
-                print("🌐 Making API call...")
-                let response = try await APIClient.shared.search(query: searchText, limit: 3)
-                print("✅ API call succeeded with \(response.results.count) results")
-                await MainActor.run {
-                    floatingPanelResults = Array(response.results.prefix(3))
-                    isSearching = false
-                    print("📊 Results updated: \(floatingPanelResults.count) items")
-                }
-            } catch {
-                print("❌ API call failed: \(error)")
-                await MainActor.run {
-                    floatingPanelResults = []
-                    isSearching = false
-                }
-            }
-        }
-    }
-    
-    private func clearFloatingSearch() {
-        searchText = ""
-        floatingPanelResults = []
-        isSearching = false
     }
 }
 
@@ -183,6 +89,16 @@ struct FloatingPanelContentView: View {
                         .focused($isSearchFieldFocused)
                         .onSubmit {
                             onSearch()
+                        }
+                        .onKeyPress(.escape) {
+                            // Close panel when ESC is pressed
+                            // Use Task to avoid "Publishing changes from within view updates" error
+                            Task { @MainActor in
+                                if let panel = floatingPanel as? FloatingPanel<FloatingPanelContentWrapper> {
+                                    panel.isPresented = false
+                                }
+                            }
+                            return .handled
                         }
                         .onChange(of: searchText) { oldValue, newValue in
                             print("⌨️ TextField onChange: '\(oldValue)' -> '\(newValue)'")
@@ -256,10 +172,7 @@ struct FloatingPanelContentView: View {
 }
 
 #Preview(traits: .sizeThatFitsLayout) {
-    ContentView(
-        showingPanel: .constant(false),
-        hotKey: HotKey(key: .z, modifiers: [.control, .command])
-    )
-    .environment(AppModel())
-    .frame(width: 1000, height: 600)
+    ContentView()
+        .environment(AppModel())
+        .frame(width: 1000, height: 600)
 }

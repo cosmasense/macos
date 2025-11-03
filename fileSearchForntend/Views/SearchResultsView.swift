@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SearchResultsView: View {
     @Environment(AppModel.self) private var model
@@ -107,100 +108,122 @@ struct SearchResultRow: View {
     @State private var isHovered = false
     
     var body: some View {
-        Button(action: {
-            openFile()
-        }) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 12) {
-                    // File icon
-                    Image(systemName: fileIcon)
-                        .font(.system(size: 20))
-                        .foregroundStyle(fileIconColor)
-                        .frame(width: 24)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Filename
-                        Text(result.file.filename)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        
-                        // File path
-                        Text(result.file.filePath)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    
-                    Spacer()
-                    
-                    // Relevance score
-                    HStack(spacing: 4) {
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 10))
-                        Text(String(format: "%.0f%%", result.relevanceScore * 100))
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(.yellow)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.yellow.opacity(0.15))
-                    .clipShape(Capsule())
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                // File icon
+                Image(systemName: fileIcon)
+                    .font(.system(size: 20))
+                    .foregroundStyle(fileIconColor)
+                    .frame(width: 24)
                 
-                // Title and summary if available
-                if let title = result.file.title, !title.isEmpty {
-                    Text(title)
-                        .font(.system(size: 13))
+                VStack(alignment: .leading, spacing: 4) {
+                    // Filename
+                    Text(result.file.filename)
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    
+                    // File path
+                    Text(result.file.filePath)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 
-                if let summary = result.file.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                Spacer()
                 
-                // Metadata
-                HStack(spacing: 16) {
+                // Relevance score
+                HStack(spacing: 4) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 10))
+                    Text(String(format: "%.0f%%", result.relevanceScore * 100))
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(.yellow)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.yellow.opacity(0.15))
+                .clipShape(Capsule())
+            }
+            
+            // Title and summary if available
+            if let title = result.file.title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            
+            if let summary = result.file.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            
+            // Metadata
+            HStack(spacing: 16) {
+                Label(
+                    formatDate(result.file.modified),
+                    systemImage: "calendar"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                
+                if !result.file.fileExtension.isEmpty {
                     Label(
-                        formatDate(result.file.modified),
-                        systemImage: "calendar"
+                        result.file.fileExtension.uppercased(),
+                        systemImage: "doc"
                     )
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
-                    
-                    if !result.file.fileExtension.isEmpty {
-                        Label(
-                            result.file.fileExtension.uppercased(),
-                            systemImage: "doc"
-                        )
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                    }
                 }
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(
-                        isHovered ? Color.accentColor.opacity(0.3) : Color.clear,
-                        lineWidth: 1
-                    )
-            )
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(
+                    isHovered ? Color.accentColor.opacity(0.3) : Color.clear,
+                    lineWidth: 1
+                )
+        )
+        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering
             }
+        }
+        .onTapGesture {
+            openFile()
+        }
+        .onDrag {
+            let url = URL(fileURLWithPath: result.file.filePath)
+            let itemProvider = NSItemProvider()
+            
+            // Register the file URL
+            itemProvider.registerFileRepresentation(forTypeIdentifier: "public.file-url", visibility: .all) { completion in
+                completion(url, true, nil)
+                return nil
+            }
+            
+            // Register the actual file data with appropriate UTType
+            if let utType = UTType(filenameExtension: result.file.fileExtension) {
+                itemProvider.registerFileRepresentation(forTypeIdentifier: utType.identifier, visibility: .all) { completion in
+                    completion(url, true, nil)
+                    return nil
+                }
+            }
+            
+            // Also register as NSURL for backwards compatibility
+            itemProvider.registerObject(url as NSURL, visibility: .all)
+            
+            return itemProvider
         }
     }
     

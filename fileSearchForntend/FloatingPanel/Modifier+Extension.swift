@@ -20,6 +20,9 @@ fileprivate struct FloatingPanelModifier<PanelContent: View>: ViewModifier {
  
     /// Stores the panel instance with the same generic type as the view closure
     @State var panel: FloatingPanel<PanelContent>?
+    
+    /// Stores the previously active application to restore focus when panel closes
+    @State var previousApp: NSRunningApplication?
  
     func body(content: Content) -> some View {
         content
@@ -39,15 +42,40 @@ fileprivate struct FloatingPanelModifier<PanelContent: View>: ViewModifier {
                 if value {
                     present()
                 } else {
-                    panel?.close()
+                    dismiss()
                 }
             }
     }
  
-    /// Present the panel and make it the key window
+    /// Present the panel without bringing main window forward
     func present() {
-        panel?.orderFront(nil)
-        panel?.makeKey()
+        // Store the currently active app before we activate ours
+        previousApp = NSWorkspace.shared.frontmostApplication
+        
+        panel?.orderFrontRegardless()
+        // Activate app without bringing other windows forward, just for panel visibility
+        if #available(macOS 14.0, *) {
+            NSRunningApplication.current.activate()
+        } else {
+            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        }
+        // Make panel key for text input after brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            panel?.makeKey()
+        }
+    }
+    
+    /// Dismiss the panel and restore focus to previous app
+    func dismiss() {
+        panel?.close()
+        // Restore focus to the previously active app
+        if let previous = previousApp, previous != NSRunningApplication.current {
+            if #available(macOS 14.0, *) {
+                previous.activate()
+            } else {
+                previous.activate(options: [.activateIgnoringOtherApps])
+            }
+        }
     }
 }
 

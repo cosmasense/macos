@@ -26,19 +26,19 @@ class FloatingPanel<Content: View>: NSPanel {
                     backing: backing,
                     defer: flag)
      
-        /// Allow the panel to be on top of other windows
+        /// Allow the panel to be on top of other windows and appear across all spaces
         isFloatingPanel = true
-        level = .floating
+        level = .statusBar  // Status bar level to ensure visibility across all spaces
      
-        /// Allow the pannel to be overlaid in a fullscreen space
-        collectionBehavior.insert(.fullScreenAuxiliary)
+        /// Allow the panel to appear in all spaces and be overlaid in fullscreen
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
      
         /// Don't show a window title, even if it's set
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
      
         /// Since there is no title bar make the window moveable by dragging on the background
-        isMovableByWindowBackground = true
+        // isMovableByWindowBackground = true
      
         /// Hide when unfocused
         hidesOnDeactivate = true
@@ -60,23 +60,27 @@ class FloatingPanel<Content: View>: NSPanel {
     
     /// Close automatically when out of focus, e.g. outside click
     override func resignMain() {
-        super.resignMain()
-        close()
-    }
-     
-    /// Close and toggle presentation, so that it matches the current state of the panel
-    override func close() {
-        super.close()
+        // Don't call super.resignMain() as it might trigger main window activation
+        // Set binding to false which will trigger dismissal through AppDelegate
         isPresented = false
     }
      
-    /// `canBecomeKey` and `canBecomeMain` are both required so that text inputs inside the panel can receive focus
+    /// Override close to prevent direct closing - use orderOut instead
+    override func close() {
+        // Don't call super.close() to avoid window restoration issues
+        // Instead just hide the panel
+        orderOut(nil)
+        isPresented = false
+    }
+     
+    /// `canBecomeKey` is required so that text inputs inside the panel can receive focus
+    /// `canBecomeMain` is set to false to prevent the panel from becoming the main window
     override var canBecomeKey: Bool {
         return true
     }
      
     override var canBecomeMain: Bool {
-        return true
+        return false
     }
 }
 
