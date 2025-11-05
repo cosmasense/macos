@@ -20,5 +20,14 @@ struct fileSearchForntendApp: App {
         }
         .windowStyle(.automatic)
         .defaultSize(width: 900, height: 600)
+        .commands {
+            // Enable standard window commands including fullscreen
+            CommandGroup(replacing: .sidebar) {
+                Button("Toggle Sidebar") {
+                    NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+            }
+        }
     }
 }

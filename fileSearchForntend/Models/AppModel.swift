@@ -16,6 +16,29 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum AppError: LocalizedError {
+    case invalidFolderPath
+    case folderAlreadyWatched
+    case fileSystemPermissionDenied
+    case backendConnectionFailed
+    case unknownError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidFolderPath:
+            return "The selected path is not a valid folder"
+        case .folderAlreadyWatched:
+            return "This folder is already being watched"
+        case .fileSystemPermissionDenied:
+            return "Permission denied to access this folder"
+        case .backendConnectionFailed:
+            return "Failed to connect to backend service"
+        case .unknownError(let message):
+            return message
+        }
+    }
+}
+
 @Observable
 class AppModel {
     // Navigation
@@ -28,6 +51,10 @@ class AppModel {
     // Search state
     var searchText: String = ""
     var searchTokens: [SearchToken] = []
+
+    // Error handling
+    var lastError: AppError?
+    var showError: Bool = false
 
     // Progress simulation timer (replace with real backend connection later)
     private var progressTimer: AnyCancellable?
@@ -56,6 +83,29 @@ class AppModel {
     // MARK: - Folder Management
 
     func addFolder(url: URL) {
+        // Validate folder path
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            lastError = .invalidFolderPath
+            showError = true
+            return
+        }
+
+        // Check if folder is already being watched
+        if watchedFolders.contains(where: { $0.path == url.path }) {
+            lastError = .folderAlreadyWatched
+            showError = true
+            return
+        }
+
+        // Check for read permissions
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            lastError = .fileSystemPermissionDenied
+            showError = true
+            return
+        }
+
         let name = url.lastPathComponent
         let newFolder = WatchedFolder(
             name: name,
@@ -70,6 +120,7 @@ class AppModel {
     func removeFolder(_ folder: WatchedFolder) {
         watchedFolders.removeAll { $0.id == folder.id }
         // TODO: DELETE to backend /watched/:id
+        // Note: Backend errors should be handled when integrated
     }
 
     // MARK: - Search

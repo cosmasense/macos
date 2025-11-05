@@ -118,6 +118,23 @@ struct ModelsSection: View {
 struct GeneralSection: View {
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
+    @State private var isTestingConnection = false
+    @State private var connectionStatus: ConnectionStatus?
+
+    enum ConnectionStatus {
+        case success
+        case failure(String)
+    }
+
+    private var isValidURL: Bool {
+        guard !backendURL.isEmpty,
+              let url = URL(string: backendURL),
+              let scheme = url.scheme,
+              ["http", "https"].contains(scheme.lowercased()) else {
+            return false
+        }
+        return true
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -148,20 +165,113 @@ struct GeneralSection: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 400)
                         .font(.system(size: 13, design: .monospaced))
+                        .onChange(of: backendURL) { _, _ in
+                            connectionStatus = nil
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(
+                                    !backendURL.isEmpty && !isValidURL ? Color.red.opacity(0.5) : Color.clear,
+                                    lineWidth: 1
+                                )
+                        )
 
-                    Button("Test Connection") {
-                        testBackendConnection()
+                    Button(action: {
+                        Task {
+                            await testBackendConnection()
+                        }
+                    }) {
+                        if isTestingConnection {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 12, height: 12)
+                            Text("Testing...")
+                        } else {
+                            Text("Test Connection")
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(isTestingConnection || !isValidURL)
+                }
+
+                // URL validation warning
+                if !backendURL.isEmpty && !isValidURL {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Please enter a valid HTTP or HTTPS URL")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
+
+                // Connection status indicator
+                if let status = connectionStatus {
+                    HStack(spacing: 6) {
+                        switch status {
+                        case .success:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("Connected successfully")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        case .failure(let message):
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.red)
+                            Text("Connection failed: \(message)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 4)
                 }
             }
         }
     }
 
-    private func testBackendConnection() {
-        // TODO: Implement backend connection test
-        print("Testing connection to: \(backendURL)")
+    private func testBackendConnection() async {
+        isTestingConnection = true
+        defer { isTestingConnection = false }
+
+        // Validate URL format
+        guard let url = URL(string: backendURL) else {
+            connectionStatus = .failure("Invalid URL format")
+            return
+        }
+
+        // Add /health endpoint for health check
+        let healthURL = url.appendingPathComponent("health")
+
+        do {
+            var request = URLRequest(url: healthURL)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 5.0
+
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse {
+                if (200...299).contains(httpResponse.statusCode) {
+                    connectionStatus = .success
+                } else {
+                    connectionStatus = .failure("Server returned status code \(httpResponse.statusCode)")
+                }
+            } else {
+                connectionStatus = .failure("Invalid server response")
+            }
+        } catch let error as URLError {
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                connectionStatus = .failure("Cannot reach server")
+            case .timedOut:
+                connectionStatus = .failure("Connection timed out")
+            default:
+                connectionStatus = .failure(error.localizedDescription)
+            }
+        } catch {
+            connectionStatus = .failure(error.localizedDescription)
+        }
     }
 }
 

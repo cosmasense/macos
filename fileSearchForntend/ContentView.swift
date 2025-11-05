@@ -11,11 +11,13 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
+
         NavigationSplitView {
             // Sidebar with navigation items
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
-                
+
         } detail: {
             // Detail area switches based on sidebar selection
             Group {
@@ -31,7 +33,15 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(.windowBackground)
-        
+        .alert("Error", isPresented: $model.showError, presenting: model.lastError) { _ in
+            Button("OK") {
+                model.showError = false
+                model.lastError = nil
+            }
+        } message: { error in
+            Text(error.errorDescription ?? "An unknown error occurred")
+        }
+
     }
 }
 
