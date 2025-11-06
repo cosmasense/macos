@@ -28,6 +28,12 @@ class AppModel {
     // Search state
     var searchText: String = ""
     var searchTokens: [SearchToken] = []
+    var searchResults: [SearchResultItem] = []
+    var isSearching: Bool = false
+    var searchError: String?
+
+    // API Client
+    private let apiClient = APIClient.shared
 
     // Progress simulation timer (replace with real backend connection later)
     private var progressTimer: AnyCancellable?
@@ -76,13 +82,72 @@ class AppModel {
 
     func performSearch() {
         let query = buildSearchQuery()
+        
+        // Don't search if query is empty
+        guard !query.isEmpty else { return }
+        
+        // Add to recent searches
         let newSearch = RecentSearch(
             date: Date(),
             rawQuery: query,
             tokens: searchTokens
         )
         recentSearches.insert(newSearch, at: 0)
-        // TODO: POST to backend /search with query and tokens
+        
+        // Perform API search
+        Task {
+            await searchFiles(query: query)
+        }
+    }
+    
+    @MainActor
+    func searchFiles(query: String) async {
+        isSearching = true
+        searchError = nil
+        searchResults = []
+        
+        do {
+            // Extract directory from tokens if present
+            let directory = searchTokens.first(where: { $0.kind == .folder })?.value
+            
+            // Build filters from tokens if needed
+            let filters: [String: String]? = {
+                if let dir = directory {
+                    return ["folder": dir]
+                }
+                return nil
+            }()
+            
+            let response: SearchResponse
+            if let filters = filters {
+                response = try await apiClient.search(
+                    query: query,
+                    filters: filters,
+                    limit: 50,
+                    directory: directory
+                )
+            } else {
+                response = try await apiClient.search(
+                    query: query,
+                    limit: 50,
+                    directory: directory
+                )
+            }
+            
+            searchResults = response.results
+            isSearching = false
+        } catch let error as APIError {
+            searchError = error.localizedDescription
+            isSearching = false
+        } catch {
+            searchError = "An unexpected error occurred: \(error.localizedDescription)"
+            isSearching = false
+        }
+    }
+    
+    func clearSearchResults() {
+        searchResults = []
+        searchError = nil
     }
 
     func loadRecentSearch(_ search: RecentSearch) {
@@ -94,6 +159,11 @@ class AppModel {
             text = text.replacingOccurrences(of: tokenStr, with: "")
         }
         searchText = text.trimmingCharacters(in: .whitespaces)
+        
+        // Perform the search automatically
+        Task {
+            await searchFiles(query: search.rawQuery)
+        }
     }
 
     private func buildSearchQuery() -> String {
