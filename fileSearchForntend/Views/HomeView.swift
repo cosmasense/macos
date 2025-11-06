@@ -420,6 +420,8 @@ struct FolderSuggestionsView: View {
 struct RecentSearchesView: View {
     @Environment(AppModel.self) private var model
 
+    private let maxRecentSearches = 25
+
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
@@ -447,7 +449,7 @@ struct RecentSearchesView: View {
                             .padding(.horizontal, 4)
 
                         VStack(spacing: 8) {
-                            ForEach(model.recentSearches.prefix(25)) { search in //prefix(n) = first n items to display in RecentSearchesView
+                            ForEach(model.recentSearches.prefix(maxRecentSearches)) { search in
                                 RecentSearchRowView(search: search)
                             }
                         }
