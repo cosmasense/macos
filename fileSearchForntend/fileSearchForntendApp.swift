@@ -1,6 +1,6 @@
 //
-//  fileSearchForntendApp.swift
-//  fileSearchForntend
+//  fileSearchFrontendApp.swift
+//  fileSearchFrontend
 //
 //  Created by Ethan Pan on 10/19/25.
 //
