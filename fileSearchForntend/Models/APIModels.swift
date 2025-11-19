@@ -2,112 +2,213 @@
 //  APIModels.swift
 //  fileSearchForntend
 //
-//  API response and request models
+//  API response and request models matching the new backend API
 //
 
 import Foundation
 
-// MARK: - Watched Directory Models
+// MARK: - File Models
 
-struct WatchedDirectoryResponse: Codable {
+struct FileResponse: Codable, Identifiable, Hashable {
+    let filePath: String
+    let filename: String
+    let `extension`: String
+    let created: Date
+    let modified: Date
+    let accessed: Date
+    let title: String?
+    let summary: String?
+    let keywords: [String]?
+
+    var id: String { filePath }
+
+    enum CodingKeys: String, CodingKey {
+        case filePath = "file_path"
+        case filename
+        case `extension`
+        case created
+        case modified
+        case accessed
+        case title
+        case summary
+        case keywords
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(filePath)
+    }
+
+    static func == (lhs: FileResponse, rhs: FileResponse) -> Bool {
+        lhs.filePath == rhs.filePath
+    }
+}
+
+struct FileStatsResponse: Codable {
+    let totalFiles: Int
+    let totalSize: Int
+    let fileTypes: [String: Int]
+    let lastIndexed: String?
+
+    enum CodingKeys: String, CodingKey {
+        case totalFiles = "total_files"
+        case totalSize = "total_size"
+        case fileTypes = "file_types"
+        case lastIndexed = "last_indexed"
+    }
+}
+
+// MARK: - Watch Job Models
+
+struct JobResponse: Codable, Identifiable, Hashable {
     let id: Int
-    let normalizedPath: String
-    let displayName: String?
+    let path: String
+    let isActive: Bool
     let recursive: Bool
     let filePattern: String?
+    let lastScan: Date?
     let createdAt: Date?
     let updatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id
-        case normalizedPath = "normalized_path"
-        case displayName = "display_name"
+        case path
+        case isActive = "is_active"
         case recursive
         case filePattern = "file_pattern"
+        case lastScan = "last_scan"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
-    }
-}
-
-// MARK: - Search Models
-
-struct SearchResponse: Codable {
-    let results: [SearchResultItem]
-    let query: String
-    let totalResults: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case results
-        case query
-        case totalResults = "total_results"
-    }
-}
-
-struct SearchResultItem: Codable, Identifiable, Hashable {
-    let id: String
-    let path: String
-    let filename: String
-    let summary: String?
-    let relevanceScore: Double?
-    let lastModified: Date?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case path
-        case filename
-        case summary
-        case relevanceScore = "relevance_score"
-        case lastModified = "last_modified"
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
 
-    static func == (lhs: SearchResultItem, rhs: SearchResultItem) -> Bool {
+    static func == (lhs: JobResponse, rhs: JobResponse) -> Bool {
         lhs.id == rhs.id
     }
 }
 
-// MARK: - Summarizer Models
-
-struct SummarizerModelsResponse: Codable {
-    let providers: [SummarizerModelOption]
-    let current: String
+struct JobsListResponse: Codable {
+    let jobs: [JobResponse]
 }
 
-struct SummarizerModelOption: Codable, Identifiable, Hashable {
-    let id: String
-    let displayName: String
-    let description: String?
-    let available: Bool
+struct WatchRequest: Codable {
+    let directoryPath: String
 
     enum CodingKeys: String, CodingKey {
-        case id
-        case displayName = "display_name"
-        case description
-        case available
+        case directoryPath = "directory_path"
+    }
+}
+
+struct WatchResponse: Codable {
+    let success: Bool
+    let message: String
+    let filesIndexed: Int
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case filesIndexed = "files_indexed"
+    }
+}
+
+struct DeleteJobResponse: Codable {
+    let success: Bool
+    let message: String
+    let jobId: Int
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case jobId = "job_id"
+    }
+}
+
+// MARK: - Index Models
+
+struct IndexDirectoryRequest: Codable {
+    let directoryPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case directoryPath = "directory_path"
+    }
+}
+
+struct IndexDirectoryResponse: Codable {
+    let success: Bool
+    let message: String
+    let filesIndexed: Int
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case filesIndexed = "files_indexed"
+    }
+}
+
+struct IndexFileRequest: Codable {
+    let filePath: String
+
+    enum CodingKeys: String, CodingKey {
+        case filePath = "file_path"
+    }
+}
+
+struct IndexFileResponse: Codable {
+    let success: Bool
+    let message: String
+    let fileId: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case message
+        case fileId = "file_id"
+    }
+}
+
+// MARK: - Search Models
+
+struct SearchRequest: Codable {
+    let query: String
+    let directory: String?
+    let filters: [String: String]?
+    let limit: Int?
+}
+
+struct SearchResponse: Codable {
+    let results: [SearchResultItem]
+}
+
+struct SearchResultItem: Codable, Identifiable, Hashable {
+    let file: FileResponse
+    let relevanceScore: Double
+
+    var id: String { file.filePath }
+
+    enum CodingKeys: String, CodingKey {
+        case file
+        case relevanceScore = "relevance_score"
     }
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        displayName = try container.decode(String.self, forKey: .displayName)
-        description = try container.decodeIfPresent(String.self, forKey: .description)
-        // Default to true if not provided
-        available = try container.decodeIfPresent(Bool.self, forKey: .available) ?? true
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(file.filePath)
+    }
+
+    static func == (lhs: SearchResultItem, rhs: SearchResultItem) -> Bool {
+        lhs.file.filePath == rhs.file.filePath
     }
 }
 
 // MARK: - Status Models
 
 struct StatusResponse: Codable {
-    let status: String
-    let jobs: Int
+    let status: String?
+    let jobs: Int?
     let version: String?
 }
 
-// MARK: - Backend Update Events
+// MARK: - Backend Update Events (for SSE)
 
 struct BackendUpdateEvent: Codable {
     let opcode: EventOpcode
@@ -143,6 +244,36 @@ enum EventOpcode: String, Codable {
         let container = try decoder.singleValueContainer()
         let rawValue = try container.decode(String.self)
         self = EventOpcode(rawValue: rawValue) ?? .unknown
+    }
+}
+
+// MARK: - Deprecated Models (kept for compatibility during migration)
+
+// These models are deprecated as the backend no longer supports summarizer model selection
+struct SummarizerModelsResponse: Codable {
+    let providers: [SummarizerModelOption]
+    let current: String
+}
+
+struct SummarizerModelOption: Codable, Identifiable, Hashable {
+    let id: String
+    let displayName: String
+    let description: String?
+    let available: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case description
+        case available
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        available = try container.decodeIfPresent(Bool.self, forKey: .available) ?? true
     }
 }
 

@@ -49,13 +49,16 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
         self.filePattern = filePattern
     }
     
-    init(response: WatchedDirectoryResponse) {
+    init(response: JobResponse) {
+        let folderName = URL(fileURLWithPath: response.path).lastPathComponent
+        let status: IndexStatus = response.isActive ? .complete : .idle
+
         self.init(
             backendID: response.id,
-            name: response.displayName,
-            path: response.normalizedPath,
-            progress: 0,
-            status: .idle,
+            name: folderName,
+            path: response.path,
+            progress: response.isActive ? 1.0 : 0.0,
+            status: status,
             lastModified: response.updatedAt ?? response.createdAt ?? Date(),
             recursive: response.recursive,
             filePattern: response.filePattern

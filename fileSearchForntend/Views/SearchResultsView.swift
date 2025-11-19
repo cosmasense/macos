@@ -156,22 +156,20 @@ struct SearchResultRow: View {
                         .foregroundStyle(.blue)
                         .frame(width: 20)
 
-                    Text(result.filename)
+                    Text(result.file.filename)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Spacer()
 
-                    // Relevance score if available
-                    if let score = result.relevanceScore {
-                        Text(String(format: "%.0f%%", score * 100))
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.quaternary.opacity(0.5), in: Capsule())
-                    }
+                    // Relevance score
+                    Text(String(format: "%.0f%%", result.relevanceScore * 100))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.quaternary.opacity(0.5), in: Capsule())
 
                     Image(systemName: "arrow.right")
                         .font(.system(size: 13))
@@ -180,7 +178,7 @@ struct SearchResultRow: View {
                 }
 
                 // File path
-                Text(result.path)
+                Text(result.file.filePath)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -188,7 +186,7 @@ struct SearchResultRow: View {
                     .padding(.leading, 28)
 
                 // Summary if available
-                if let summary = result.summary, !summary.isEmpty {
+                if let summary = result.file.summary, !summary.isEmpty {
                     Text(summary)
                         .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
@@ -214,7 +212,7 @@ struct SearchResultRow: View {
     }
 
     private var fileIcon: String {
-        let ext = (result.filename as NSString).pathExtension.lowercased()
+        let ext = result.file.extension.lowercased()
         switch ext {
         case "pdf":
             return "doc.fill"
@@ -240,7 +238,7 @@ struct SearchResultRow: View {
     }
 
     private func openFile() {
-        let url = URL(fileURLWithPath: result.path)
+        let url = URL(fileURLWithPath: result.file.filePath)
         NSWorkspace.shared.open(url)
     }
 }

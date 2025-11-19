@@ -112,46 +112,19 @@ struct ModelsSection: View {
             Text("Models")
                 .font(.system(size: 20, weight: .semibold))
 
-            // LLM Summary Model
+            // LLM Summary Model (Deprecated - backend no longer supports this)
+            // Commented out as the backend API has been removed
+            /*
             VStack(alignment: .leading, spacing: 8) {
                 Text("LLM Summary Model")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                if model.isLoadingSummarizerModels && model.summarizerModels.isEmpty {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                } else {
-                    Picker("", selection: Binding(
-                        get: { model.selectedSummarizerModelID },
-                        set: { model.selectSummarizerModel($0) }
-                    )) {
-                        ForEach(model.summarizerModels) { option in
-                            Text(option.displayName)
-                                .tag(option.id)
-                                .disabled(!option.available)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .disabled(model.summarizerModels.isEmpty || model.isUpdatingSummarizerModel)
-                }
-
-                if model.isUpdatingSummarizerModel {
-                    StatusText(
-                        message: "Updating preferred model…",
-                        color: .secondary,
-                        icon: "circle.dashed"
-                    )
-                } else if let error = model.summarizerModelsError {
-                    StatusText(
-                        message: error,
-                        color: .red,
-                        icon: "exclamationmark.octagon.fill"
-                    )
-                }
+                Text("Model selection has been moved to backend configuration")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
             }
+            */
 
             // Embedding Model
             VStack(alignment: .leading, spacing: 8) {

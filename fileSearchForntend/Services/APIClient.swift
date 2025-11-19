@@ -3,6 +3,7 @@
 //  fileSearchForntend
 //
 //  HTTP client for backend API communication
+//  Updated to match new backend API specifications
 //
 
 import Foundation
@@ -50,65 +51,78 @@ class APIClient {
         return try await get(url: url)
     }
 
-    // MARK: - Watched Directories
+    // MARK: - Watch Jobs (formerly Watched Directories)
 
-    func fetchWatchedDirectories() async throws -> [WatchedDirectoryResponse] {
-        let url = baseURL.appendingPathComponent("/api/watched")
+    func fetchWatchJobs() async throws -> JobsListResponse {
+        let url = baseURL.appendingPathComponent("/api/watch/jobs")
         return try await get(url: url)
     }
 
-    func startWatchingDirectory(path: String) async throws -> WatchedDirectoryResponse {
+    func startWatchingDirectory(path: String) async throws -> WatchResponse {
         let url = baseURL.appendingPathComponent("/api/watch")
-        let body = ["path": path]
-        return try await post(url: url, body: body)
+        let request = WatchRequest(directoryPath: path)
+        return try await post(url: url, body: request)
     }
 
-    func indexDirectory(path: String) async throws -> StatusResponse {
-        let url = baseURL.appendingPathComponent("/api/index")
-        let body = ["path": path]
-        return try await post(url: url, body: body)
+    func deleteWatchJob(jobId: Int) async throws -> DeleteJobResponse {
+        let url = baseURL.appendingPathComponent("/api/watch/jobs/\(jobId)")
+        return try await delete(url: url)
+    }
+
+    // MARK: - Indexing
+
+    func indexDirectory(path: String) async throws -> IndexDirectoryResponse {
+        let url = baseURL.appendingPathComponent("/api/index/directory")
+        let request = IndexDirectoryRequest(directoryPath: path)
+        return try await post(url: url, body: request)
+    }
+
+    func indexFile(path: String) async throws -> IndexFileResponse {
+        let url = baseURL.appendingPathComponent("/api/index/file")
+        let request = IndexFileRequest(filePath: path)
+        return try await post(url: url, body: request)
     }
 
     // MARK: - Search
 
     func search(
         query: String,
+        directory: String? = nil,
         filters: [String: String]? = nil,
-        limit: Int = 50,
-        directory: String? = nil
+        limit: Int = 50
     ) async throws -> SearchResponse {
-        var components = URLComponents(url: baseURL.appendingPathComponent("/api/search"), resolvingAgainstBaseURL: true)!
-        var queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "\(limit)")]
+        let url = baseURL.appendingPathComponent("/api/search")
+        let request = SearchRequest(
+            query: query,
+            directory: directory,
+            filters: filters,
+            limit: limit
+        )
+        return try await post(url: url, body: request)
+    }
 
-        if let directory = directory {
-            queryItems.append(URLQueryItem(name: "directory", value: directory))
-        }
+    // MARK: - Files
 
-        if let filters = filters {
-            for (key, value) in filters {
-                queryItems.append(URLQueryItem(name: key, value: value))
-            }
-        }
-
-        components.queryItems = queryItems
-        guard let url = components.url else {
-            throw APIError.invalidURL
-        }
-
+    func fetchFileStats() async throws -> FileStatsResponse {
+        let url = baseURL.appendingPathComponent("/api/files/stats")
         return try await get(url: url)
     }
 
-    // MARK: - Summarizer Models
+    func fetchFile(fileId: Int) async throws -> FileResponse {
+        let url = baseURL.appendingPathComponent("/api/files/\(fileId)")
+        return try await get(url: url)
+    }
 
+    // MARK: - Deprecated Summarizer Models (backend no longer supports these)
+
+    @available(*, deprecated, message: "Backend no longer supports summarizer model selection")
     func fetchSummarizerModels() async throws -> SummarizerModelsResponse {
-        let url = baseURL.appendingPathComponent("/api/summarizer/models")
-        return try await get(url: url)
+        throw APIError.serverError(statusCode: 404, message: "Summarizer models API has been removed")
     }
 
+    @available(*, deprecated, message: "Backend no longer supports summarizer model selection")
     func selectSummarizerModel(provider: String) async throws -> SummarizerModelsResponse {
-        let url = baseURL.appendingPathComponent("/api/summarizer/select")
-        let body = ["provider": provider]
-        return try await post(url: url, body: body)
+        throw APIError.serverError(statusCode: 404, message: "Summarizer models API has been removed")
     }
 
     // MARK: - HTTP Methods
@@ -122,13 +136,22 @@ class APIClient {
         return try handleResponse(data: data, response: response)
     }
 
-    private func post<T: Decodable>(url: URL, body: [String: Any]) async throws -> T {
+    private func post<T: Encodable, R: Decodable>(url: URL, body: T) async throws -> R {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try jsonEncoder.encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func delete<T: Decodable>(url: URL) async throws -> T {
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await session.data(for: request)
         return try handleResponse(data: data, response: response)

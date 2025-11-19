@@ -171,11 +171,11 @@ class AppModel {
     func refreshWatchedFolders() async {
         isLoadingWatchedFolders = true
         defer { isLoadingWatchedFolders = false }
-        
+
         do {
-            let directories = try await apiClient.fetchWatchedDirectories()
+            let response = try await apiClient.fetchWatchJobs()
             missingWatchedEndpoint = false
-            watchedFolders = directories
+            watchedFolders = response.jobs
                 .map { WatchedFolder(response: $0) }
                 .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
         } catch let error as APIError {
@@ -276,26 +276,18 @@ class AppModel {
         do {
             // Extract directory from tokens if present
             let directory = directoryFromTokens()
-            
+
             // Build filters from tokens if needed
             let filters = filtersFromTokens(directory: directory)
-            
-            let response: SearchResponse
-            if let filters {
-                response = try await apiClient.search(
-                    query: normalizedQuery,
-                    filters: filters,
-                    limit: 50,
-                    directory: directory
-                )
-            } else {
-                response = try await apiClient.search(
-                    query: normalizedQuery,
-                    limit: 50,
-                    directory: directory
-                )
-            }
-            
+
+            // Use new POST /api/search endpoint
+            let response = try await apiClient.search(
+                query: normalizedQuery,
+                directory: directory,
+                filters: filters,
+                limit: 50
+            )
+
             guard activeSearchRequestID == requestID else { return }
             searchResults = response.results
         } catch let error as APIError {

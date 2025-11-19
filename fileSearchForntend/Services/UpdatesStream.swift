@@ -2,13 +2,14 @@
 //  UpdatesStream.swift
 //  fileSearchForntend
 //
-//  WebSocket/SSE connection for real-time backend updates
+//  Server-Sent Events (SSE) connection for real-time backend updates
+//  Updated to use SSE instead of WebSocket per new backend API
 //
 
 import Foundation
 
 @MainActor
-class UpdatesStream {
+class UpdatesStream: NSObject {
     enum State: Equatable {
         case idle
         case connecting
@@ -16,11 +17,13 @@ class UpdatesStream {
         case failed(String)
     }
 
-    private var urlSessionTask: URLSessionWebSocketTask?
+    private var dataTask: URLSessionDataTask?
     private var currentURL: URL?
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
     private var reconnectTimer: Timer?
+    private var session: URLSession?
+    private var eventBuffer = ""
 
     var onEvent: ((BackendUpdateEvent) -> Void)?
     var onStateChange: ((State) -> Void)?
@@ -31,24 +34,27 @@ class UpdatesStream {
         return decoder
     }()
 
+    override init() {
+        super.init()
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = .infinity
+        config.timeoutIntervalForResource = .infinity
+        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
+
     func connect(to baseURL: URL) {
         disconnect()
 
-        // Construct WebSocket URL (convert http:// to ws://)
+        // Construct SSE URL
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true)!
-        if components.scheme == "http" {
-            components.scheme = "ws"
-        } else if components.scheme == "https" {
-            components.scheme = "wss"
-        }
         components.path = "/api/updates"
 
-        guard let wsURL = components.url else {
-            onStateChange?(.failed("Invalid WebSocket URL"))
+        guard let sseURL = components.url else {
+            onStateChange?(.failed("Invalid SSE URL"))
             return
         }
 
-        currentURL = wsURL
+        currentURL = sseURL
         reconnectAttempts = 0
         startConnection()
     }
@@ -57,8 +63,9 @@ class UpdatesStream {
         Task { @MainActor in
             reconnectTimer?.invalidate()
             reconnectTimer = nil
-            urlSessionTask?.cancel(with: .goingAway, reason: nil)
-            urlSessionTask = nil
+            dataTask?.cancel()
+            dataTask = nil
+            eventBuffer = ""
             currentURL = nil
             reconnectAttempts = 0
             onStateChange?(.idle)
@@ -66,72 +73,71 @@ class UpdatesStream {
     }
 
     private func startConnection() {
-        guard let wsURL = currentURL else { return }
+        guard let sseURL = currentURL else { return }
 
         onStateChange?(.connecting)
 
-        let session = URLSession(configuration: .default)
-        let task = session.webSocketTask(with: wsURL)
+        var request = URLRequest(url: sseURL)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = .infinity
 
-        urlSessionTask = task
-        task.resume()
+        eventBuffer = ""
+        dataTask = session?.dataTask(with: request)
+        dataTask?.resume()
+    }
 
-        // Start receiving messages
-        receiveMessage()
+    private func handleReceivedData(_ data: Data) {
+        guard let text = String(data: data, encoding: .utf8) else { return }
 
-        // Send ping to confirm connection
-        task.sendPing { [weak self] error in
-            guard let self = self else { return }
-            Task { @MainActor in
-                if let error = error {
-                    self.handleConnectionError(error)
-                } else {
-                    self.onStateChange?(.connected)
-                    self.reconnectAttempts = 0
-                }
-            }
+        eventBuffer += text
+
+        // SSE format: "data: {json}\n\n" or "data: {json}\n"
+        // Split by double newlines to find complete events
+        let events = eventBuffer.components(separatedBy: "\n\n")
+
+        // Keep the last incomplete event in the buffer
+        if !eventBuffer.hasSuffix("\n\n") {
+            eventBuffer = events.last ?? ""
+        } else {
+            eventBuffer = ""
+        }
+
+        // Process complete events
+        for eventText in events.dropLast() where !eventText.isEmpty {
+            parseAndEmitEvent(eventText)
         }
     }
 
-    private func receiveMessage() {
-        urlSessionTask?.receive { [weak self] result in
-            guard let self = self else { return }
+    private func parseAndEmitEvent(_ eventText: String) {
+        // SSE lines can be:
+        // data: {json}
+        // event: event_name
+        // id: event_id
+        // : comment
 
-            Task { @MainActor in
-                switch result {
-                case .success(let message):
-                    self.handleMessage(message)
-                    // Continue receiving
-                    self.receiveMessage()
+        let lines = eventText.components(separatedBy: "\n")
+        var dataLines: [String] = []
 
-                case .failure(let error):
-                    self.handleConnectionError(error)
-                }
+        for line in lines {
+            if line.hasPrefix("data:") {
+                let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                dataLines.append(data)
             }
         }
-    }
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
-        switch message {
-        case .string(let text):
-            guard let data = text.data(using: .utf8) else { return }
-            do {
-                let event = try jsonDecoder.decode(BackendUpdateEvent.self, from: data)
-                onEvent?(event)
-            } catch {
-                print("Failed to decode backend update event: \(error)")
-            }
+        // Join all data lines (in case of multi-line events)
+        let jsonString = dataLines.joined(separator: "\n")
+        guard !jsonString.isEmpty,
+              let jsonData = jsonString.data(using: .utf8) else {
+            return
+        }
 
-        case .data(let data):
-            do {
-                let event = try jsonDecoder.decode(BackendUpdateEvent.self, from: data)
-                onEvent?(event)
-            } catch {
-                print("Failed to decode backend update event: \(error)")
-            }
-
-        @unknown default:
-            break
+        do {
+            let event = try jsonDecoder.decode(BackendUpdateEvent.self, from: jsonData)
+            onEvent?(event)
+        } catch {
+            print("Failed to decode SSE event: \(error)")
+            print("JSON string: \(jsonString)")
         }
     }
 
@@ -150,6 +156,45 @@ class UpdatesStream {
                 Task { @MainActor in
                     self.startConnection()
                 }
+            }
+        }
+    }
+}
+
+// MARK: - URLSessionDataDelegate
+
+extension UpdatesStream: URLSessionDataDelegate {
+    nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+
+        Task { @MainActor in
+            if (200...299).contains(httpResponse.statusCode) {
+                self.onStateChange?(.connected)
+                self.reconnectAttempts = 0
+                completionHandler(.allow)
+            } else {
+                let error = NSError(domain: "SSEError", code: httpResponse.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode)"
+                ])
+                self.handleConnectionError(error)
+                completionHandler(.cancel)
+            }
+        }
+    }
+
+    nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        Task { @MainActor in
+            self.handleReceivedData(data)
+        }
+    }
+
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            Task { @MainActor in
+                self.handleConnectionError(error)
             }
         }
     }
