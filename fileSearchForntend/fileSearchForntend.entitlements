@@ -2,20 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Allow outgoing network connections (required for API calls) -->
+	<!-- Disable App Sandbox for development (allows localhost connections) -->
+	<!-- NOTE: Enable sandbox for App Store distribution -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+
+	<!-- Network entitlements (kept for when sandbox is re-enabled) -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 
-	<!-- Allow incoming network connections (required for SSE streaming) -->
 	<key>com.apple.security.network.server</key>
-	<true/>
-
-	<!-- Enable App Sandbox (recommended for App Store distribution) -->
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-
-	<!-- Allow user-selected file access (for folder picker) -->
-	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 </dict>
 </plist>

@@ -32,7 +32,7 @@ class APIClient {
         return encoder
     }()
 
-    init(baseURL: URL = URL(string: "http://localhost:8000")!) {
+    init(baseURL: URL = URL(string: "http://localhost:60534")!) {
         self.baseURL = baseURL
     }
 
