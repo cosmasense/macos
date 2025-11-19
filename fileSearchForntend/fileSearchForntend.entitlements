@@ -2,12 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Disable App Sandbox for development (allows localhost connections) -->
-	<!-- NOTE: Enable sandbox for App Store distribution -->
+	<!-- Disable App Sandbox for development (allows localhost connections without restrictions) -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 
-	<!-- Network entitlements (kept for when sandbox is re-enabled) -->
+	<!-- Network access entitlements (for when sandbox is re-enabled) -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 

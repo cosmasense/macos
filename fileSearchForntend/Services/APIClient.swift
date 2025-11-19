@@ -47,7 +47,7 @@ class APIClient {
     // MARK: - Status
 
     func fetchStatus() async throws -> StatusResponse {
-        let url = baseURL.appendingPathComponent("/api/status")
+        let url = baseURL.appendingPathComponent("/api/status/")
         return try await get(url: url)
     }
 
@@ -59,26 +59,26 @@ class APIClient {
     }
 
     func startWatchingDirectory(path: String) async throws -> WatchResponse {
-        let url = baseURL.appendingPathComponent("/api/watch")
+        let url = baseURL.appendingPathComponent("/api/watch/")
         let request = WatchRequest(directoryPath: path)
         return try await post(url: url, body: request)
     }
 
     func deleteWatchJob(jobId: Int) async throws -> DeleteJobResponse {
-        let url = baseURL.appendingPathComponent("/api/watch/jobs/\(jobId)")
+        let url = baseURL.appendingPathComponent("/api/watch/jobs/\(jobId)/")
         return try await delete(url: url)
     }
 
     // MARK: - Indexing
 
     func indexDirectory(path: String) async throws -> IndexDirectoryResponse {
-        let url = baseURL.appendingPathComponent("/api/index/directory")
+        let url = baseURL.appendingPathComponent("/api/index/directory/")
         let request = IndexDirectoryRequest(directoryPath: path)
         return try await post(url: url, body: request)
     }
 
     func indexFile(path: String) async throws -> IndexFileResponse {
-        let url = baseURL.appendingPathComponent("/api/index/file")
+        let url = baseURL.appendingPathComponent("/api/index/file/")
         let request = IndexFileRequest(filePath: path)
         return try await post(url: url, body: request)
     }
@@ -91,7 +91,7 @@ class APIClient {
         filters: [String: String]? = nil,
         limit: Int = 50
     ) async throws -> SearchResponse {
-        let url = baseURL.appendingPathComponent("/api/search")
+        let url = baseURL.appendingPathComponent("/api/search/")
         let request = SearchRequest(
             query: query,
             directory: directory,
@@ -109,7 +109,7 @@ class APIClient {
     }
 
     func fetchFile(fileId: Int) async throws -> FileResponse {
-        let url = baseURL.appendingPathComponent("/api/files/\(fileId)")
+        let url = baseURL.appendingPathComponent("/api/files/\(fileId)/")
         return try await get(url: url)
     }
 
