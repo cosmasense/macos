@@ -212,7 +212,7 @@ struct SearchResultRow: View {
     }
 
     private var fileIcon: String {
-        let ext = result.file.extension.lowercased()
+        let ext = result.file.fileExtension.lowercased()
         switch ext {
         case "pdf":
             return "doc.fill"

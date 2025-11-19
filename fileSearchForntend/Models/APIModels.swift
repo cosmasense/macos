@@ -12,7 +12,7 @@ import Foundation
 struct FileResponse: Codable, Identifiable, Hashable {
     let filePath: String
     let filename: String
-    let `extension`: String
+    let fileExtension: String
     let created: Date
     let modified: Date
     let accessed: Date
@@ -25,7 +25,7 @@ struct FileResponse: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case filePath = "file_path"
         case filename
-        case `extension`
+        case fileExtension = "extension"
         case created
         case modified
         case accessed
