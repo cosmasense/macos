@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -14,7 +15,6 @@ struct SettingsView: View {
     @AppStorage("launchAtStartup") private var launchAtStartup = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
     @State private var showingPanel = false
-    @State private var overlayPreviewText = ""
 
     var body: some View {
         @Bindable var model = model
@@ -37,10 +37,7 @@ struct SettingsView: View {
                         )
                     }(),
                     content: {
-                        SearchOverlayPanel(
-                            searchText: $overlayPreviewText,
-                            onDismiss: { showingPanel = false }
-                        )
+                        SearchOverlayPanel(onDismiss: { showingPanel = false })
                     }
                 )
                 
@@ -80,11 +77,12 @@ struct SettingsView: View {
 // MARK: - Overlay Panel
 
 struct SearchOverlayPanel: View {
-    @Binding var searchText: String
+    @Environment(AppModel.self) private var environmentModel
     var onDismiss: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        @Bindable var model = environmentModel
+        VStack(alignment: .leading, spacing: 24) {
             HStack {
                 Button {
                     onDismiss()
@@ -93,17 +91,13 @@ struct SearchOverlayPanel: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(0.08), in: Circle())
+                        .background(Color.white.opacity(0.1), in: Circle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
                 .help("Close overlay")
 
                 Spacer()
-
-                Capsule()
-                    .fill(.secondary.opacity(0.35))
-                    .frame(width: 48, height: 4)
             }
 
             HStack(spacing: 14) {
@@ -111,15 +105,19 @@ struct SearchOverlayPanel: View {
                     .foregroundStyle(.secondary)
                     .font(.system(size: 18, weight: .semibold))
 
-                TextField("Search files, folders, or summaries", text: $searchText)
+                TextField("Search files, folders, or summaries", text: $model.searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 18, weight: .medium, design: .rounded))
                     .foregroundStyle(.primary)
                     .padding(.vertical, 6)
+                    .onSubmit {
+                        model.performSearch()
+                    }
 
-                if !searchText.isEmpty {
+                if !model.searchText.isEmpty {
                     Button {
-                        searchText = ""
+                        model.searchText = ""
+                        model.clearSearchResults()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -135,27 +133,18 @@ struct SearchOverlayPanel: View {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(Color.white.opacity(0.08))
             )
-
-            HStack(spacing: 12) {
-                Label("Instant local + Scalar results", systemImage: "sparkles")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Image(systemName: "command")
-                    Text("K")
-                }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(.thinMaterial, in: Capsule())
+            
+            if model.isSearching || !model.searchResults.isEmpty {
+                Divider()
+                    .padding(.horizontal, -10)
+                    .padding(.top, 4)
+                
+                SearchResultsView()
+                    .frame(height: 360)
             }
         }
         .padding(.horizontal, 26)
-        .padding(.vertical, 20)
+        .padding(.vertical, 24)
         .background {
             let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
             if #available(macOS 14.0, *) {
@@ -164,7 +153,7 @@ struct SearchOverlayPanel: View {
                 shape.fill(.ultraThinMaterial)
             }
         }
-        .shadow(color: .black.opacity(0.35), radius: 35, y: 18)
+        .shadow(color: .black.opacity(0.28), radius: 28, y: 20)
         .padding(.horizontal, 8)
         .padding(.vertical, 16)
         .onExitCommand {
@@ -450,6 +439,7 @@ struct FeedbackSheetView: View {
 }
 private struct HotkeySection: View {
     @Binding var hotkey: String
+    @State private var isRecording = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -458,10 +448,22 @@ private struct HotkeySection: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
-                TextField("None", text: $hotkey, prompt: Text("None"))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
-                    .font(.system(size: 13, design: .monospaced))
+                Text(isRecording ? "Press any key…" : (hotkey.isEmpty ? "Not set" : hotkey.uppercased()))
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 140, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.white.opacity(0.12))
+                    )
+
+                Button(isRecording ? "Cancel" : "Record") {
+                    isRecording.toggle()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Button("Clear") {
                     hotkey = ""
@@ -470,10 +472,56 @@ private struct HotkeySection: View {
                 .foregroundStyle(.secondary)
                 .disabled(hotkey.isEmpty)
             }
+            .background(
+                HotkeyCaptureView(isRecording: $isRecording) { key in
+                    hotkey = key.lowercased()
+                    isRecording = false
+                }
+                .allowsHitTesting(false)
+            )
 
-            Text("Enter a single key (for example \"k\" or \"f\"). Leave blank to disable the shortcut.")
+            Text("Click record, then press the key you'd like to use. Leave blank to disable the shortcut.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct HotkeyCaptureView: NSViewRepresentable {
+    @Binding var isRecording: Bool
+    let onCapture: (String) -> Void
+
+    func makeNSView(context: Context) -> CaptureView {
+        let view = CaptureView()
+        view.onCapture = onCapture
+        return view
+    }
+
+    func updateNSView(_ nsView: CaptureView, context: Context) {
+        nsView.isRecording = isRecording
+        nsView.onCapture = onCapture
+    }
+
+    final class CaptureView: NSView {
+        var onCapture: ((String) -> Void)?
+        var isRecording = false {
+            didSet {
+                if isRecording {
+                    window?.makeFirstResponder(self)
+                }
+            }
+        }
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            guard isRecording else {
+                super.keyDown(with: event)
+                return
+            }
+            if let chars = event.charactersIgnoringModifiers, let first = chars.first {
+                onCapture?(String(first))
+            }
         }
     }
 }

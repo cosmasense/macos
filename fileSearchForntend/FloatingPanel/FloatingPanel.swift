@@ -28,7 +28,7 @@ class FloatingPanel: NSPanel {
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
     }
 
     override var canBecomeKey: Bool { true }
@@ -37,12 +37,21 @@ class FloatingPanel: NSPanel {
 
 // MARK: - View Modifier
 
+private final class FloatingPanelDelegate: NSObject, NSWindowDelegate {
+    var onClose: (() -> Void)?
+    
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+}
+
 struct FloatingPanelModifier<PanelContent: View>: ViewModifier {
     @Binding var isPresented: Bool
     let contentRect: CGRect
     let content: () -> PanelContent
 
     @State private var panel: FloatingPanel?
+    @State private var delegate = FloatingPanelDelegate()
 
     func body(content: Content) -> some View {
         content
@@ -58,9 +67,15 @@ struct FloatingPanelModifier<PanelContent: View>: ViewModifier {
     private func presentPanel() {
         if panel == nil {
             let newPanel = FloatingPanel(contentRect: contentRect)
-
             let hostingView = NSHostingView(rootView: self.content())
             newPanel.contentView = hostingView
+            delegate.onClose = {
+                if isPresented {
+                    isPresented = false
+                }
+            }
+            newPanel.delegate = delegate
+            newPanel.isMovable = false
 
             panel = newPanel
         }

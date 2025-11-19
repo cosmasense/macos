@@ -92,7 +92,8 @@ struct SearchResultsView: View {
                                 selectedResultID = id
                                 resultsKeyFocus = true
                             },
-                            onOpen: { openResult($0) }
+                            onOpen: { openResult($0) },
+                            onPreview: { previewResult($0) }
                         )
                     } else if !model.searchResults.isEmpty {
                         FilteredResultsEmptyView()
@@ -225,6 +226,7 @@ struct ResultsListView: View {
     @Binding var selectedResultID: String?
     let onSelect: (String) -> Void
     let onOpen: (SearchResultItem) -> Void
+    let onPreview: (SearchResultItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -242,6 +244,9 @@ struct ResultsListView: View {
                         },
                         onOpen: {
                             onOpen(result)
+                        },
+                        onPreview: {
+                            onPreview(result)
                         }
                     )
                 }
@@ -257,6 +262,7 @@ struct SearchResultRow: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onOpen: () -> Void
+    let onPreview: () -> Void
     @State private var isHovered = false
     @State private var showingDetail = false
 
@@ -265,7 +271,7 @@ struct SearchResultRow: View {
             HStack(spacing: 12) {
                 FileThumbnailView(
                     url: URL(fileURLWithPath: result.file.filePath),
-                    onPreview: onOpen
+                    onPreview: onPreview
                 )
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -310,11 +316,11 @@ struct SearchResultRow: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : (isHovered ? Color.primary.opacity(0.03) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(isSelected ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.08), lineWidth: isSelected ? 1.5 : 1)
+                .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.white.opacity(0.08), lineWidth: isSelected ? 1 : 0.8)
         )
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -331,7 +337,7 @@ struct SearchResultRow: View {
         })
         .contextMenu {
             Button("Quick Look") {
-                onOpen()
+                onPreview()
             }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
@@ -343,6 +349,10 @@ struct SearchResultRow: View {
             }
             .frame(width: 360)
             .padding()
+        }
+        .onDrag {
+            let provider = NSItemProvider(object: NSURL(fileURLWithPath: result.file.filePath))
+            return provider
         }
     }
 }

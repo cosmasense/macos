@@ -12,7 +12,6 @@ import AppKit
 struct fileSearchForntendApp: App {
     @State private var appModel = AppModel()
     @State private var isOverlayVisible = false
-    @State private var overlayQuery = ""
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
 
     var body: some Scene {
@@ -25,16 +24,9 @@ struct fileSearchForntendApp: App {
                     isPresented: $isOverlayVisible,
                     contentRect: panelRect,
                     content: {
-                        SearchOverlayPanel(
-                            searchText: $overlayQuery,
-                            onDismiss: { isOverlayVisible = false }
-                        )
+                        SearchOverlayPanel(onDismiss: { isOverlayVisible = false })
                     }
                 )
-                .onReceive(NotificationCenter.default.publisher(for: .presentOverlayRequest)) { _ in
-                    overlayQuery = ""
-                    isOverlayVisible = true
-                }
         }
         .windowStyle(.automatic)
         .defaultSize(width: 900, height: 600)
@@ -74,12 +66,7 @@ struct fileSearchForntendApp: App {
         if isOverlayVisible {
             isOverlayVisible = false
         } else {
-            overlayQuery = ""
             isOverlayVisible = true
         }
     }
-}
-
-extension Notification.Name {
-    static let presentOverlayRequest = Notification.Name("presentOverlayRequest")
 }
