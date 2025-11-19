@@ -40,7 +40,8 @@ struct JobsView: View {
                 
                 if model.isLoadingWatchedFolders {
                     ProgressView()
-                        .scaleEffect(0.8)
+                        .frame(width: 16, height: 16)
+                        .controlSize(.small)
                         .padding(.horizontal, 6)
                 }
 
@@ -163,8 +164,9 @@ struct LoadingFoldersView: View {
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
-                .progressViewStyle(.circular)
-                .scaleEffect(1.3)
+                .frame(maxWidth: 32)
+                .frame(height: 32)
+                .padding(.bottom, 4)
             Text("Syncing with backend…")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)

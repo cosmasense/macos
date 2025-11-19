@@ -14,18 +14,19 @@ class FloatingPanel: NSPanel {
     init(contentRect: NSRect, backing: NSWindow.BackingStoreType = .buffered, defer flag: Bool = false) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .titled, .resizable, .closable, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .fullSizeContentView],
             backing: backing,
             defer: flag
         )
 
         isFloatingPanel = true
         level = .floating
-        collectionBehavior.insert(.fullScreenAuxiliary)
+        collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false
+        isOpaque = false
         backgroundColor = .clear
         hasShadow = true
     }

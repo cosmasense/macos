@@ -12,63 +12,40 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("selectedEmbeddingModel") private var selectedEmbeddingModel = "text-embedding-3-small"
     @AppStorage("launchAtStartup") private var launchAtStartup = false
-    @State var showingPanel = false
-    @State private var searchText = ""
+    @AppStorage("overlayHotkey") private var overlayHotkey = ""
+    @State private var showingPanel = false
+    @State private var overlayPreviewText = ""
 
     var body: some View {
         @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 Button("Present panel") {
-                    showingPanel.toggle()
+                    showingPanel = true
                 }
                 .floatingPanel(
                     isPresented: $showingPanel,
                     contentRect: {
-                        let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? CGRect.zero
-                        let panelWidth: CGFloat = 750
-                        let panelHeight: CGFloat = 60
-                        
+                        let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? .zero
+                        let panelWidth: CGFloat = 720
+                        let panelHeight: CGFloat = 110
                         return CGRect(
-                            x: screen.midX - (panelWidth / 2),  // Center horizontally
-                            y: screen.minY + 10,                 // 20 points above the dock
+                            x: screen.midX - (panelWidth / 2),
+                            y: screen.minY + 100,
                             width: panelWidth,
                             height: panelHeight
                         )
                     }(),
                     content: {
-                        ZStack {
-                            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
-                            
-                            HStack(spacing: 12) {
-                                // Search icon
-                                Image(systemName: "magnifyingglass")
-                                    .foregroundColor(.secondary)
-                                    .font(.system(size: 16, weight: .medium))
-                                
-                                // Search text field
-                                TextField("Search files", text: $searchText)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 16))
-                                    .frame(maxWidth: .infinity)
-                                
-                                // Clear button (only shown when there's text)
-                                if !searchText.isEmpty {
-                                    Button(action: { searchText = "" }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.secondary)
-                                            .font(.system(size: 14))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Clear")
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                        }
+                        SearchOverlayPanel(
+                            searchText: $overlayPreviewText,
+                            onDismiss: { showingPanel = false }
+                        )
                     }
-  
                 )
+                
+                HotkeySection(hotkey: $overlayHotkey)
+
                 // Models Section
                 ModelsSection(
                     selectedEmbeddingModel: $selectedEmbeddingModel
@@ -97,6 +74,102 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
+    }
+}
+
+// MARK: - Overlay Panel
+
+struct SearchOverlayPanel: View {
+    @Binding var searchText: String
+    var onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Color.white.opacity(0.08), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
+                .help("Close overlay")
+
+                Spacer()
+
+                Capsule()
+                    .fill(.secondary.opacity(0.35))
+                    .frame(width: 48, height: 4)
+            }
+
+            HStack(spacing: 14) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 18, weight: .semibold))
+
+                TextField("Search files, folders, or summaries", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 18, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .padding(.vertical, 6)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear query")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+
+            HStack(spacing: 12) {
+                Label("Instant local + Scalar results", systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Image(systemName: "command")
+                    Text("K")
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(.thinMaterial, in: Capsule())
+            }
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 20)
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+            if #available(macOS 14.0, *) {
+                Color.clear.glassEffect(in: shape)
+            } else {
+                shape.fill(.ultraThinMaterial)
+            }
+        }
+        .shadow(color: .black.opacity(0.35), radius: 35, y: 18)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 16)
+        .onExitCommand {
+            onDismiss()
+        }
     }
 }
 
@@ -162,6 +235,7 @@ struct GeneralSection: View {
     }
 
     var body: some View {
+        @Bindable var model = model
         VStack(alignment: .leading, spacing: 20) {
             Text("General")
                 .font(.system(size: 20, weight: .semibold))
@@ -173,6 +247,18 @@ struct GeneralSection: View {
                         .font(.system(size: 14, weight: .medium))
 
                     Text("Automatically open the app when your computer starts")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+
+            Toggle(isOn: $model.hideHiddenFiles) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Hide files starting with “.”")
+                        .font(.system(size: 14, weight: .medium))
+
+                    Text("When enabled, search results skip dotfiles. Turn off to include them.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -199,7 +285,8 @@ struct GeneralSection: View {
                     
                     if connectionTestState == .testing {
                         ProgressView()
-                            .scaleEffect(0.8)
+                            .frame(width: 16, height: 16)
+                            .controlSize(.small)
                     }
                 }
                 
@@ -360,4 +447,33 @@ struct FeedbackSheetView: View {
 #Preview {
     SettingsView()
         .frame(width: 800, height: 600)
+}
+private struct HotkeySection: View {
+    @Binding var hotkey: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Search Overlay Shortcut")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                TextField("None", text: $hotkey, prompt: Text("None"))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+                    .font(.system(size: 13, design: .monospaced))
+
+                Button("Clear") {
+                    hotkey = ""
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .disabled(hotkey.isEmpty)
+            }
+
+            Text("Enter a single key (for example \"k\" or \"f\"). Leave blank to disable the shortcut.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+    }
 }

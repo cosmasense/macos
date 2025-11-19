@@ -127,14 +127,11 @@ struct SearchFieldView: View {
             .padding(.vertical, 12)
             // Layered Liquid Glass for enhanced visibility
             .background {
-                ZStack {
-                    // Bottom layer - more opaque
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(.regularMaterial)
-
-                    // Top layer - ultra thin for glass effect
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(.ultraThinMaterial)
+                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+                if #available(macOS 14.0, *) {
+                    Color.clear.glassEffect(in: shape)
+                } else {
+                    shape.fill(.ultraThinMaterial)
                 }
             }
             .overlay(

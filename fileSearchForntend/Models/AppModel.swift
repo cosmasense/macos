@@ -7,6 +7,7 @@
 
 import Foundation
 import Observation
+import AppKit
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
@@ -40,6 +41,8 @@ class AppModel {
     }
     
     private static let backendURLDefaultsKey = "backendURL"
+    private static let hideHiddenFilesDefaultsKey = "hideHiddenFiles"
+    private static let bookmarksDefaultsKey = "watchedFolderBookmarks"
     
     // Navigation
     var selection: SidebarItem? = .home
@@ -49,11 +52,6 @@ class AppModel {
     var recentSearches: [RecentSearch] = []
     var isLoadingWatchedFolders: Bool = false
     var missingWatchedEndpoint: Bool = false
-    var summarizerModels: [SummarizerModelOption] = []
-    var selectedSummarizerModelID: String = "auto"
-    var isLoadingSummarizerModels: Bool = false
-    var isUpdatingSummarizerModel: Bool = false
-    var summarizerModelsError: String?
 
     // Search state
     var searchText: String = ""
@@ -72,24 +70,35 @@ class AppModel {
             reconfigureBackend()
         }
     }
+    var hideHiddenFiles: Bool {
+        didSet {
+            guard hideHiddenFiles != oldValue else { return }
+            UserDefaults.standard.set(hideHiddenFiles, forKey: Self.hideHiddenFilesDefaultsKey)
+        }
+    }
 
     // API Client
     @ObservationIgnored private let apiClient: APIClient
     @ObservationIgnored private let updatesStream = UpdatesStream()
+    @ObservationIgnored private var securityBookmarks: [String: Data] = [:]
+    
+    enum BookmarkError: Error {
+        case userCancelled
+        case folderUnknown
+    }
 
-    init(apiClient: APIClient = .shared) {
-        self.apiClient = apiClient
+    init(apiClient: APIClient? = nil) {
+        self.apiClient = apiClient ?? APIClient.shared
         let storedURL = UserDefaults.standard.string(forKey: Self.backendURLDefaultsKey)
         self.backendURL = storedURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? storedURL!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : apiClient.currentBaseURL().absoluteString
+            : self.apiClient.currentBaseURL().absoluteString
+        self.hideHiddenFiles = UserDefaults.standard.bool(forKey: Self.hideHiddenFilesDefaultsKey)
         
         configureStreams()
+        loadSecurityBookmarks()
         Task { [weak self] in
             await self?.refreshWatchedFolders()
-        }
-        Task { [weak self] in
-            await self?.refreshSummarizerModels()
         }
     }
 
@@ -129,14 +138,12 @@ class AppModel {
         Task { [weak self] in
             await self?.refreshWatchedFolders()
         }
-        Task { [weak self] in
-            await self?.refreshSummarizerModels()
-        }
     }
     
     // MARK: - Folder Management
 
     func addFolder(url: URL) {
+        storeSecurityBookmark(for: url)
         let path = url.path
         Task { [weak self] in
             guard let self else { return }
@@ -183,53 +190,6 @@ class AppModel {
         } catch {
             jobsError = "Unable to load watched folders: \(error.localizedDescription)"
         }
-    }
-
-    func refreshSummarizerModels() async {
-        isLoadingSummarizerModels = true
-        defer { isLoadingSummarizerModels = false }
-        
-        do {
-            let response = try await apiClient.fetchSummarizerModels()
-            summarizerModels = response.providers
-            selectedSummarizerModelID = response.current
-            summarizerModelsError = nil
-        } catch let error as APIError {
-            summarizerModelsError = error.localizedDescription
-        } catch {
-            summarizerModelsError = error.localizedDescription
-        }
-    }
-
-    func selectSummarizerModel(_ provider: String) {
-        guard provider != selectedSummarizerModelID else { return }
-        if isUpdatingSummarizerModel {
-            return
-        }
-        let previous = selectedSummarizerModelID
-        selectedSummarizerModelID = provider
-        isUpdatingSummarizerModel = true
-        
-        Task { [weak self] in
-            await self?.applySummarizerSelection(provider: provider, previous: previous)
-        }
-    }
-
-    private func applySummarizerSelection(provider: String, previous: String) async {
-        do {
-            let response = try await apiClient.selectSummarizerModel(provider: provider)
-            summarizerModels = response.providers
-            selectedSummarizerModelID = response.current
-            summarizerModelsError = nil
-        } catch let error as APIError {
-            summarizerModelsError = error.localizedDescription
-            selectedSummarizerModelID = previous
-        } catch {
-            summarizerModelsError = error.localizedDescription
-            selectedSummarizerModelID = previous
-        }
-        
-        isUpdatingSummarizerModel = false
     }
 
     // MARK: - Search
@@ -366,6 +326,9 @@ class AppModel {
                     folder.status = .indexing
                     folder.progress = max(folder.progress, 0.05)
                     folder.lastModified = Date()
+                    folder.lastIssueMessage = nil
+                    folder.lastIssueDate = nil
+                    folder.skippedFileCount = 0
                 }
             }
         case .directoryProcessingStarted:
@@ -374,6 +337,9 @@ class AppModel {
                     folder.status = .indexing
                     folder.progress = 0.05
                     folder.lastModified = Date()
+                    folder.lastIssueMessage = nil
+                    folder.lastIssueDate = nil
+                    folder.skippedFileCount = 0
                 }
             }
         case .directoryProcessingCompleted:
@@ -391,11 +357,13 @@ class AppModel {
         case .fileFailed:
             if let path = event.filePath {
                 updateFolder(forFilePath: path) { folder in
-                    folder.status = .error
+                    folder.status = .indexing
                     folder.lastModified = Date()
-                }
-                if let message = event.errorMessage {
-                    jobsError = "Processing failed: \(message)"
+                    folder.skippedFileCount += 1
+                    let message = event.errorMessage ??
+                        "Unable to process \(URL(fileURLWithPath: path).lastPathComponent)"
+                    folder.lastIssueMessage = message
+                    folder.lastIssueDate = Date()
                 }
             }
         default:
@@ -478,16 +446,89 @@ class AppModel {
         }
     }
     
+    func dismissFolderIssue(_ folder: WatchedFolder) {
+        guard let index = watchedFolders.firstIndex(where: { $0.id == folder.id }) else { return }
+        watchedFolders[index].lastIssueMessage = nil
+        watchedFolders[index].lastIssueDate = nil
+        watchedFolders[index].skippedFileCount = 0
+    }
+    
     // MARK: - Settings helpers
     
     func testBackendConnection() async -> (success: Bool, message: String) {
         do {
             let status = try await apiClient.fetchStatus()
-            return (true, "Connected (\(status.jobs) jobs running)")
+            let jobsCount = status.jobs ?? 0
+            return (true, "Connected (\(jobsCount) jobs running)")
         } catch let error as APIError {
             return (false, error.localizedDescription)
         } catch {
             return (false, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Security Bookmarks
+
+    func storeSecurityBookmark(for url: URL) {
+        let normalized = (url.path as NSString).standardizingPath
+        do {
+            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            securityBookmarks[normalized] = data
+            persistBookmarks()
+        } catch {
+            print("Failed to store bookmark for \(normalized): \(error)")
+        }
+    }
+
+    func withSecurityScopedAccess<T>(for filePath: String, perform: () throws -> T) throws -> T {
+        let normalized = (filePath as NSString).standardizingPath
+        guard let bookmark = securityBookmarks.first(where: { normalized.hasPrefix($0.key) }) else {
+            try promptForBookmark(for: normalized)
+            return try perform()
+        }
+        var isStale = false
+        let scopedURL = try URL(resolvingBookmarkData: bookmark.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
+        let granted = scopedURL.startAccessingSecurityScopedResource()
+        defer {
+            if granted {
+                scopedURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try perform()
+    }
+
+    private func persistBookmarks() {
+        let encoded = securityBookmarks.mapValues { $0.base64EncodedString() }
+        UserDefaults.standard.set(encoded, forKey: Self.bookmarksDefaultsKey)
+    }
+    
+    private func loadSecurityBookmarks() {
+        guard let stored = UserDefaults.standard.dictionary(forKey: Self.bookmarksDefaultsKey) as? [String: String] else {
+            securityBookmarks = [:]
+            return
+        }
+        securityBookmarks = stored.reduce(into: [:]) { partialResult, item in
+            if let data = Data(base64Encoded: item.value) {
+                partialResult[(item.key as NSString).standardizingPath] = data
+            }
+        }
+    }
+    
+    private func promptForBookmark(for path: String) throws {
+        guard let folder = watchedFolders.first(where: { path.hasPrefix(($0.path as NSString).standardizingPath) }) else {
+            throw BookmarkError.folderUnknown
+        }
+        let panel = NSOpenPanel()
+        panel.message = "fileSearchForntend needs access to \(folder.path) to open files."
+        panel.prompt = "Grant Access"
+        panel.directoryURL = URL(fileURLWithPath: folder.path)
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            storeSecurityBookmark(for: url)
+        } else {
+            throw BookmarkError.userCancelled
         }
     }
 }

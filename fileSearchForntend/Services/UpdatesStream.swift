@@ -192,10 +192,17 @@ extension UpdatesStream: URLSessionDataDelegate {
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            Task { @MainActor in
-                self.handleConnectionError(error)
-            }
+        guard let error = error else { return }
+
+        // NSURLErrorCancelled (-999) is emitted whenever we intentionally
+        // stop the stream (e.g., switching backends). Don't show that as a failure.
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+            return
+        }
+
+        Task { @MainActor in
+            self.handleConnectionError(error)
         }
     }
 }

@@ -24,6 +24,9 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
     var lastModified: Date
     var recursive: Bool
     var filePattern: String?
+    var lastIssueMessage: String? = nil
+    var lastIssueDate: Date? = nil
+    var skippedFileCount: Int = 0
     
     var id: String { path }
     
@@ -35,7 +38,10 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
         status: IndexStatus = .idle,
         lastModified: Date = Date(),
         recursive: Bool = true,
-        filePattern: String? = nil
+        filePattern: String? = nil,
+        lastIssueMessage: String? = nil,
+        lastIssueDate: Date? = nil,
+        skippedFileCount: Int = 0
     ) {
         self.backendID = backendID
         let normalizedPath = (path as NSString).standardizingPath
@@ -47,6 +53,9 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
         self.lastModified = lastModified
         self.recursive = recursive
         self.filePattern = filePattern
+        self.lastIssueMessage = lastIssueMessage
+        self.lastIssueDate = lastIssueDate
+        self.skippedFileCount = skippedFileCount
     }
     
     init(response: JobResponse) {
