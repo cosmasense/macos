@@ -2,149 +2,155 @@
 //  APIClient.swift
 //  fileSearchForntend
 //
-//  Main API client for backend communication
+//  HTTP client for backend API communication
 //
 
 import Foundation
 
-/// Configuration for the API client
-struct APIConfiguration {
-    let baseURL: URL
-    let timeout: TimeInterval
-    
-    static let `default` = APIConfiguration(
-        baseURL: URL(string: "http://localhost:8080")!,
-        timeout: 30.0
-    )
-}
-
-/// Errors that can occur during API operations
-enum APIError: LocalizedError {
-    case invalidURL
-    case networkError(Error)
-    case invalidResponse
-    case decodingError(Error)
-    case serverError(statusCode: Int, message: String?)
-    case unknown
-    
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL:
-            return "Invalid URL"
-        case .networkError(let error):
-            return "Network error: \(error.localizedDescription)"
-        case .invalidResponse:
-            return "Invalid response from server"
-        case .decodingError(let error):
-            return "Failed to decode response: \(error.localizedDescription)"
-        case .serverError(let statusCode, let message):
-            return "Server error (\(statusCode)): \(message ?? "Unknown error")"
-        case .unknown:
-            return "Unknown error occurred"
-        }
-    }
-}
-
-/// Main API client for backend communication
-@Observable
 class APIClient {
-    let configuration: APIConfiguration
-    private let session: URLSession
-    private let jsonEncoder: JSONEncoder
-    private let jsonDecoder: JSONDecoder
-    
-    init(configuration: APIConfiguration = .default) {
-        self.configuration = configuration
-        
-        let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = configuration.timeout
-        self.session = URLSession(configuration: sessionConfig)
-        
-        // Configure JSON encoder/decoder for date handling
-        self.jsonEncoder = JSONEncoder()
-        self.jsonEncoder.dateEncodingStrategy = .iso8601
-        
-        self.jsonDecoder = JSONDecoder()
-        // Custom date decoder to handle backend format: "2025-10-29T09:19:01"
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dateFormatter.timeZone = TimeZone.current
-        self.jsonDecoder.dateDecodingStrategy = .formatted(dateFormatter)
+    static let shared = APIClient()
+
+    private var baseURL: URL
+
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
+        return URLSession(configuration: config)
+    }()
+
+    private let jsonDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    private let jsonEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    init(baseURL: URL = URL(string: "http://localhost:8000")!) {
+        self.baseURL = baseURL
     }
-    
+
+    func currentBaseURL() -> URL {
+        baseURL
+    }
+
+    func updateBaseURL(_ url: URL) {
+        baseURL = url
+    }
+
+    // MARK: - Status
+
+    func fetchStatus() async throws -> StatusResponse {
+        let url = baseURL.appendingPathComponent("/api/status")
+        return try await get(url: url)
+    }
+
+    // MARK: - Watched Directories
+
+    func fetchWatchedDirectories() async throws -> [WatchedDirectoryResponse] {
+        let url = baseURL.appendingPathComponent("/api/watched")
+        return try await get(url: url)
+    }
+
+    func startWatchingDirectory(path: String) async throws -> WatchedDirectoryResponse {
+        let url = baseURL.appendingPathComponent("/api/watch")
+        let body = ["path": path]
+        return try await post(url: url, body: body)
+    }
+
+    func indexDirectory(path: String) async throws -> StatusResponse {
+        let url = baseURL.appendingPathComponent("/api/index")
+        let body = ["path": path]
+        return try await post(url: url, body: body)
+    }
+
     // MARK: - Search
-    
-    /// Performs a search query against the backend
-    /// - Parameter request: The search request parameters
-    /// - Returns: Search response with results
-    /// - Throws: APIError if the request fails
-    func search(_ request: SearchRequest) async throws -> SearchResponse {
-        let endpoint = configuration.baseURL.appendingPathComponent("/api/search/")
-        
-        var urlRequest = URLRequest(url: endpoint)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        do {
-            urlRequest.httpBody = try jsonEncoder.encode(request)
-        } catch {
-            throw APIError.decodingError(error)
-        }
-        
-        let (data, response) = try await session.data(for: urlRequest)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse
-        }
-        
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let errorMessage = String(data: data, encoding: .utf8)
-            throw APIError.serverError(statusCode: httpResponse.statusCode, message: errorMessage)
-        }
-        
-        do {
-            let searchResponse = try jsonDecoder.decode(SearchResponse.self, from: data)
-            return searchResponse
-        } catch {
-            throw APIError.decodingError(error)
-        }
-    }
-    
-    // MARK: - Convenience Methods
-    
-    /// Performs a simple text search
-    /// - Parameters:
-    ///   - query: The search query string
-    ///   - limit: Maximum number of results (default: 50)
-    ///   - directory: Optional directory to search within
-    /// - Returns: Search response with results
-    func search(query: String, limit: Int = 50, directory: String? = nil) async throws -> SearchResponse {
-        let request = SearchRequest(query: query, limit: limit, directory: directory)
-        return try await search(request)
-    }
-    
-    /// Performs a search with filters
-    /// - Parameters:
-    ///   - query: The search query string
-    ///   - filters: Dictionary of filter key-value pairs
-    ///   - limit: Maximum number of results (default: 50)
-    ///   - directory: Optional directory to search within
-    /// - Returns: Search response with results
+
     func search(
         query: String,
-        filters: [String: String],
+        filters: [String: String]? = nil,
         limit: Int = 50,
         directory: String? = nil
     ) async throws -> SearchResponse {
-        let request = SearchRequest(query: query, filters: filters, limit: limit, directory: directory)
-        return try await search(request)
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/search"), resolvingAgainstBaseURL: true)!
+        var queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "\(limit)")]
+
+        if let directory = directory {
+            queryItems.append(URLQueryItem(name: "directory", value: directory))
+        }
+
+        if let filters = filters {
+            for (key, value) in filters {
+                queryItems.append(URLQueryItem(name: key, value: value))
+            }
+        }
+
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+
+        return try await get(url: url)
     }
-}
 
-// MARK: - Shared Instance
+    // MARK: - Summarizer Models
 
-extension APIClient {
-    /// Shared instance for app-wide use
-    static let shared = APIClient()
+    func fetchSummarizerModels() async throws -> SummarizerModelsResponse {
+        let url = baseURL.appendingPathComponent("/api/summarizer/models")
+        return try await get(url: url)
+    }
+
+    func selectSummarizerModel(provider: String) async throws -> SummarizerModelsResponse {
+        let url = baseURL.appendingPathComponent("/api/summarizer/select")
+        let body = ["provider": provider]
+        return try await post(url: url, body: body)
+    }
+
+    // MARK: - HTTP Methods
+
+    private func get<T: Decodable>(url: URL) async throws -> T {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func post<T: Decodable>(url: URL, body: [String: Any]) async throws -> T {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func handleResponse<T: Decodable>(data: Data, response: URLResponse) throws -> T {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = try? JSONDecoder().decode([String: String].self, from: data)
+            throw APIError.serverError(
+                statusCode: httpResponse.statusCode,
+                message: errorMessage?["error"] ?? errorMessage?["message"]
+            )
+        }
+
+        do {
+            return try jsonDecoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
 }

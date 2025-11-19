@@ -53,9 +53,22 @@ struct FolderRowView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(.quaternary.opacity(0.2), in: Capsule())
+            
+            StatusPill(status: folder.status)
 
             // Progress indicator (App Store style)
             ProgressIndicatorView(folder: folder)
+                .padding(.leading, 2)
+            
+            Button {
+                model.reindex(folder: folder)
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 14))
+            }
+            .buttonStyle(.plain)
+            .help("Re-index now")
+            .disabled(folder.status == .indexing)
 
             // Remove button
             Button(role: .destructive, action: {
@@ -87,9 +100,7 @@ struct FolderRowView: View {
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                withAnimation {
-                    model.removeFolder(folder)
-                }
+                model.removeFolder(folder)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -194,6 +205,53 @@ struct ProgressIndicatorView: View {
         case .idle:
             return .gray
         }
+    }
+}
+
+struct StatusPill: View {
+    let status: IndexStatus
+    
+    var body: some View {
+        Text(statusLabel)
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(statusTextColor)
+            .background(statusColor.opacity(0.15), in: Capsule())
+    }
+    
+    private var statusLabel: String {
+        switch status {
+        case .idle:
+            return "Idle"
+        case .indexing:
+            return "Indexing"
+        case .paused:
+            return "Paused"
+        case .error:
+            return "Error"
+        case .complete:
+            return "Complete"
+        }
+    }
+    
+    private var statusColor: Color {
+        switch status {
+        case .idle:
+            return .gray
+        case .indexing:
+            return .blue
+        case .paused:
+            return .orange
+        case .error:
+            return .red
+        case .complete:
+            return .green
+        }
+    }
+    
+    private var statusTextColor: Color {
+        status == .idle ? .secondary : .primary
     }
 }
 

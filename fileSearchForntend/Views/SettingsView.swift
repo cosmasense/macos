@@ -9,14 +9,14 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("selectedLLMModel") private var selectedLLMModel = "GPT-4"
+    @Environment(AppModel.self) private var model
     @AppStorage("selectedEmbeddingModel") private var selectedEmbeddingModel = "text-embedding-3-small"
     @AppStorage("launchAtStartup") private var launchAtStartup = false
-    @AppStorage("backendURL") private var backendURL = "http://localhost:8000"
     @State var showingPanel = false
     @State private var searchText = ""
 
     var body: some View {
+        @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 Button("Present panel") {
@@ -71,7 +71,6 @@ struct SettingsView: View {
                 )
                 // Models Section
                 ModelsSection(
-                    selectedLLMModel: $selectedLLMModel,
                     selectedEmbeddingModel: $selectedEmbeddingModel
                 )
 
@@ -81,7 +80,7 @@ struct SettingsView: View {
                 // General Section
                 GeneralSection(
                     launchAtStartup: $launchAtStartup,
-                    backendURL: $backendURL
+                    backendURL: $model.backendURL
                 )
 
                 Divider()
@@ -97,33 +96,18 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Settings")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .background(.ultraThinMaterial)
     }
 }
 
 // MARK: - Models Section
 
 struct ModelsSection: View {
-    @Binding var selectedLLMModel: String
+    @Environment(AppModel.self) private var model
     @Binding var selectedEmbeddingModel: String
 
-    // Placeholder model lists (easy to replace with backend data)
-    let llmModels = [
-        "GPT-4",
-        "GPT-4 Turbo",
-        "GPT-3.5 Turbo",
-        "Claude 3 Opus",
-        "Claude 3 Sonnet",
-        "Claude 3 Haiku",
-        "Gemini Pro"
-    ]
-
-    let embeddingModels = [
-        "text-embedding-3-small",
-        "text-embedding-3-large",
-        "text-embedding-ada-002"
-    ]
-
     var body: some View {
+        @Bindable var model = model
         VStack(alignment: .leading, spacing: 20) {
             Text("Models")
                 .font(.system(size: 20, weight: .semibold))
@@ -134,15 +118,39 @@ struct ModelsSection: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                Picker("", selection: $selectedLLMModel) {
-                    ForEach(llmModels, id: \.self) { model in
-                        Text(model)
-                            .tag(model)
+                if model.isLoadingSummarizerModels && model.summarizerModels.isEmpty {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                } else {
+                    Picker("", selection: Binding(
+                        get: { model.selectedSummarizerModelID },
+                        set: { model.selectSummarizerModel($0) }
+                    )) {
+                        ForEach(model.summarizerModels) { option in
+                            Text(option.displayName)
+                                .tag(option.id)
+                                .disabled(!option.available)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .disabled(model.summarizerModels.isEmpty || model.isUpdatingSummarizerModel)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(maxWidth: 300, alignment: .leading)
+
+                if model.isUpdatingSummarizerModel {
+                    StatusText(
+                        message: "Updating preferred model…",
+                        color: .secondary,
+                        icon: "circle.dashed"
+                    )
+                } else if let error = model.summarizerModelsError {
+                    StatusText(
+                        message: error,
+                        color: .red,
+                        icon: "exclamationmark.octagon.fill"
+                    )
+                }
             }
 
             // Embedding Model
@@ -152,7 +160,7 @@ struct ModelsSection: View {
                     .foregroundStyle(.secondary)
 
                 Picker("", selection: $selectedEmbeddingModel) {
-                    ForEach(embeddingModels, id: \.self) { model in
+                    ForEach(["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"], id: \.self) { model in
                         Text(model)
                             .tag(model)
                     }
@@ -168,8 +176,17 @@ struct ModelsSection: View {
 // MARK: - General Section
 
 struct GeneralSection: View {
+    @Environment(AppModel.self) private var model
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
+    @State private var connectionTestState: ConnectionTestState = .idle
+    
+    enum ConnectionTestState: Equatable {
+        case idle
+        case testing
+        case success(String)
+        case failure(String)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -206,14 +223,48 @@ struct GeneralSection: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    
+                    if connectionTestState == .testing {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    }
+                }
+                
+                switch connectionTestState {
+                case .success(let message):
+                    StatusText(message: message, color: .green, icon: "checkmark.circle.fill")
+                case .failure(let message):
+                    StatusText(message: message, color: .red, icon: "xmark.octagon.fill")
+                case .idle, .testing:
+                    EmptyView()
                 }
             }
         }
     }
 
     private func testBackendConnection() {
-        // TODO: Implement backend connection test
-        print("Testing connection to: \(backendURL)")
+        connectionTestState = .testing
+        Task {
+            let result = await model.testBackendConnection()
+            await MainActor.run {
+                connectionTestState = result.success ? .success(result.message) : .failure(result.message)
+            }
+        }
+    }
+}
+
+private struct StatusText: View {
+    let message: String
+    let color: Color
+    let icon: String
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+            Text(message)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(color)
     }
 }
 

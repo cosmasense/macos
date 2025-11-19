@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import HotKey
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
@@ -32,25 +31,6 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .background(.windowBackground)
-        
-        let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? CGRect.zero
-        let panelWidth: CGFloat = 900
-        let panelHeight: CGFloat = (!results.isEmpty || isSearching) ? 280 : 60
-        
-        let newFrame = CGRect(
-            x: screen.midX - (panelWidth / 2),
-            y: screen.minY + 10,
-            width: panelWidth,
-            height: panelHeight
-        )
-        
-        print("📐 Resizing panel to height: \(panelHeight), has results: \(results.count), isSearching: \(isSearching)")
-        
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(newFrame, display: true, animate: true)
-        }
     }
 }
 

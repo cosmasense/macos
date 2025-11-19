@@ -14,13 +14,35 @@ struct JobsView: View {
     @State private var showFolderPicker = false
 
     var body: some View {
+        @Bindable var model = model
+        
         VStack(spacing: 0) {
             // Header with Add Folder button
             HStack {
                 Text("Watched Folders")
                     .font(.system(size: 22, weight: .semibold))
+                
+                ConnectionStatusView(state: model.backendConnectionState)
+                    .padding(.leading, 12)
 
                 Spacer()
+                
+                Button {
+                    Task {
+                        await model.refreshWatchedFolders()
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Refresh from backend")
+                
+                if model.isLoadingWatchedFolders {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .padding(.horizontal, 6)
+                }
 
                 Button(action: {
                     showFolderPicker = true
@@ -33,11 +55,18 @@ struct JobsView: View {
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 20)
+            
+            if model.missingWatchedEndpoint {
+                MissingEndpointBanner()
+                    .padding(.horizontal, 32)
+            }
 
             Divider()
 
             // Folder list or empty state
-            if model.watchedFolders.isEmpty {
+            if model.isLoadingWatchedFolders {
+                LoadingFoldersView()
+            } else if model.watchedFolders.isEmpty {
                 EmptyFoldersView()
             } else {
                 ScrollView {
@@ -54,12 +83,31 @@ struct JobsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Jobs")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .background(.ultraThinMaterial)
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
             handleFolderSelection(result)
+        }
+        .alert(
+            "Backend",
+            isPresented: Binding(
+                get: { model.jobsError != nil },
+                set: { newValue in
+                    if !newValue {
+                        model.jobsError = nil
+                    }
+                }
+            ),
+            presenting: model.jobsError
+        ) { _ in
+            Button("OK", role: .cancel) {
+                model.jobsError = nil
+            }
+        } message: { message in
+            Text(message)
         }
     }
 
@@ -72,6 +120,75 @@ struct JobsView: View {
         case .failure(let error):
             print("Error selecting folder: \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - Connection Status
+
+struct ConnectionStatusView: View {
+    let state: AppModel.BackendConnectionState
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+            
+            Text(state.statusDescription)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.2), in: Capsule())
+    }
+    
+    private var statusColor: Color {
+        switch state {
+        case .connected:
+            return .green
+        case .connecting:
+            return .orange
+        case .error:
+            return .red
+        case .idle:
+            return .gray
+        }
+    }
+}
+
+// MARK: - Loading View
+
+struct LoadingFoldersView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .scaleEffect(1.3)
+            Text("Syncing with backend…")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Missing Endpoint Banner
+
+struct MissingEndpointBanner: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            
+            Text("Backend needs GET /api/watched-directories to show existing folders.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
+            
+            Spacer()
+        }
+        .padding(12)
+        .background(.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

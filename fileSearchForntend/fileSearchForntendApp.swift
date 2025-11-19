@@ -6,11 +6,9 @@
 //
 
 import SwiftUI
-import HotKey
 
 @main
 struct fileSearchForntendApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appModel = AppModel()
 
     var body: some Scene {

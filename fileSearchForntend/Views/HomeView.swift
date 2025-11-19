@@ -183,7 +183,7 @@ struct SearchFieldView: View {
         // Return .ignored to allow normal text deletion when text exists
         if model.searchText.isEmpty && !model.searchTokens.isEmpty {
             // Prevent default backspace behavior and delete the token
-            withAnimation(.easeInOut(duration: 0.2)) {
+            _ = withAnimation(.easeInOut(duration: 0.2)) {
                 model.searchTokens.removeLast()
             }
             // Return .handled to prevent the default backspace action
