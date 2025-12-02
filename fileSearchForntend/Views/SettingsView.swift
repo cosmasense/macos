@@ -11,37 +11,27 @@ import AppKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.presentQuickSearchOverlay) private var presentOverlay
     @AppStorage("selectedEmbeddingModel") private var selectedEmbeddingModel = "text-embedding-3-small"
     @AppStorage("launchAtStartup") private var launchAtStartup = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
-    @State private var showingPanel = false
 
     var body: some View {
         @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                Button("Present panel") {
-                    showingPanel = true
-                }
-                .floatingPanel(
-                    isPresented: $showingPanel,
-                    contentRect: {
-                        let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? .zero
-                        let panelWidth: CGFloat = 720
-                        let panelHeight: CGFloat = 110
-                        return CGRect(
-                            x: screen.midX - (panelWidth / 2),
-                            y: screen.minY + 100,
-                            width: panelWidth,
-                            height: panelHeight
-                        )
-                    }(),
-                    content: {
-                        SearchOverlayPanel(onDismiss: { showingPanel = false })
-                    }
-                )
-                
                 HotkeySection(hotkey: $overlayHotkey)
+                
+                Button {
+                    presentOverlay()
+                } label: {
+                    Label("Show Quick Search Overlay", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+
+                Divider()
+                    .padding(.horizontal, -32)
 
                 // Models Section
                 ModelsSection(
@@ -71,94 +61,6 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
-    }
-}
-
-// MARK: - Overlay Panel
-
-struct SearchOverlayPanel: View {
-    @Environment(AppModel.self) private var environmentModel
-    var onDismiss: () -> Void
-
-    var body: some View {
-        @Bindable var model = environmentModel
-        VStack(alignment: .leading, spacing: 24) {
-            HStack {
-                Button {
-                    onDismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(0.1), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.escape, modifiers: [])
-                .help("Close overlay")
-
-                Spacer()
-            }
-
-            HStack(spacing: 14) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 18, weight: .semibold))
-
-                TextField("Search files, folders, or summaries", text: $model.searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 18, weight: .medium, design: .rounded))
-                    .foregroundStyle(.primary)
-                    .padding(.vertical, 6)
-                    .onSubmit {
-                        model.performSearch()
-                    }
-
-                if !model.searchText.isEmpty {
-                    Button {
-                        model.searchText = ""
-                        model.clearSearchResults()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 16, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Clear query")
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-            )
-            
-            if model.isSearching || !model.searchResults.isEmpty {
-                Divider()
-                    .padding(.horizontal, -10)
-                    .padding(.top, 4)
-                
-                SearchResultsView()
-                    .frame(height: 360)
-            }
-        }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 24)
-        .background {
-            let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
-            if #available(macOS 14.0, *) {
-                Color.clear.glassEffect(in: shape)
-            } else {
-                shape.fill(.ultraThinMaterial)
-            }
-        }
-        .shadow(color: .black.opacity(0.28), radius: 28, y: 20)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 16)
-        .onExitCommand {
-            onDismiss()
-        }
     }
 }
 
@@ -433,13 +335,16 @@ struct FeedbackSheetView: View {
     }
 }
 
-#Preview {
-    SettingsView()
-        .frame(width: 800, height: 600)
-}
+// MARK: - Hotkey Recording
+
 private struct HotkeySection: View {
     @Binding var hotkey: String
     @State private var isRecording = false
+
+    private var displayText: String {
+        if isRecording { return "Press any key…" }
+        return hotkeyDisplayString(hotkey) ?? "Not set"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -448,9 +353,9 @@ private struct HotkeySection: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
-                Text(isRecording ? "Press any key…" : (hotkey.isEmpty ? "Not set" : hotkey.uppercased()))
+                Text(displayText)
                     .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 140, alignment: .leading)
+                    .frame(width: 200, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -519,9 +424,62 @@ private struct HotkeyCaptureView: NSViewRepresentable {
                 super.keyDown(with: event)
                 return
             }
-            if let chars = event.charactersIgnoringModifiers, let first = chars.first {
-                onCapture?(String(first))
+            guard let chars = event.charactersIgnoringModifiers,
+                  let first = chars.first else {
+                return
             }
+            let normalizedKey: String
+            if first == " " {
+                normalizedKey = "space"
+            } else if first.isLetter || first.isNumber {
+                normalizedKey = String(first).lowercased()
+            } else {
+                return
+            }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let components = normalizedModifiers(flags) + [normalizedKey]
+            onCapture?(components.joined(separator: "+"))
         }
     }
+}
+
+// MARK: - Hotkey Helpers
+
+private func normalizedModifiers(_ flags: NSEvent.ModifierFlags) -> [String] {
+    var parts: [String] = []
+    if flags.contains(.command) { parts.append("command") }
+    if flags.contains(.option) { parts.append("option") }
+    if flags.contains(.control) { parts.append("control") }
+    if flags.contains(.shift) { parts.append("shift") }
+    return parts
+}
+
+private func hotkeyDisplayString(_ raw: String) -> String? {
+    guard !raw.isEmpty else { return nil }
+    let parts = raw.split(separator: "+").map { String($0) }
+    guard let key = parts.last else { return nil }
+    let modifiers = parts.dropLast().map { modifierSymbol($0) }
+    let keySymbol = key == "space" ? "Space" : key.uppercased()
+    let symbols = modifiers + [keySymbol]
+    return symbols.joined(separator: " ")
+}
+
+private func modifierSymbol(_ raw: String) -> String {
+    switch raw {
+    case "command":
+        return "⌘"
+    case "option":
+        return "⌥"
+    case "control":
+        return "⌃"
+    case "shift":
+        return "⇧"
+    default:
+        return raw.uppercased()
+    }
+}
+
+#Preview {
+    SettingsView()
+        .frame(width: 800, height: 600)
 }
