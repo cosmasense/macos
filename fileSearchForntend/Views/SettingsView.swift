@@ -340,6 +340,7 @@ struct FeedbackSheetView: View {
 private struct HotkeySection: View {
     @Binding var hotkey: String
     @State private var isRecording = false
+    @Environment(\.controlHotkeyMonitoring) private var controlHotkeys
 
     private var displayText: String {
         if isRecording { return "Press any key…" }
@@ -366,12 +367,15 @@ private struct HotkeySection: View {
 
                 Button(isRecording ? "Cancel" : "Record") {
                     isRecording.toggle()
+                    controlHotkeys(!isRecording)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 Button("Clear") {
                     hotkey = ""
+                    controlHotkeys(true)
+                    isRecording = false
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
@@ -381,6 +385,7 @@ private struct HotkeySection: View {
                 HotkeyCaptureView(isRecording: $isRecording) { key in
                     hotkey = key.lowercased()
                     isRecording = false
+                    controlHotkeys(true)
                 }
                 .allowsHitTesting(false)
             )
@@ -388,6 +393,24 @@ private struct HotkeySection: View {
             Text("Click record, then press the key you'd like to use. Leave blank to disable the shortcut.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    openAccessibilityPreferences()
+                } label: {
+                    Label("Allow Accessibility (needed for global hotkey)", systemImage: "lock.open")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button {
+                    openFullDiskAccessPreferences()
+                } label: {
+                    Label("Allow Full Disk / Files access (for drag-and-drop)", systemImage: "externaldrive.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
     }
 }
@@ -440,6 +463,18 @@ private struct HotkeyCaptureView: NSViewRepresentable {
             let components = normalizedModifiers(flags) + [normalizedKey]
             onCapture?(components.joined(separator: "+"))
         }
+    }
+}
+
+private func openAccessibilityPreferences() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        NSWorkspace.shared.open(url)
+    }
+}
+
+private func openFullDiskAccessPreferences() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+        NSWorkspace.shared.open(url)
     }
 }
 

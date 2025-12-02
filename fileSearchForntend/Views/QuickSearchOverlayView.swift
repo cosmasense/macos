@@ -12,9 +12,14 @@ import UniformTypeIdentifiers
 struct QuickSearchOverlayView: View {
     @Environment(AppModel.self) private var model
     var onClose: () -> Void
+    @Environment(\.updateQuickSearchLayout) private var updateLayout
 
     @FocusState private var isSearchFocused: Bool
     @State private var lastResultCount: Int = 0
+    @State private var hasExpandedOnce: Bool = false
+    private let collapsedHeight: CGFloat = 140
+    private let expandedHeight: CGFloat = 380
+    @State private var dragLocation: CGPoint = .zero
 
     private var filteredResults: [SearchResultItem] {
         guard model.hideHiddenFiles else { return model.searchResults }
@@ -24,7 +29,7 @@ struct QuickSearchOverlayView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            HStack(spacing: 10) {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 14, weight: .bold))
@@ -35,6 +40,14 @@ struct QuickSearchOverlayView: View {
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
                 .help("Close")
+
+                DragHandle()
+                    .frame(height: 18)
+                    .padding(.trailing, 6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
 
                 Spacer()
             }
@@ -59,8 +72,8 @@ struct QuickSearchOverlayView: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.38),
-                                Color.white.opacity(0.22)
+                                Color.white.opacity(0.42),
+                                Color.white.opacity(0.26)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -70,8 +83,8 @@ struct QuickSearchOverlayView: View {
                     .strokeBorder(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.75),
-                                Color.white.opacity(0.3)
+                                Color.white.opacity(0.78),
+                                Color.white.opacity(0.34)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -80,12 +93,26 @@ struct QuickSearchOverlayView: View {
                     )
             }
         }
-        .shadow(color: .black.opacity(0.25), radius: 44, y: 24)
-        .shadow(color: Color.accentColor.opacity(0.12), radius: 30, y: 16)
-        .onAppear { isSearchFocused = true }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 18, y: 12)
+        .shadow(color: Color.accentColor.opacity(0.06), radius: 14, y: 6)
+        .onAppear {
+            isSearchFocused = true
+            updateLayout(!filteredResults.isEmpty)
+        }
         .onExitCommand { onClose() }
         .onChange(of: filteredResults.count) { _, newValue in
             lastResultCount = newValue
+            if !filteredResults.isEmpty {
+                hasExpandedOnce = true
+            }
+            updateLayout(shouldExpand)
+        }
+        .onChange(of: shouldExpand) { oldValue, newValue in
+            // Only update layout when expand state actually changes
+            if oldValue != newValue {
+                updateLayout(newValue)
+            }
         }
     }
 
@@ -118,7 +145,11 @@ struct QuickSearchOverlayView: View {
     }
 
     private var overlayHeight: CGFloat {
-        filteredResults.isEmpty ? 220 : 340
+        shouldExpand ? expandedHeight : collapsedHeight
+    }
+
+    private var shouldExpand: Bool {
+        hasExpandedOnce || !filteredResults.isEmpty
     }
 }
 
@@ -126,6 +157,7 @@ struct QuickSearchOverlayView: View {
 
 private struct OverlayFileTile: View {
     let result: SearchResultItem
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(spacing: 12) {
@@ -174,30 +206,56 @@ private struct OverlayFileTile: View {
     }
 
     private func openResult() {
-        let url = URL(fileURLWithPath: result.file.filePath)
-        NSWorkspace.shared.open(url)
+        do {
+            try model.withSecurityScopedAccess(for: result.file.filePath) {
+                let url = URL(fileURLWithPath: result.file.filePath)
+                NSWorkspace.shared.open(url)
+            }
+        } catch AppModel.BookmarkError.userCancelled {
+            print("User cancelled file access permission")
+        } catch {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Cannot Open File"
+                alert.informativeText = "Unable to access this file. Please grant access when prompted."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
     }
 
     private func dragProvider() -> NSItemProvider {
         let url = URL(fileURLWithPath: result.file.filePath)
-        let provider = NSItemProvider()
-
-        provider.registerDataRepresentation(forTypeIdentifier: "public.file-url", visibility: .all) { completion in
-            do {
-                let data = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-                completion(data, nil)
-            } catch {
-                completion(url.absoluteURL.dataRepresentation, nil)
+        
+        // Read file data and copy to temp location - this makes it work like Finder
+        var tempFileURL: URL?
+        do {
+            try model.withSecurityScopedAccess(for: url.path) {
+                // Copy file to temp directory
+                let tempDir = FileManager.default.temporaryDirectory
+                let tempFile = tempDir.appendingPathComponent(result.file.filename)
+                
+                // Remove if exists
+                try? FileManager.default.removeItem(at: tempFile)
+                
+                // Copy the file
+                try FileManager.default.copyItem(at: url, to: tempFile)
+                tempFileURL = tempFile
             }
-            return nil
+        } catch {
+            print("Failed to copy file for drag: \(error)")
         }
-
-        provider.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) { completion in
-            completion(url.absoluteURL.dataRepresentation, nil)
-            return nil
+        
+        // If we successfully created a temp copy, use that
+        // This makes it behave exactly like dragging from Finder!
+        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
+            provider.suggestedName = result.file.filename
+            return provider
         }
-
-        provider.registerObject(url as NSURL, visibility: .all)
+        
+        // Fallback: just provide the original URL
+        let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
         provider.suggestedName = result.file.filename
         return provider
     }

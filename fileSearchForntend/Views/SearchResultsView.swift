@@ -35,9 +35,22 @@ struct SearchResultsView: View {
                 NSWorkspace.shared.open(url)
             }
         } catch AppModel.BookmarkError.userCancelled {
-            // no-op
+            print("User cancelled file access permission")
+        } catch AppModel.BookmarkError.folderUnknown {
+            // Show alert to user
+            let alert = NSAlert()
+            alert.messageText = "Cannot Open File"
+            alert.informativeText = "Unable to access this file. Please grant access to the containing folder when prompted."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         } catch {
-            print("Failed to open file: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Failed to Open File"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 
@@ -48,9 +61,14 @@ struct SearchResultsView: View {
                 QuickLookPreviewCoordinator.shared.present(url: url)
             }
         } catch AppModel.BookmarkError.userCancelled {
-            // user cancelled; no-op
+            print("User cancelled file access permission")
         } catch {
-            print("Failed to preview file: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Cannot Preview File"
+            alert.informativeText = "Unable to access this file. Please grant access to the containing folder."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
 
@@ -265,6 +283,7 @@ struct SearchResultRow: View {
     let onPreview: () -> Void
     @State private var isHovered = false
     @State private var showingDetail = false
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -351,9 +370,43 @@ struct SearchResultRow: View {
             .padding()
         }
         .onDrag {
-            let provider = NSItemProvider(object: NSURL(fileURLWithPath: result.file.filePath))
+            createDragProvider()
+        }
+    }
+    
+    private func createDragProvider() -> NSItemProvider {
+        let url = URL(fileURLWithPath: result.file.filePath)
+        
+        // Read file data and copy to temp location - this makes it work like Finder
+        var tempFileURL: URL?
+        do {
+            try model.withSecurityScopedAccess(for: url.path) {
+                // Copy file to temp directory
+                let tempDir = FileManager.default.temporaryDirectory
+                let tempFile = tempDir.appendingPathComponent(result.file.filename)
+                
+                // Remove if exists
+                try? FileManager.default.removeItem(at: tempFile)
+                
+                // Copy the file
+                try FileManager.default.copyItem(at: url, to: tempFile)
+                tempFileURL = tempFile
+            }
+        } catch {
+            print("Failed to copy file for drag: \(error)")
+        }
+        
+        // If we successfully created a temp copy, use that
+        // This makes it behave exactly like dragging from Finder!
+        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
+            provider.suggestedName = result.file.filename
             return provider
         }
+        
+        // Fallback: just provide the original URL
+        let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
+        provider.suggestedName = result.file.filename
+        return provider
     }
 }
 

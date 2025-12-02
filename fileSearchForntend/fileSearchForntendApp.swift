@@ -11,9 +11,10 @@ import AppKit
 @main
 struct fileSearchForntendApp: App {
     @State private var appModel = AppModel()
-    @State private var isOverlayVisible = false
+    @State private var coordinator = AppCoordinator()
     @State private var overlayController = QuickSearchOverlayController()
     @State private var hotkeyMonitor = GlobalHotkeyMonitor()
+    @State private var hotkeyMonitoringEnabled = true
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
 
     var body: some Scene {
@@ -22,16 +23,28 @@ struct fileSearchForntendApp: App {
                 .environment(appModel)
                 .frame(minWidth: 900, minHeight: 600)
                 .containerBackground(.ultraThinMaterial, for: .window)
-                .environment(\.presentQuickSearchOverlay, { showOverlay() })
-                .onChange(of: isOverlayVisible) { _, newValue in
+                .environment(\.presentQuickSearchOverlay, { 
+                    coordinator.showOverlay()
+                })
+                .environment(\.updateQuickSearchLayout, { isExpanded in
+                    overlayController.updateLayout(isExpanded: isExpanded)
+                })
+                .environment(\.controlHotkeyMonitoring, { enabled in
+                    setHotkeyMonitoring(enabled: enabled)
+                })
+                .onChange(of: coordinator.isOverlayVisible) { _, newValue in
                     overlayController.toggle(
                         appModel: appModel,
                         visible: newValue,
-                        onDismiss: { isOverlayVisible = false }
+                        onDismiss: {
+                            coordinator.hideOverlay()
+                        }
                     )
                 }
                 .onChange(of: overlayHotkey) { _, newValue in
-                    registerHotkey(newValue)
+                    if hotkeyMonitoringEnabled {
+                        registerHotkey(newValue)
+                    }
                 }
                 .onAppear {
                     registerHotkey(overlayHotkey)
@@ -42,8 +55,8 @@ struct fileSearchForntendApp: App {
         .commands {
             CommandMenu("Quick Search") {
                 if let shortcut = parsedShortcut {
-                    Button(isOverlayVisible ? "Hide Quick Search" : "Show Quick Search") {
-                        toggleOverlay()
+                    Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search") {
+                        coordinator.toggleOverlay()
                     }
                     .keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
                 } else {
@@ -58,16 +71,6 @@ struct fileSearchForntendApp: App {
         guard let key = shortcutKey(from: overlayHotkey) else { return nil }
         let modifiers = shortcutModifiers(from: overlayHotkey)
         return (key, modifiers)
-    }
-
-    private func toggleOverlay() {
-        isOverlayVisible.toggle()
-    }
-
-    private func showOverlay() {
-        if !isOverlayVisible {
-            isOverlayVisible = true
-        }
     }
 
     private func shortcutKey(from raw: String) -> KeyEquivalent? {
@@ -105,8 +108,23 @@ struct fileSearchForntendApp: App {
             hotkeyMonitor.stop()
             return
         }
-        hotkeyMonitor.update(hotkey: raw) {
-            toggleOverlay()
+        
+        // Register with a weak reference to the coordinator
+        hotkeyMonitor.update(hotkey: raw) { [weak coordinator] in
+            guard let coordinator = coordinator else { return }
+            // This closure is already executed on main thread by GlobalHotkeyMonitor
+            // Toggle the overlay - bring app to front when triggered globally
+            NSApp.activate(ignoringOtherApps: true)
+            coordinator.toggleOverlay()
+        }
+    }
+
+    private func setHotkeyMonitoring(enabled: Bool) {
+        hotkeyMonitoringEnabled = enabled
+        if enabled {
+            registerHotkey(overlayHotkey)
+        } else {
+            hotkeyMonitor.stop()
         }
     }
 }

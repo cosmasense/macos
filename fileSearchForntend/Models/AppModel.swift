@@ -40,9 +40,9 @@ class AppModel {
         }
     }
     
-    private static let backendURLDefaultsKey = "backendURL"
-    private static let hideHiddenFilesDefaultsKey = "hideHiddenFiles"
-    private static let bookmarksDefaultsKey = "watchedFolderBookmarks"
+    nonisolated private static let backendURLDefaultsKey = "backendURL"
+    nonisolated private static let hideHiddenFilesDefaultsKey = "hideHiddenFiles"
+    nonisolated private static let bookmarksDefaultsKey = "watchedFolderBookmarks"
     
     // Navigation
     var selection: SidebarItem? = .home
@@ -80,7 +80,8 @@ class AppModel {
     // API Client
     @ObservationIgnored private let apiClient: APIClient
     @ObservationIgnored private let updatesStream = UpdatesStream()
-    @ObservationIgnored private var securityBookmarks: [String: Data] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var securityBookmarks: [String: Data] = [:]
+    @ObservationIgnored private let bookmarkQueue = DispatchQueue(label: "com.filesearch.bookmarks", attributes: .concurrent)
     
     enum BookmarkError: Error {
         case userCancelled
@@ -143,6 +144,14 @@ class AppModel {
     // MARK: - Folder Management
 
     func addFolder(url: URL) {
+        // Start accessing the security-scoped resource
+        let granted = url.startAccessingSecurityScopedResource()
+        defer {
+            if granted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        
         storeSecurityBookmark(for: url)
         let path = url.path
         Task { [weak self] in
@@ -469,35 +478,92 @@ class AppModel {
 
     // MARK: - Security Bookmarks
 
-    func storeSecurityBookmark(for url: URL) {
+    nonisolated func storeSecurityBookmark(for url: URL) {
         let normalized = (url.path as NSString).standardizingPath
         do {
             let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-            securityBookmarks[normalized] = data
-            persistBookmarks()
+            bookmarkQueue.async(flags: .barrier) { [weak self] in
+                self?.securityBookmarks[normalized] = data
+                self?.persistBookmarks()
+            }
+            print("Stored security bookmark for: \(normalized)")
         } catch {
             print("Failed to store bookmark for \(normalized): \(error)")
         }
     }
 
-    func withSecurityScopedAccess<T>(for filePath: String, perform: () throws -> T) throws -> T {
+    nonisolated func withSecurityScopedAccess<T>(for filePath: String, perform: () throws -> T) throws -> T {
         let normalized = (filePath as NSString).standardizingPath
-        guard let bookmark = securityBookmarks.first(where: { normalized.hasPrefix($0.key) }) else {
-            try promptForBookmark(for: normalized)
-            return try perform()
+        
+        // First try to find an existing bookmark that covers this file
+        var bookmarkEntry: (key: String, value: Data)?
+        bookmarkQueue.sync {
+            bookmarkEntry = securityBookmarks.first(where: { normalized.hasPrefix($0.key) })
         }
-        var isStale = false
-        let scopedURL = try URL(resolvingBookmarkData: bookmark.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
-        let granted = scopedURL.startAccessingSecurityScopedResource()
-        defer {
-            if granted {
-                scopedURL.stopAccessingSecurityScopedResource()
+        
+        if let bookmarkEntry = bookmarkEntry {
+            do {
+                var isStale = false
+                let scopedURL = try URL(resolvingBookmarkData: bookmarkEntry.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
+                
+                // If stale, recreate the bookmark
+                if isStale {
+                    print("Bookmark is stale for \(bookmarkEntry.key), recreating...")
+                    storeSecurityBookmark(for: scopedURL)
+                }
+                
+                let granted = scopedURL.startAccessingSecurityScopedResource()
+                defer {
+                    if granted {
+                        scopedURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                
+                if !granted {
+                    print("Failed to start accessing security scoped resource for \(scopedURL.path)")
+                    throw BookmarkError.folderUnknown
+                }
+                
+                return try perform()
+            } catch {
+                print("Error resolving bookmark: \(error)")
+                // Remove the invalid bookmark
+                bookmarkQueue.async(flags: .barrier) { [weak self] in
+                    self?.securityBookmarks.removeValue(forKey: bookmarkEntry.key)
+                    self?.persistBookmarks()
+                }
             }
         }
-        return try perform()
+        
+        // No bookmark found, prompt user for access
+        print("No bookmark found for \(normalized), prompting user...")
+        try promptForBookmark(for: normalized)
+        
+        // After prompting, try again with the newly created bookmark
+        bookmarkQueue.sync {
+            bookmarkEntry = securityBookmarks.first(where: { normalized.hasPrefix($0.key) })
+        }
+        
+        if let bookmarkEntry = bookmarkEntry {
+            var isStale = false
+            let scopedURL = try URL(resolvingBookmarkData: bookmarkEntry.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
+            let granted = scopedURL.startAccessingSecurityScopedResource()
+            defer {
+                if granted {
+                    scopedURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            return try perform()
+        }
+        
+        // If we still don't have access, throw an error
+        print("Failed to obtain security bookmark after prompting")
+        throw BookmarkError.folderUnknown
     }
 
-    private func persistBookmarks() {
+    nonisolated private func persistBookmarks() {
+        // This is called from bookmarkQueue.async, so we're already on that queue
+        // Just read the bookmarks directly (we're inside the barrier)
         let encoded = securityBookmarks.mapValues { $0.base64EncodedString() }
         UserDefaults.standard.set(encoded, forKey: Self.bookmarksDefaultsKey)
     }
@@ -514,21 +580,59 @@ class AppModel {
         }
     }
     
-    private func promptForBookmark(for path: String) throws {
-        guard let folder = watchedFolders.first(where: { path.hasPrefix(($0.path as NSString).standardizingPath) }) else {
-            throw BookmarkError.folderUnknown
+    nonisolated private func promptForBookmark(for path: String) throws {
+        // This will be called from main thread, so we can use assumeIsolated
+        // Get watched folders info and show panel on main thread
+        let result = MainActor.assumeIsolated {
+            // Get folder info
+            let folderInfo = self.watchedFolders.first(where: { path.hasPrefix(($0.path as NSString).standardizingPath) })
+            
+            // Create and show panel
+            let panel = NSOpenPanel()
+            if let folder = folderInfo {
+                panel.message = "fileSearchForntend needs access to \(folder.name) to open files."
+                panel.directoryURL = URL(fileURLWithPath: folder.path)
+            } else {
+                // If we can't find a watched folder, try to get the parent directory
+                let fileURL = URL(fileURLWithPath: path)
+                let parentURL = fileURL.deletingLastPathComponent()
+                panel.message = "fileSearchForntend needs access to open this file."
+                panel.directoryURL = parentURL
+            }
+            
+            panel.prompt = "Grant Access"
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            
+            // Show panel and return result
+            if panel.runModal() == .OK {
+                return panel.url
+            } else {
+                return nil
+            }
         }
-        let panel = NSOpenPanel()
-        panel.message = "fileSearchForntend needs access to \(folder.path) to open files."
-        panel.prompt = "Grant Access"
-        panel.directoryURL = URL(fileURLWithPath: folder.path)
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
+        
+        // Store bookmark if user selected a folder
+        if let url = result {
             storeSecurityBookmark(for: url)
         } else {
             throw BookmarkError.userCancelled
+        }
+    }
+    
+    /// Request access to all watched folders that don't have bookmarks yet
+    func ensureBookmarksForWatchedFolders() {
+        for folder in watchedFolders {
+            let normalized = (folder.path as NSString).standardizingPath
+            var hasBookmark = false
+            bookmarkQueue.sync {
+                hasBookmark = securityBookmarks[normalized] != nil
+            }
+            if !hasBookmark {
+                print("Missing bookmark for watched folder: \(folder.path)")
+                // We could prompt here, but it's better to wait until the user actually tries to access a file
+            }
         }
     }
 }

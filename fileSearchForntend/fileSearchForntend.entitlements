@@ -2,20 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Enable App Sandbox and opt-in capabilities that the app requires -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
-
-	<!-- Allow outbound HTTP requests to the local indexer and Scalar APIs -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-
-	<!-- Local listener used when the backend pushes streaming updates -->
 	<key>com.apple.security.network.server</key>
-	<true/>
-
-	<!-- Users pick folders to index; sandbox needs read access to those selections -->
-	<key>com.apple.security.files.user-selected.read-only</key>
 	<true/>
 </dict>
 </plist>

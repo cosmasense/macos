@@ -39,8 +39,13 @@ private final class NonActivatingPanel: NSPanel {
 
 @MainActor
 final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
+    private let collapsedHeight: CGFloat = 86
+    private let expandedHeight: CGFloat = 380
+    private let panelWidth: CGFloat = 940
+    private let bottomOffset: CGFloat = 120
+
     private var panel: NonActivatingPanel?
-    private var hostingController: ( NSViewController)?
+    private var hostingController: NSHostingController<AnyView>?
     private var dismissalCallback: (() -> Void)?
 
     func present(appModel: AppModel, onDismiss: @escaping () -> Void) {
@@ -51,8 +56,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
                 self?.dismiss()
             })
             .environment(appModel)
+            .environment(\.updateQuickSearchLayout, { [weak self] isExpanded in
+                self?.updateLayout(isExpanded: isExpanded)
+            })
 
-            let host = NSHostingController(rootView: contentView)
+            let host = NSHostingController(rootView: AnyView(contentView))
             let panel = NonActivatingPanel(contentRect: defaultFrame())
             panel.contentViewController = host
             panel.delegate = self
@@ -80,6 +88,22 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    func updateLayout(isExpanded: Bool) {
+        guard let panel else { return }
+        let height = isExpanded ? expandedHeight : collapsedHeight
+        
+        // Calculate new frame keeping the bottom anchored
+        let currentFrame = panel.frame
+        let newFrame = NSRect(
+            x: currentFrame.origin.x,
+            y: currentFrame.origin.y, // Keep bottom at same position
+            width: currentFrame.width,
+            height: height
+        )
+        
+        panel.setFrame(newFrame, display: true, animate: true)
+    }
+
     func windowWillClose(_ notification: Notification) {
         cleanupAfterClose()
     }
@@ -95,15 +119,18 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     }
 
     private func defaultFrame() -> NSRect {
+        frame(for: collapsedHeight)
+    }
+
+    private func frame(for height: CGFloat) -> NSRect {
         let primaryScreen = NSScreen.main ?? NSScreen.screens.first
-        let frame = primaryScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
-        let width: CGFloat = 940
-        let height: CGFloat = 260
-
-        let x = frame.midX - (width / 2)
-        // Anchor near the bottom of the visible area
-        let y = frame.minY + 100
-
-        return NSRect(x: x, y: y, width: width, height: height)
+        let frame = primaryScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let x = frame.midX - (panelWidth / 2)
+        
+        // Keep the BOTTOM of the panel fixed at bottomOffset from screen bottom
+        // Only expand upward by adjusting Y based on height
+        let y = frame.minY + bottomOffset
+        
+        return NSRect(x: x, y: y, width: panelWidth, height: height)
     }
 }
