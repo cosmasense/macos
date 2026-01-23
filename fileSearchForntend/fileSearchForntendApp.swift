@@ -10,10 +10,10 @@ import AppKit
 
 @main
 struct fileSearchForntendApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appModel = AppModel()
     @State private var coordinator = AppCoordinator()
     @State private var overlayController = QuickSearchOverlayController()
-    @State private var hotkeyMonitor = GlobalHotkeyMonitor()
     @State private var hotkeyMonitoringEnabled = true
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
 
@@ -47,6 +47,12 @@ struct fileSearchForntendApp: App {
                     }
                 }
                 .onAppear {
+                    // Store references in app delegate so they stay alive
+                    appDelegate.coordinator = coordinator
+                    appDelegate.overlayController = overlayController
+                    appDelegate.appModel = appModel
+                    
+                    // Register hotkey
                     registerHotkey(overlayHotkey)
                 }
         }
@@ -105,17 +111,24 @@ struct fileSearchForntendApp: App {
 
     private func registerHotkey(_ raw: String) {
         guard !raw.isEmpty else {
-            hotkeyMonitor.stop()
+            appDelegate.stopHotkey()
             return
         }
         
-        // Register with a weak reference to the coordinator
-        hotkeyMonitor.update(hotkey: raw) { [weak coordinator] in
-            guard let coordinator = coordinator else { return }
-            // This closure is already executed on main thread by GlobalHotkeyMonitor
-            // Toggle the overlay - bring app to front when triggered globally
+        print("Registering hotkey: \(raw)")
+        
+        // Register through app delegate so it stays alive
+        appDelegate.registerHotkey(raw) {
+            // This executes on main thread
+            print("🔥 Hotkey triggered!")
             NSApp.activate(ignoringOtherApps: true)
-            coordinator.toggleOverlay()
+            
+            // Access coordinator from app delegate (guaranteed to be alive)
+            Task { @MainActor in
+                if let coordinator = self.appDelegate.coordinator {
+                    coordinator.toggleOverlay()
+                }
+            }
         }
     }
 
@@ -124,7 +137,7 @@ struct fileSearchForntendApp: App {
         if enabled {
             registerHotkey(overlayHotkey)
         } else {
-            hotkeyMonitor.stop()
+            appDelegate.stopHotkey()
         }
     }
 }

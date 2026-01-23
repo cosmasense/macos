@@ -23,11 +23,22 @@ final class GlobalHotkeyMonitor {
     func update(hotkey: String, action: @escaping () -> Void) {
         stop()
         
-        guard ensureAccessibilityPermission(),
-              let parsed = parse(hotkey: hotkey) else { 
-            print("Failed to parse hotkey or missing accessibility permission")
+        print("📝 Attempting to register hotkey: \(hotkey)")
+        
+        guard ensureAccessibilityPermission() else {
+            print("❌ Accessibility permission not granted!")
+            print("   Go to System Settings > Privacy & Security > Accessibility")
+            return
+        }
+        
+        print("✅ Accessibility permission granted")
+        
+        guard let parsed = parse(hotkey: hotkey) else { 
+            print("❌ Failed to parse hotkey: \(hotkey)")
             return 
         }
+        
+        print("✅ Parsed hotkey - keyCode: \(parsed.keyCode), mods: \(parsed.mods.rawValue)")
         
         queue.sync {
             self.currentHotkey = parsed
@@ -49,9 +60,14 @@ final class GlobalHotkeyMonitor {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            print("Failed to create event tap. Make sure Accessibility is enabled.")
+            print("❌ Failed to create event tap!")
+            print("   This usually means Accessibility permission is not granted")
+            print("   Go to System Settings > Privacy & Security > Accessibility")
+            print("   And make sure your app is checked")
             return
         }
+        
+        print("✅ Event tap created successfully")
         
         eventTap = tap
         
@@ -62,7 +78,8 @@ final class GlobalHotkeyMonitor {
         // Enable the tap
         CGEvent.tapEnable(tap: tap, enable: true)
         
-        print("Global hotkey registered: \(hotkey)")
+        print("✅ Global hotkey registered and enabled!")
+        print("   Press \(hotkey) from any app to trigger")
     }
 
     func stop() {
@@ -93,6 +110,7 @@ final class GlobalHotkeyMonitor {
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // If the tap is disabled, re-enable it
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            print("⚠️ Event tap disabled (type: \(type)), re-enabling...")
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -119,8 +137,13 @@ final class GlobalHotkeyMonitor {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
         
+        // Debug: print every key press (comment out after testing)
+        // print("Key pressed: code=\(keyCode), flags=\(flags.rawValue)")
+        
         // Check if this matches our hotkey
         if CGKeyCode(keyCode) == hotkey.keyCode && flags == hotkey.mods {
+            print("🎯 Hotkey matched! Executing action...")
+            
             // Execute action on main thread
             if let action = actionToExecute {
                 DispatchQueue.main.async {
