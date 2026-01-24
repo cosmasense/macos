@@ -121,8 +121,7 @@ struct fileSearchForntendApp: App {
         appDelegate.registerHotkey(raw) {
             // This executes on main thread
             print("🔥 Hotkey triggered!")
-            NSApp.activate(ignoringOtherApps: true)
-            
+
             // Access coordinator from app delegate (guaranteed to be alive)
             Task { @MainActor in
                 if let coordinator = self.appDelegate.coordinator {

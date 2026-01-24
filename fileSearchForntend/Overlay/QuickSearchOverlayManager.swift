@@ -39,7 +39,7 @@ private final class NonActivatingPanel: NSPanel {
 
 @MainActor
 final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
-    private let collapsedHeight: CGFloat = 86
+    private let collapsedHeight: CGFloat = 140
     private let expandedHeight: CGFloat = 380
     private let panelWidth: CGFloat = 940
     private let bottomOffset: CGFloat = 120
