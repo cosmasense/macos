@@ -61,6 +61,7 @@ struct SearchFieldView: View {
     @Environment(AppModel.self) private var model
     @FocusState.Binding var isFocused: Bool
     @State private var selectedSuggestionIndex: Int = 0
+    @State private var backspaceMonitor: Any?
 
     var body: some View {
         @Bindable var model = model
@@ -104,9 +105,6 @@ struct SearchFieldView: View {
                         .onKeyPress(.downArrow) {
                             handleDownArrow()
                             return .handled
-                        }
-                        .onKeyPress(.delete) {
-                            return handleBackspace()
                         }
                 }
 
@@ -166,6 +164,37 @@ struct SearchFieldView: View {
                 selectedSuggestionIndex = 0
             }
         }
+        .onAppear {
+            setupBackspaceMonitor()
+        }
+        .onDisappear {
+            removeBackspaceMonitor()
+        }
+    }
+
+    // MARK: - Backspace Monitor for Token Deletion
+
+    private func setupBackspaceMonitor() {
+        backspaceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Only handle when search field is focused
+            guard isFocused else { return event }
+
+            // Check for backspace key (keyCode 51)
+            if event.keyCode == 51 && model.searchText.isEmpty && !model.searchTokens.isEmpty {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.searchTokens.removeLast()
+                }
+                return nil // Consume the event
+            }
+            return event
+        }
+    }
+
+    private func removeBackspaceMonitor() {
+        if let monitor = backspaceMonitor {
+            NSEvent.removeMonitor(monitor)
+            backspaceMonitor = nil
+        }
     }
 
     // MARK: - Keyboard Handlers
@@ -173,21 +202,6 @@ struct SearchFieldView: View {
     private func handleTextChange(oldValue: String, newValue: String) {
         selectedSuggestionIndex = 0
         checkForTokenCreation()
-    }
-
-    private func handleBackspace() -> KeyPress.Result {
-        // Delete the last token when text field is empty
-        // Return .ignored to allow normal text deletion when text exists
-        if model.searchText.isEmpty && !model.searchTokens.isEmpty {
-            // Prevent default backspace behavior and delete the token
-            _ = withAnimation(.easeInOut(duration: 0.2)) {
-                model.searchTokens.removeLast()
-            }
-            // Return .handled to prevent the default backspace action
-            return .handled
-        }
-        // Return .ignored to allow normal text deletion
-        return .ignored
     }
 
     private func handleEnterKey() {

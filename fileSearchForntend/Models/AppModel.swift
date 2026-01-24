@@ -225,35 +225,35 @@ class AppModel {
     
     @MainActor
     func searchFiles(query: String) async {
-        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedQuery.isEmpty else { return }
-        
+        // Strip @ tokens from the query - directory is passed separately
+        let cleanedQuery = stripTokensFromQuery(query)
+        let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Allow search even if query is empty but we have directory filter
+        let directory = directoryFromTokens()
+        guard !normalizedQuery.isEmpty || directory != nil else { return }
+
         let requestID = UUID()
         activeSearchRequestID = requestID
-        lastSearchQuery = normalizedQuery
+        lastSearchQuery = query // Store original query for retry
         isSearching = true
         searchError = nil
         searchResults = []
-        
+
         defer {
             if activeSearchRequestID == requestID {
                 isSearching = false
                 activeSearchRequestID = nil
             }
         }
-        
+
         do {
-            // Extract directory from tokens if present
-            let directory = directoryFromTokens()
-
-            // Build filters from tokens if needed
-            let filters = filtersFromTokens(directory: directory)
-
             // Use new POST /api/search endpoint
+            // Don't pass filters - directory is enough
             let response = try await apiClient.search(
-                query: normalizedQuery,
+                query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
                 directory: directory,
-                filters: filters,
+                filters: nil,
                 limit: 50
             )
 
@@ -266,6 +266,24 @@ class AppModel {
             guard activeSearchRequestID == requestID else { return }
             searchError = "An unexpected error occurred: \(error.localizedDescription)"
         }
+    }
+
+    private func stripTokensFromQuery(_ query: String) -> String {
+        // Remove @FolderName patterns from the query
+        var result = query
+        for token in searchTokens {
+            result = result.replacingOccurrences(of: "@\(token.value)", with: "")
+        }
+        // Also remove any remaining @ patterns that might match watched folders
+        let words = result.split(separator: " ")
+        let cleanedWords = words.filter { word in
+            if word.hasPrefix("@") {
+                let folderName = String(word.dropFirst())
+                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
+            }
+            return true
+        }
+        return cleanedWords.joined(separator: " ")
     }
     
     func clearSearchResults() {

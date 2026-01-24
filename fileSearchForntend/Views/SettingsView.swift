@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -117,7 +118,8 @@ struct GeneralSection: View {
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
     @State private var connectionTestState: ConnectionTestState = .idle
-    
+    @State private var loginItemError: String?
+
     enum ConnectionTestState: Equatable {
         case idle
         case testing
@@ -132,17 +134,34 @@ struct GeneralSection: View {
                 .font(.system(size: 20, weight: .semibold))
 
             // Launch at Startup
-            Toggle(isOn: $launchAtStartup) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Launch at Startup")
-                        .font(.system(size: 14, weight: .medium))
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: Binding(
+                    get: { launchAtStartup },
+                    set: { newValue in
+                        setLaunchAtStartup(enabled: newValue)
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Launch at Startup")
+                            .font(.system(size: 14, weight: .medium))
 
-                    Text("Automatically open the app when your computer starts")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        Text("Automatically open the app when your computer starts")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if let error = loginItemError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
                 }
             }
-            .toggleStyle(.switch)
+            .onAppear {
+                // Sync the toggle with actual login item status
+                syncLaunchAtStartupStatus()
+            }
 
             Toggle(isOn: $model.hideHiddenFiles) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -200,6 +219,34 @@ struct GeneralSection: View {
             await MainActor.run {
                 connectionTestState = result.success ? .success(result.message) : .failure(result.message)
             }
+        }
+    }
+
+    private func setLaunchAtStartup(enabled: Bool) {
+        loginItemError = nil
+
+        do {
+            let service = SMAppService.mainApp
+            if enabled {
+                try service.register()
+                launchAtStartup = true
+                print("✅ Registered as login item")
+            } else {
+                try service.unregister()
+                launchAtStartup = false
+                print("✅ Unregistered as login item")
+            }
+        } catch {
+            loginItemError = "Failed to \(enabled ? "enable" : "disable"): \(error.localizedDescription)"
+            print("❌ Login item error: \(error)")
+        }
+    }
+
+    private func syncLaunchAtStartupStatus() {
+        let status = SMAppService.mainApp.status
+        let isEnabled = (status == .enabled)
+        if launchAtStartup != isEnabled {
+            launchAtStartup = isEnabled
         }
     }
 }

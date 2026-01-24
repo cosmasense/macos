@@ -15,49 +15,62 @@ struct fileSearchForntendApp: App {
     @State private var coordinator = AppCoordinator()
     @State private var overlayController = QuickSearchOverlayController()
     @State private var hotkeyMonitoringEnabled = true
+    @State private var isBackendConnected = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(appModel)
-                .frame(minWidth: 900, minHeight: 600)
-                .containerBackground(.ultraThinMaterial, for: .window)
-                .environment(\.presentQuickSearchOverlay, { 
-                    coordinator.showOverlay()
-                })
-                .environment(\.updateQuickSearchLayout, { isExpanded in
-                    overlayController.updateLayout(isExpanded: isExpanded)
-                })
-                .environment(\.controlHotkeyMonitoring, { enabled in
-                    setHotkeyMonitoring(enabled: enabled)
-                })
-                .onChange(of: coordinator.isOverlayVisible) { _, newValue in
-                    overlayController.toggle(
-                        appModel: appModel,
-                        visible: newValue,
-                        onDismiss: {
-                            coordinator.hideOverlay()
+            Group {
+                if isBackendConnected {
+                    ContentView()
+                        .environment(appModel)
+                        .frame(minWidth: 900, minHeight: 600)
+                        .containerBackground(.ultraThinMaterial, for: .window)
+                        .environment(\.presentQuickSearchOverlay, {
+                            coordinator.showOverlay()
+                        })
+                        .environment(\.updateQuickSearchLayout, { isExpanded in
+                            overlayController.updateLayout(isExpanded: isExpanded)
+                        })
+                        .environment(\.controlHotkeyMonitoring, { enabled in
+                            setHotkeyMonitoring(enabled: enabled)
+                        })
+                        .onChange(of: coordinator.isOverlayVisible) { _, newValue in
+                            overlayController.toggle(
+                                appModel: appModel,
+                                visible: newValue,
+                                onDismiss: {
+                                    coordinator.hideOverlay()
+                                }
+                            )
                         }
-                    )
+                        .onChange(of: overlayHotkey) { _, newValue in
+                            if hotkeyMonitoringEnabled {
+                                registerHotkey(newValue)
+                            }
+                        }
+                        .onAppear {
+                            // Store references in app delegate so they stay alive
+                            appDelegate.coordinator = coordinator
+                            appDelegate.overlayController = overlayController
+                            appDelegate.appModel = appModel
+
+                            // Register hotkey
+                            registerHotkey(overlayHotkey)
+                        }
+                } else {
+                    BackendConnectionView(onConnected: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            isBackendConnected = true
+                        }
+                    })
+                    .environment(appModel)
+                    .frame(minWidth: 500, minHeight: 400)
                 }
-                .onChange(of: overlayHotkey) { _, newValue in
-                    if hotkeyMonitoringEnabled {
-                        registerHotkey(newValue)
-                    }
-                }
-                .onAppear {
-                    // Store references in app delegate so they stay alive
-                    appDelegate.coordinator = coordinator
-                    appDelegate.overlayController = overlayController
-                    appDelegate.appModel = appModel
-                    
-                    // Register hotkey
-                    registerHotkey(overlayHotkey)
-                }
+            }
         }
         .windowStyle(.automatic)
-        .defaultSize(width: 900, height: 600)
+        .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
             CommandMenu("Quick Search") {
                 if let shortcut = parsedShortcut {

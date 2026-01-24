@@ -16,12 +16,13 @@ struct SearchResultsView: View {
     @FocusState private var resultsKeyFocus: Bool
 
     private var filteredResults: [SearchResultItem] {
-        guard model.hideHiddenFiles else { return model.searchResults }
-        return model.searchResults.filter { !isHiddenFile($0) }
-    }
-
-    private func isHiddenFile(_ item: SearchResultItem) -> Bool {
-        item.file.filename.hasPrefix(".")
+        model.searchResults.filter { item in
+            // Filter out files that don't exist
+            guard FileManager.default.fileExists(atPath: item.file.filePath) else { return false }
+            // Filter hidden files if setting is enabled
+            if model.hideHiddenFiles && item.file.filename.hasPrefix(".") { return false }
+            return true
+        }
     }
 
     private var selectedResult: SearchResultItem? {
