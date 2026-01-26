@@ -50,12 +50,7 @@ struct fileSearchForntendApp: App {
                             }
                         }
                         .onAppear {
-                            // Store references in app delegate so they stay alive
-                            appDelegate.coordinator = coordinator
-                            appDelegate.overlayController = overlayController
-                            appDelegate.appModel = appModel
-
-                            // Register hotkey
+                            // Register hotkey when main view appears
                             registerHotkey(overlayHotkey)
                         }
                 } else {
@@ -67,6 +62,13 @@ struct fileSearchForntendApp: App {
                     .environment(appModel)
                     .frame(minWidth: 500, minHeight: 400)
                 }
+            }
+            .onAppear {
+                // Store references in app delegate so they stay alive
+                // Do this early so menu bar actions work even before backend connects
+                appDelegate.coordinator = coordinator
+                appDelegate.overlayController = overlayController
+                appDelegate.appModel = appModel
             }
         }
         .windowStyle(.automatic)

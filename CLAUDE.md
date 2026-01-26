@@ -156,6 +156,12 @@ Base URL: `http://localhost:60534` (default)
 | POST | `/api/index/directory/` | Force reindex | Body: `{"directoryPath": "/path"}` |
 | GET | `/api/files/stats` | File statistics | Total files, size, etc. |
 | GET | `/api/updates` | SSE stream | Real-time indexing events |
+| GET | `/api/filters/config` | Get filter configuration | Returns FilterConfigResponse |
+| PUT | `/api/filters/config` | Update filter configuration | Body: `{"mode": "blacklist", "exclude": [...], "include": [...]}` |
+| POST | `/api/filters/pattern` | Add filter pattern | Body: `{"pattern": "*.log", "pattern_type": "exclude"}` |
+| DELETE | `/api/filters/pattern` | Remove filter pattern | Body: `{"pattern": "*.log", "pattern_type": "exclude"}` |
+| POST | `/api/filters/reset` | Reset filters to defaults | No body required |
+| GET | `/api/filters/defaults` | Get default filter config | Returns default patterns |
 
 **Testing API health:**
 ```bash

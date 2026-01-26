@@ -181,7 +181,7 @@ struct SearchFieldView: View {
 
             // Check for backspace key (keyCode 51)
             if event.keyCode == 51 && model.searchText.isEmpty && !model.searchTokens.isEmpty {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                _ = withAnimation(.easeInOut(duration: 0.2)) {
                     model.searchTokens.removeLast()
                 }
                 return nil // Consume the event

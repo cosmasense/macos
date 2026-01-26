@@ -41,7 +41,6 @@ class AppModel {
     }
     
     nonisolated private static let backendURLDefaultsKey = "backendURL"
-    nonisolated private static let hideHiddenFilesDefaultsKey = "hideHiddenFiles"
     nonisolated private static let bookmarksDefaultsKey = "watchedFolderBookmarks"
     
     // Navigation
@@ -70,10 +69,101 @@ class AppModel {
             reconfigureBackend()
         }
     }
+    /// Whether file filtering is enabled (based on backend mode)
+    var fileFilterEnabled: Bool = true
+
+    /// Current filter mode (local, may differ from saved)
+    var filterMode: String = "blacklist"
+
+    /// Mode-specific pattern storage (NEW)
+    var blacklistExclude: [String] = []
+    var blacklistInclude: [String] = []
+    var whitelistInclude: [String] = []
+    var whitelistExclude: [String] = []
+
+    /// Legacy exclude/include patterns (derived from mode-specific patterns)
+    var excludePatterns: [String] {
+        filterMode == "blacklist" ? blacklistExclude : whitelistExclude
+    }
+
+    var includePatterns: [String] {
+        filterMode == "blacklist" ? blacklistInclude : whitelistInclude
+    }
+
+    /// Saved state from backend (for dirty tracking)
+    private var savedFilterMode: String = "blacklist"
+    private var savedBlacklistExclude: [String] = []
+    private var savedBlacklistInclude: [String] = []
+    private var savedWhitelistInclude: [String] = []
+    private var savedWhitelistExclude: [String] = []
+
+    /// Whether there are unsaved changes
+    var hasUnsavedFilterChanges: Bool {
+        filterMode != savedFilterMode ||
+        blacklistExclude != savedBlacklistExclude ||
+        blacklistInclude != savedBlacklistInclude ||
+        whitelistInclude != savedWhitelistInclude ||
+        whitelistExclude != savedWhitelistExclude
+    }
+
+    /// Whether filter config is loading
+    var isLoadingFilterConfig: Bool = false
+
+    /// Filter config loading error
+    var filterConfigError: String?
+
+    /// Filter patterns for UI display - derived from backend patterns
+    var fileFilterPatterns: [FileFilterPattern] {
+        get {
+            var patterns: [FileFilterPattern] = []
+
+            // Add exclude patterns
+            for pattern in excludePatterns {
+                patterns.append(FileFilterPattern(pattern: pattern, isEnabled: true))
+            }
+
+            // Add include patterns with ! prefix
+            for pattern in includePatterns {
+                patterns.append(FileFilterPattern(pattern: "!\(pattern)", isEnabled: true))
+            }
+
+            return patterns
+        }
+        set {
+            // Extract exclude and include patterns from the array
+            var newExclude: [String] = []
+            var newInclude: [String] = []
+
+            for pattern in newValue where pattern.isEnabled {
+                if pattern.isNegation {
+                    newInclude.append(pattern.effectivePattern)
+                } else {
+                    newExclude.append(pattern.pattern)
+                }
+            }
+
+            // Update mode-specific arrays based on current mode
+            if filterMode == "blacklist" {
+                blacklistExclude = newExclude
+                blacklistInclude = newInclude
+            } else {
+                whitelistInclude = newInclude
+                whitelistExclude = newExclude
+            }
+        }
+    }
+
+    /// Legacy property for backwards compatibility - now derived from filter patterns
     var hideHiddenFiles: Bool {
-        didSet {
-            guard hideHiddenFiles != oldValue else { return }
-            UserDefaults.standard.set(hideHiddenFiles, forKey: Self.hideHiddenFilesDefaultsKey)
+        get {
+            fileFilterEnabled && excludePatterns.contains(".*")
+        }
+        set {
+            if newValue && !excludePatterns.contains(".*") {
+                addFilterPattern(".*")
+            } else if !newValue && excludePatterns.contains(".*") {
+                removeFilterPattern(FileFilterPattern(pattern: ".*"))
+            }
         }
     }
 
@@ -94,12 +184,12 @@ class AppModel {
         self.backendURL = storedURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? storedURL!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.apiClient.currentBaseURL().absoluteString
-        self.hideHiddenFiles = UserDefaults.standard.bool(forKey: Self.hideHiddenFilesDefaultsKey)
-        
+
         configureStreams()
         loadSecurityBookmarks()
         Task { [weak self] in
             await self?.refreshWatchedFolders()
+            await self?.refreshFilterConfig()
         }
     }
 
@@ -138,6 +228,7 @@ class AppModel {
         updatesStream.connect(to: url)
         Task { [weak self] in
             await self?.refreshWatchedFolders()
+            await self?.refreshFilterConfig()
         }
     }
     
@@ -168,7 +259,29 @@ class AppModel {
     }
 
     func removeFolder(_ folder: WatchedFolder) {
-        jobsError = "Stopping a watch requires a DELETE /api/watch/:id endpoint on the backend."
+        guard let jobId = folder.backendID else {
+            jobsError = "Cannot remove folder: missing backend ID"
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await apiClient.deleteWatchJob(jobId: jobId)
+                if response.success {
+                    // Remove from local list immediately for responsive UI
+                    watchedFolders.removeAll { $0.id == folder.id }
+                    // Also refresh from backend to ensure consistency
+                    await refreshWatchedFolders()
+                } else {
+                    jobsError = response.message
+                }
+            } catch let error as APIError {
+                jobsError = error.localizedDescription
+            } catch {
+                jobsError = error.localizedDescription
+            }
+        }
     }
     
     func reindex(folder: WatchedFolder) {
@@ -346,10 +459,14 @@ class AppModel {
     }
     
     private func handleBackend(event: BackendUpdateEvent) {
+        // For directory events, path is the directory itself
+        // For file events, path is the file path
+        let path = event.data.path
+
         switch event.opcode {
-        case .watchStarted:
-            if let path = event.directoryPath {
-                upsertFolder(forDirectory: path) { folder in
+        case .watchStarted, .watchAdded:
+            if let dirPath = path {
+                upsertFolder(forDirectory: dirPath) { folder in
                     folder.status = .indexing
                     folder.progress = max(folder.progress, 0.05)
                     folder.lastModified = Date()
@@ -358,9 +475,17 @@ class AppModel {
                     folder.skippedFileCount = 0
                 }
             }
+
+        case .watchRemoved:
+            if let dirPath = path {
+                // Remove folder from local list when watch is removed
+                let normalized = (dirPath as NSString).standardizingPath
+                watchedFolders.removeAll { $0.path == normalized }
+            }
+
         case .directoryProcessingStarted:
-            if let path = event.directoryPath {
-                upsertFolder(forDirectory: path) { folder in
+            if let dirPath = path {
+                upsertFolder(forDirectory: dirPath) { folder in
                     folder.status = .indexing
                     folder.progress = 0.05
                     folder.lastModified = Date()
@@ -369,32 +494,88 @@ class AppModel {
                     folder.skippedFileCount = 0
                 }
             }
+
         case .directoryProcessingCompleted:
-            if let path = event.directoryPath {
-                upsertFolder(forDirectory: path) { folder in
+            if let dirPath = path {
+                upsertFolder(forDirectory: dirPath) { folder in
                     folder.status = .complete
                     folder.progress = 1.0
                     folder.lastModified = Date()
                 }
             }
-        case .fileParsing, .fileParsed, .fileSummarizing, .fileSummarized, .fileEmbedding, .fileEmbedded, .fileComplete:
-            if let filePath = event.filePath {
+
+        case .fileParsing, .fileParsed, .fileSummarizing, .fileSummarized,
+             .fileEmbedding, .fileEmbedded, .fileComplete:
+            if let filePath = path {
                 bumpProgress(forFilePath: filePath, completed: event.opcode == .fileComplete)
             }
+
+        case .fileSkipped:
+            // File was skipped (already processed or filtered out)
+            // Just bump progress slightly
+            if let filePath = path {
+                updateFolder(forFilePath: filePath) { folder in
+                    folder.progress = min(1.0, folder.progress + 0.02)
+                    folder.lastModified = Date()
+                }
+            }
+
         case .fileFailed:
-            if let path = event.filePath {
-                updateFolder(forFilePath: path) { folder in
+            if let filePath = path {
+                updateFolder(forFilePath: filePath) { folder in
                     folder.status = .indexing
                     folder.lastModified = Date()
                     folder.skippedFileCount += 1
                     let message = event.errorMessage ??
-                        "Unable to process \(URL(fileURLWithPath: path).lastPathComponent)"
+                        "Unable to process \(URL(fileURLWithPath: filePath).lastPathComponent)"
                     folder.lastIssueMessage = message
                     folder.lastIssueDate = Date()
                 }
             }
-        default:
+
+        case .fileCreated, .fileModified:
+            // File was created or modified - processing will follow
+            if let filePath = path {
+                updateFolder(forFilePath: filePath) { folder in
+                    if folder.status == .complete {
+                        folder.status = .indexing
+                        folder.progress = 0.9  // Near complete, just updating
+                    }
+                    folder.lastModified = Date()
+                }
+            }
+
+        case .fileDeleted:
+            // File was deleted from watched directory
+            // No progress update needed, but could update lastModified
+            if let filePath = path {
+                updateFolder(forFilePath: filePath) { folder in
+                    folder.lastModified = Date()
+                }
+            }
+
+        case .fileMoved:
+            // File was moved - handled by src_path and dest_path
+            // Typically treated as delete + create
             break
+
+        case .error:
+            // General error from backend
+            if let message = event.message {
+                jobsError = message
+            }
+
+        case .info, .statusUpdate:
+            // Informational messages - could log or display
+            break
+
+        case .shuttingDown:
+            // Backend is shutting down
+            backendConnectionState = .error("Backend shutting down")
+
+        case .unknown:
+            // Unknown opcode - log for debugging
+            print("Unknown SSE opcode received")
         }
     }
     
@@ -652,5 +833,193 @@ class AppModel {
                 // We could prompt here, but it's better to wait until the user actually tries to access a file
             }
         }
+    }
+
+    // MARK: - Filter Configuration (Backend-Synced)
+
+    /// Refresh filter configuration from backend
+    func refreshFilterConfig() async {
+        isLoadingFilterConfig = true
+        filterConfigError = nil
+
+        defer { isLoadingFilterConfig = false }
+
+        do {
+            let config = try await apiClient.fetchFilterConfig()
+
+            // Update local state
+            filterMode = config.mode
+            blacklistExclude = config.blacklistExclude
+            blacklistInclude = config.blacklistInclude
+            whitelistInclude = config.whitelistInclude
+            whitelistExclude = config.whitelistExclude
+            fileFilterEnabled = true
+
+            // Save as the "clean" state for dirty tracking
+            savedFilterMode = config.mode
+            savedBlacklistExclude = config.blacklistExclude
+            savedBlacklistInclude = config.blacklistInclude
+            savedWhitelistInclude = config.whitelistInclude
+            savedWhitelistExclude = config.whitelistExclude
+        } catch let error as APIError {
+            filterConfigError = error.localizedDescription
+            print("Failed to fetch filter config: \(error)")
+        } catch {
+            filterConfigError = error.localizedDescription
+            print("Failed to fetch filter config: \(error)")
+        }
+    }
+
+    /// Add a new filter pattern (local only - doesn't save to backend)
+    /// Call saveFilterConfig() to persist changes
+    func addFilterPattern(_ pattern: String, description: String? = nil) {
+        // Determine if it's an include or exclude pattern
+        let isNegation = pattern.hasPrefix("!")
+        let effectivePattern = isNegation ? String(pattern.dropFirst()) : pattern
+
+        // Add to appropriate mode-specific array
+        if filterMode == "blacklist" {
+            if isNegation {
+                if !blacklistInclude.contains(effectivePattern) {
+                    blacklistInclude.append(effectivePattern)
+                }
+            } else {
+                if !blacklistExclude.contains(effectivePattern) {
+                    blacklistExclude.append(effectivePattern)
+                }
+            }
+        } else {
+            if isNegation {
+                if !whitelistExclude.contains(effectivePattern) {
+                    whitelistExclude.append(effectivePattern)
+                }
+            } else {
+                if !whitelistInclude.contains(effectivePattern) {
+                    whitelistInclude.append(effectivePattern)
+                }
+            }
+        }
+    }
+
+    /// Remove a filter pattern (local only - doesn't save to backend)
+    /// Call saveFilterConfig() to persist changes
+    func removeFilterPattern(_ pattern: FileFilterPattern) {
+        let effectivePattern = pattern.effectivePattern
+
+        // Remove from appropriate mode-specific array
+        if filterMode == "blacklist" {
+            if pattern.isNegation {
+                blacklistInclude.removeAll { $0 == effectivePattern }
+            } else {
+                blacklistExclude.removeAll { $0 == effectivePattern }
+            }
+        } else {
+            if pattern.isNegation {
+                whitelistExclude.removeAll { $0 == effectivePattern }
+            } else {
+                whitelistInclude.removeAll { $0 == effectivePattern }
+            }
+        }
+    }
+
+    /// Save filter configuration changes to backend
+    func saveFilterConfig() async {
+        isLoadingFilterConfig = true
+        filterConfigError = nil
+
+        defer { isLoadingFilterConfig = false }
+
+        do {
+            let response = try await apiClient.updateFilterConfig(
+                mode: filterMode,
+                blacklistExclude: blacklistExclude,
+                blacklistInclude: blacklistInclude,
+                whitelistInclude: whitelistInclude,
+                whitelistExclude: whitelistExclude,
+                applyImmediately: true
+            )
+
+            if response.success {
+                // Update saved state
+                savedFilterMode = response.config.mode
+                savedBlacklistExclude = response.config.blacklistExclude
+                savedBlacklistInclude = response.config.blacklistInclude
+                savedWhitelistInclude = response.config.whitelistInclude
+                savedWhitelistExclude = response.config.whitelistExclude
+
+                // Sync local state with backend response
+                filterMode = response.config.mode
+                blacklistExclude = response.config.blacklistExclude
+                blacklistInclude = response.config.blacklistInclude
+                whitelistInclude = response.config.whitelistInclude
+                whitelistExclude = response.config.whitelistExclude
+            } else {
+                filterConfigError = response.message
+            }
+        } catch let error as APIError {
+            filterConfigError = error.localizedDescription
+        } catch {
+            filterConfigError = error.localizedDescription
+        }
+    }
+
+    /// Discard unsaved filter configuration changes
+    func discardFilterChanges() {
+        filterMode = savedFilterMode
+        blacklistExclude = savedBlacklistExclude
+        blacklistInclude = savedBlacklistInclude
+        whitelistInclude = savedWhitelistInclude
+        whitelistExclude = savedWhitelistExclude
+        filterConfigError = nil
+    }
+
+    /// Reset filter patterns to defaults
+    func resetFilterPatternsToDefaults() {
+        Task {
+            do {
+                let response = try await apiClient.resetFilterConfig()
+                if response.success {
+                    // Update both local and saved state
+                    filterMode = response.config.mode
+                    blacklistExclude = response.config.blacklistExclude
+                    blacklistInclude = response.config.blacklistInclude
+                    whitelistInclude = response.config.whitelistInclude
+                    whitelistExclude = response.config.whitelistExclude
+
+                    savedFilterMode = response.config.mode
+                    savedBlacklistExclude = response.config.blacklistExclude
+                    savedBlacklistInclude = response.config.blacklistInclude
+                    savedWhitelistInclude = response.config.whitelistInclude
+                    savedWhitelistExclude = response.config.whitelistExclude
+                } else {
+                    filterConfigError = response.message
+                }
+            } catch let error as APIError {
+                filterConfigError = error.localizedDescription
+            } catch {
+                filterConfigError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Update filter mode (local only - doesn't save to backend)
+    /// Call saveFilterConfig() to persist changes
+    func updateFilterMode(_ mode: String) {
+        filterMode = mode
+        // Mode change is now just a local state update
+        // Patterns automatically switch via excludePatterns/includePatterns computed properties
+    }
+
+    /// Check if a file should be filtered based on current settings
+    ///
+    /// **Note: Filtering is now handled server-side.**
+    /// This method is kept for backward compatibility but uses the backend patterns.
+    func shouldFilterFile(filePath: String, filename: String) -> Bool {
+        guard fileFilterEnabled else { return false }
+        return FileFilterService.shouldFilter(
+            filePath: filePath,
+            filename: filename,
+            patterns: fileFilterPatterns
+        )
     }
 }

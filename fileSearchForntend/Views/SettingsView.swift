@@ -119,6 +119,7 @@ struct GeneralSection: View {
     @Binding var backendURL: String
     @State private var connectionTestState: ConnectionTestState = .idle
     @State private var loginItemError: String?
+    @State private var currentVisibilityMode: AppVisibilityMode = .dockOnly
 
     enum ConnectionTestState: Equatable {
         case idle
@@ -163,17 +164,33 @@ struct GeneralSection: View {
                 syncLaunchAtStartupStatus()
             }
 
-            Toggle(isOn: $model.hideHiddenFiles) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Hide files starting with “.”")
-                        .font(.system(size: 14, weight: .medium))
+            // File Filter Section
+            FileFilterSection()
 
-                    Text("When enabled, search results skip dotfiles. Turn off to include them.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+            // App Visibility Mode
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Show Application In")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: Binding(
+                    get: { currentVisibilityMode },
+                    set: { newValue in
+                        setVisibilityMode(newValue)
+                    }
+                )) {
+                    ForEach(AppVisibilityMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 250, alignment: .leading)
+
+                Text("Choose where the app appears. Menu Bar Only keeps the app running in background.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
-            .toggleStyle(.switch)
 
             // Backend URL
             VStack(alignment: .leading, spacing: 8) {
@@ -248,6 +265,30 @@ struct GeneralSection: View {
         if launchAtStartup != isEnabled {
             launchAtStartup = isEnabled
         }
+
+        // Also sync visibility mode
+        syncVisibilityMode()
+    }
+
+    private func syncVisibilityMode() {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            currentVisibilityMode = appDelegate.currentVisibilityMode
+            print("🔄 SettingsView: Synced visibility mode to: \(currentVisibilityMode.rawValue)")
+        } else {
+            print("❌ SettingsView: Cannot sync - AppDelegate not found")
+        }
+    }
+
+    private func setVisibilityMode(_ mode: AppVisibilityMode) {
+        print("🎛️ SettingsView: setVisibilityMode called with: \(mode.rawValue)")
+        currentVisibilityMode = mode
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            print("✅ SettingsView: AppDelegate found, setting mode")
+            appDelegate.currentVisibilityMode = mode
+        } else {
+            print("❌ SettingsView: AppDelegate not found or wrong type!")
+            print("   NSApp.delegate type: \(type(of: NSApp.delegate as Any))")
+        }
     }
 }
 
@@ -263,6 +304,444 @@ private struct StatusText: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(color)
+    }
+}
+
+// MARK: - File Filter Section
+
+struct FileFilterSection: View {
+    @Environment(AppModel.self) private var model
+    @State private var newPattern = ""
+    @State private var showingHelp = false
+
+    private var modeDescription: String {
+        switch model.filterMode {
+        case "blacklist":
+            return "All files are indexed except those matching exclude patterns"
+        case "whitelist":
+            return "Only files matching include patterns are indexed"
+        default:
+            return "Configure file filtering patterns"
+        }
+    }
+
+    private var excludeLabel: String {
+        model.filterMode == "blacklist"
+            ? "Exclude Patterns"
+            : "Exclude Exceptions"
+    }
+
+    private var includeLabel: String {
+        model.filterMode == "blacklist"
+            ? "Include Exceptions"
+            : "Include Patterns"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("File Filters")
+                            .font(.system(size: 14, weight: .medium))
+
+                        if model.hasUnsavedFilterChanges {
+                            Text("• Unsaved Changes")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    Text(modeDescription)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if model.isLoadingFilterConfig {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            // Error message if any
+            if let error = model.filterConfigError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(error)
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+            }
+
+            // Filter Mode Picker
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Filter Mode")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: Binding(
+                    get: { model.filterMode },
+                    set: { model.updateFilterMode($0) }
+                )) {
+                    Text("Blacklist (exclude matching files)").tag("blacklist")
+                    Text("Whitelist (only include matching files)").tag("whitelist")
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 350, alignment: .leading)
+            }
+
+            // Pattern list
+            VStack(alignment: .leading, spacing: 8) {
+                Text(excludeLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                if model.excludePatterns.isEmpty {
+                    Text(model.filterMode == "blacklist" ? "No exclude patterns configured" : "No exclude exceptions configured")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(model.excludePatterns, id: \.self) { pattern in
+                        FilterPatternRowSimple(pattern: pattern, isNegation: false, mode: model.filterMode) {
+                            model.removeFilterPattern(FileFilterPattern(pattern: pattern))
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+
+            // Include patterns (negation)
+            if !model.includePatterns.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(includeLabel)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(model.includePatterns, id: \.self) { pattern in
+                        FilterPatternRowSimple(pattern: pattern, isNegation: true, mode: model.filterMode) {
+                            model.removeFilterPattern(FileFilterPattern(pattern: "!\(pattern)"))
+                        }
+                    }
+                }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            // Add new pattern
+            HStack(spacing: 8) {
+                TextField("Add pattern (e.g., *.log, /node_modules/, !.gitignore)", text: $newPattern)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                    .onSubmit {
+                        addPattern()
+                    }
+
+                Button(action: addPattern) {
+                    Image(systemName: "plus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .disabled(newPattern.isEmpty || model.isLoadingFilterConfig)
+
+                Button(action: { showingHelp = true }) {
+                    Image(systemName: "questionmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+            }
+
+            // Save/Discard buttons (shown when there are unsaved changes)
+            if model.hasUnsavedFilterChanges {
+                HStack(spacing: 12) {
+                    Button("Discard Changes") {
+                        model.discardFilterChanges()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .disabled(model.isLoadingFilterConfig)
+
+                    Button("Save Changes") {
+                        Task {
+                            await model.saveFilterConfig()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .disabled(model.isLoadingFilterConfig)
+                }
+                .padding(.top, 8)
+            }
+
+            // Action buttons
+            HStack {
+                Button("Reset to Defaults") {
+                    model.resetFilterPatternsToDefaults()
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .font(.system(size: 12))
+                .disabled(model.isLoadingFilterConfig)
+
+                Spacer()
+
+                Button {
+                    Task {
+                        await model.refreshFilterConfig()
+                    }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .font(.system(size: 12))
+                .disabled(model.isLoadingFilterConfig || model.hasUnsavedFilterChanges)
+            }
+        }
+        .sheet(isPresented: $showingHelp) {
+            FilterPatternHelpView()
+        }
+    }
+
+    private func addPattern() {
+        let trimmed = newPattern.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        model.addFilterPattern(trimmed)
+        newPattern = ""
+    }
+}
+
+private struct FilterPatternRowSimple: View {
+    let pattern: String
+    let isNegation: Bool
+    let mode: String
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+                .font(.system(size: 12))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pattern)
+                    .font(.system(size: 13, design: .monospaced))
+
+                Text(patternDescription)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            Button(action: onDelete) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var iconName: String {
+        if mode == "blacklist" {
+            return isNegation ? "checkmark.circle.fill" : "xmark.circle.fill"
+        } else {
+            return isNegation ? "xmark.circle.fill" : "checkmark.circle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        if mode == "blacklist" {
+            return isNegation ? .green : .red
+        } else {
+            return isNegation ? .red : .green
+        }
+    }
+
+    private var patternDescription: String {
+        let action: String
+        if mode == "blacklist" {
+            action = isNegation ? "Show" : "Hide"
+        } else {
+            action = isNegation ? "Hide" : "Show"
+        }
+
+        if pattern == ".*" {
+            return "\(action) hidden files (starting with .)"
+        } else if pattern.hasPrefix("*.") {
+            let ext = String(pattern.dropFirst(2))
+            return "\(action) .\(ext) files"
+        } else if pattern.hasPrefix("*") && pattern.hasSuffix("*") {
+            let keyword = String(pattern.dropFirst().dropLast())
+            return "\(action) files containing '\(keyword)'"
+        } else if pattern.hasPrefix("*") {
+            let suffix = String(pattern.dropFirst())
+            return "\(action) files ending with '\(suffix)'"
+        } else if pattern.hasSuffix("*") {
+            let prefix = String(pattern.dropLast())
+            return "\(action) files starting with '\(prefix)'"
+        } else if pattern.contains("/") {
+            let path = pattern.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return "\(action) files in '\(path)' directories"
+        } else {
+            return "\(action) '\(pattern)'"
+        }
+    }
+}
+
+private struct FilterPatternHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Filter Pattern Syntax")
+                    .font(.system(size: 18, weight: .semibold))
+
+                Spacer()
+
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Introduction
+                    Text("Use gitignore-like patterns to filter files from search results. Patterns are case-insensitive.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+
+                    // Pattern types
+                    VStack(alignment: .leading, spacing: 16) {
+                        PatternHelpRow(
+                            pattern: ".*",
+                            description: "Hidden files (starting with dot)",
+                            examples: ".gitignore, .env, .DS_Store"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "*.ext",
+                            description: "Files with specific extension",
+                            examples: "*.log matches debug.log, error.log"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "prefix*",
+                            description: "Files starting with prefix",
+                            examples: "temp* matches temp.txt, temporary.doc"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "*suffix",
+                            description: "Files ending with suffix",
+                            examples: "*_backup matches file_backup"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "*keyword*",
+                            description: "Files containing keyword",
+                            examples: "*cache* matches mycache.db"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "exact.txt",
+                            description: "Exact filename match",
+                            examples: "Thumbs.db matches only Thumbs.db"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "/path/",
+                            description: "Match directory in path",
+                            examples: "/node_modules/ hides files in node_modules"
+                        )
+
+                        PatternHelpRow(
+                            pattern: "!pattern",
+                            description: "Negation (show file despite other filters)",
+                            examples: "!.gitignore shows .gitignore even with .* filter"
+                        )
+                    }
+
+                    Divider()
+
+                    // Common patterns
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Common Patterns")
+                            .font(.system(size: 14, weight: .semibold))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            PatternExample(pattern: ".*", note: "All hidden files")
+                            PatternExample(pattern: "*.log", note: "Log files")
+                            PatternExample(pattern: "*.tmp", note: "Temporary files")
+                            PatternExample(pattern: "*~", note: "Backup files")
+                            PatternExample(pattern: "/node_modules/", note: "Node.js dependencies")
+                            PatternExample(pattern: "/__pycache__/", note: "Python cache")
+                            PatternExample(pattern: "/.git/", note: "Git internals")
+                            PatternExample(pattern: "/build/", note: "Build output")
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 500, height: 600)
+    }
+}
+
+private struct PatternHelpRow: View {
+    let pattern: String
+    let description: String
+    let examples: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(pattern)
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.blue)
+
+                Text("—")
+                    .foregroundStyle(.secondary)
+
+                Text(description)
+                    .font(.system(size: 13))
+            }
+
+            Text("Examples: \(examples)")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct PatternExample: View {
+    let pattern: String
+    let note: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(pattern)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(width: 150, alignment: .leading)
+
+            Text(note)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -20,12 +20,20 @@ struct QuickSearchOverlayView: View {
     private let collapsedHeight: CGFloat = 140
     private let expandedHeight: CGFloat = 380
 
+    /// Filters search results based on file existence and user-configured filter patterns.
+    ///
+    /// **Note: This is a temporary client-side implementation.**
+    /// In the future, filtering should be performed server-side via the search API
+    /// for better performance with large result sets. See `FileFilterService` for
+    /// the planned API format and `AppModel.shouldFilterFile()` for the filtering logic.
     private var filteredResults: [SearchResultItem] {
         model.searchResults.filter { item in
             // Filter out files that don't exist
             guard FileManager.default.fileExists(atPath: item.file.filePath) else { return false }
-            // Filter hidden files if setting is enabled
-            if model.hideHiddenFiles && item.file.filename.hasPrefix(".") { return false }
+            // Apply user-configured filter patterns
+            if model.shouldFilterFile(filePath: item.file.filePath, filename: item.file.filename) {
+                return false
+            }
             return true
         }
     }

@@ -98,7 +98,7 @@ class APIClient {
     }
 
     func deleteWatchJob(jobId: Int) async throws -> DeleteJobResponse {
-        let url = baseURL.appendingPathComponent("/api/watch/jobs/\(jobId)/")
+        let url = baseURL.appendingPathComponent("/api/watch/jobs/\(jobId)")
         return try await delete(url: url)
     }
 
@@ -146,6 +146,66 @@ class APIClient {
         return try await get(url: url)
     }
 
+    // MARK: - Filter Configuration
+
+    func fetchFilterConfig() async throws -> FilterConfigResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/config")
+        return try await get(url: url)
+    }
+
+    func updateFilterConfig(
+        mode: String? = nil,
+        exclude: [String]? = nil,
+        include: [String]? = nil,
+        blacklistExclude: [String]? = nil,
+        blacklistInclude: [String]? = nil,
+        whitelistInclude: [String]? = nil,
+        whitelistExclude: [String]? = nil,
+        applyImmediately: Bool = true
+    ) async throws -> UpdateFilterConfigResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/config")
+        let request = UpdateFilterConfigRequest(
+            mode: mode,
+            exclude: exclude,
+            include: include,
+            blacklistExclude: blacklistExclude,
+            blacklistInclude: blacklistInclude,
+            whitelistInclude: whitelistInclude,
+            whitelistExclude: whitelistExclude,
+            applyImmediately: applyImmediately
+        )
+        return try await put(url: url, body: request)
+    }
+
+    func applyFilterChanges() async throws -> UpdateFilterConfigResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/apply")
+        // Empty struct for POST with no body
+        struct EmptyBody: Encodable {}
+        return try await post(url: url, body: EmptyBody())
+    }
+
+    func addFilterPattern(pattern: String, patternType: String = "exclude") async throws -> AddPatternResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/pattern")
+        let request = AddPatternRequest(pattern: pattern, patternType: patternType)
+        return try await post(url: url, body: request)
+    }
+
+    func removeFilterPattern(pattern: String, patternType: String = "exclude") async throws -> RemovePatternResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/pattern")
+        let request = RemovePatternRequest(pattern: pattern, patternType: patternType)
+        return try await deleteWithBody(url: url, body: request)
+    }
+
+    func resetFilterConfig() async throws -> UpdateFilterConfigResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/reset")
+        return try await postEmpty(url: url)
+    }
+
+    func fetchDefaultFilterConfig() async throws -> FilterConfigResponse {
+        let url = baseURL.appendingPathComponent("/api/filters/defaults")
+        return try await get(url: url)
+    }
+
     // MARK: - Deprecated Summarizer Models (backend no longer supports these)
 
     @available(*, deprecated, message: "Backend no longer supports summarizer model selection")
@@ -184,6 +244,39 @@ class APIClient {
     private func delete<T: Decodable>(url: URL) async throws -> T {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func put<T: Encodable, R: Decodable>(url: URL, body: T) async throws -> R {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        request.httpBody = try jsonEncoder.encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func deleteWithBody<T: Encodable, R: Decodable>(url: URL, body: T) async throws -> R {
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        request.httpBody = try jsonEncoder.encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
+    private func postEmpty<R: Decodable>(url: URL) async throws -> R {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await session.data(for: request)
