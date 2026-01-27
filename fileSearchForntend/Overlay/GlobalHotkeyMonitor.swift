@@ -8,6 +8,7 @@
 
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
 
 final class GlobalHotkeyMonitor {
     private var globalMonitor: Any?
@@ -24,14 +25,29 @@ final class GlobalHotkeyMonitor {
         stop()
     }
 
-    /// Check if we have accessibility permission (needed for global monitoring)
+    /// Check if we have Input Monitoring permission (needed for global monitoring in sandboxed apps)
+    /// Note: AXIsProcessTrusted() always returns false in sandboxed apps
+    /// For sandboxed apps, use CGPreflightListenEventAccess() instead
     static var hasAccessibilityPermission: Bool {
-        // AXIsProcessTrusted() returns true if app has accessibility permission
+        // For sandboxed apps, check Input Monitoring permission
+        // CGPreflightListenEventAccess works in sandboxed apps
+        return CGPreflightListenEventAccess()
+    }
+
+    /// Request Input Monitoring permission (shows system dialog)
+    /// This is the correct approach for sandboxed apps
+    static func requestAccessibilityPermission() {
+        // For sandboxed apps, use CGRequestListenEventAccess
+        CGRequestListenEventAccess()
+    }
+
+    /// Legacy check for non-sandboxed apps
+    static var hasLegacyAccessibilityPermission: Bool {
         return AXIsProcessTrusted()
     }
 
-    /// Request accessibility permission (opens System Preferences)
-    static func requestAccessibilityPermission() {
+    /// Legacy request for non-sandboxed apps
+    static func requestLegacyAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
     }
@@ -70,10 +86,10 @@ final class GlobalHotkeyMonitor {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 self?.handleKeyEvent(event)
             }
-            print("✅ Global NSEvent monitor installed (accessibility permission granted)")
+            print("✅ Global NSEvent monitor installed (Input Monitoring permission granted)")
         } else {
-            print("⚠️ No accessibility permission - global monitor not installed")
-            print("   Go to System Settings > Privacy & Security > Accessibility to grant permission")
+            print("⚠️ No Input Monitoring permission - global monitor not installed")
+            print("   Go to System Settings > Privacy & Security > Input Monitoring to grant permission")
         }
 
         // Local monitor - catches events when app IS focused

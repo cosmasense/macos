@@ -311,7 +311,8 @@ private struct StatusText: View {
 
 struct FileFilterSection: View {
     @Environment(AppModel.self) private var model
-    @State private var newPattern = ""
+    @State private var newExcludePattern = ""
+    @State private var newIncludePattern = ""
     @State private var showingHelp = false
 
     private var modeDescription: String {
@@ -351,6 +352,13 @@ struct FileFilterSection: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.orange)
                         }
+
+                        Button(action: { showingHelp = true }) {
+                            Image(systemName: "questionmark.circle")
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
                     }
 
                     Text(modeDescription)
@@ -394,66 +402,36 @@ struct FileFilterSection: View {
                 .frame(maxWidth: 350, alignment: .leading)
             }
 
-            // Pattern list
-            VStack(alignment: .leading, spacing: 8) {
-                Text(excludeLabel)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+            // Exclude Patterns Block
+            PatternTagBlock(
+                title: excludeLabel,
+                patterns: model.excludePatterns,
+                emptyText: model.filterMode == "blacklist" ? "No exclude patterns" : "No exclude exceptions",
+                newPattern: $newExcludePattern,
+                onAdd: { pattern in
+                    model.addFilterPattern(pattern)
+                },
+                onRemove: { pattern in
+                    model.removeFilterPattern(FileFilterPattern(pattern: pattern))
+                },
+                isLoading: model.isLoadingFilterConfig
+            )
 
-                if model.excludePatterns.isEmpty {
-                    Text(model.filterMode == "blacklist" ? "No exclude patterns configured" : "No exclude exceptions configured")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                        .padding(.vertical, 8)
-                } else {
-                    ForEach(model.excludePatterns, id: \.self) { pattern in
-                        FilterPatternRowSimple(pattern: pattern, isNegation: false, mode: model.filterMode) {
-                            model.removeFilterPattern(FileFilterPattern(pattern: pattern))
-                        }
-                    }
-                }
-            }
-            .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-
-            // Include patterns (negation)
-            if !model.includePatterns.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(includeLabel)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
-
-                    ForEach(model.includePatterns, id: \.self) { pattern in
-                        FilterPatternRowSimple(pattern: pattern, isNegation: true, mode: model.filterMode) {
-                            model.removeFilterPattern(FileFilterPattern(pattern: "!\(pattern)"))
-                        }
-                    }
-                }
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-            }
-
-            // Add new pattern
-            HStack(spacing: 8) {
-                TextField("Add pattern (e.g., *.log, /node_modules/, !.gitignore)", text: $newPattern)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13, design: .monospaced))
-                    .onSubmit {
-                        addPattern()
-                    }
-
-                Button(action: addPattern) {
-                    Image(systemName: "plus.circle.fill")
-                }
-                .buttonStyle(.borderless)
-                .disabled(newPattern.isEmpty || model.isLoadingFilterConfig)
-
-                Button(action: { showingHelp = true }) {
-                    Image(systemName: "questionmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-            }
+            // Include Patterns Block
+            PatternTagBlock(
+                title: includeLabel,
+                patterns: model.includePatterns,
+                emptyText: model.filterMode == "blacklist" ? "No include exceptions" : "No include patterns",
+                newPattern: $newIncludePattern,
+                onAdd: { pattern in
+                    // Include patterns are stored with ! prefix internally
+                    model.addFilterPattern("!\(pattern)")
+                },
+                onRemove: { pattern in
+                    model.removeFilterPattern(FileFilterPattern(pattern: "!\(pattern)"))
+                },
+                isLoading: model.isLoadingFilterConfig
+            )
 
             // Save/Discard buttons (shown when there are unsaved changes)
             if model.hasUnsavedFilterChanges {
@@ -474,7 +452,7 @@ struct FileFilterSection: View {
                     .controlSize(.regular)
                     .disabled(model.isLoadingFilterConfig)
                 }
-                .padding(.top, 8)
+                .padding(.top, 4)
             }
 
             // Action buttons
@@ -506,91 +484,151 @@ struct FileFilterSection: View {
             FilterPatternHelpView()
         }
     }
+}
 
-    private func addPattern() {
-        let trimmed = newPattern.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        model.addFilterPattern(trimmed)
-        newPattern = ""
+// MARK: - Pattern Tag Block
+
+private struct PatternTagBlock: View {
+    let title: String
+    let patterns: [String]
+    let emptyText: String
+    @Binding var newPattern: String
+    let onAdd: (String) -> Void
+    let onRemove: (String) -> Void
+    let isLoading: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            // Tags in a flow layout
+            FlowLayout(spacing: 6) {
+                ForEach(patterns, id: \.self) { pattern in
+                    PatternTag(pattern: pattern) {
+                        onRemove(pattern)
+                    }
+                }
+
+                // Add new pattern inline
+                AddPatternTag(text: $newPattern) {
+                    let trimmed = newPattern.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty else { return }
+                    onAdd(trimmed)
+                    newPattern = ""
+                }
+                .disabled(isLoading)
+            }
+
+            if patterns.isEmpty && newPattern.isEmpty {
+                Text(emptyText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
-private struct FilterPatternRowSimple: View {
+// MARK: - Pattern Tag
+
+private struct PatternTag: View {
     let pattern: String
-    let isNegation: Bool
-    let mode: String
-    let onDelete: () -> Void
+    let onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .foregroundStyle(iconColor)
-                .font(.system(size: 12))
+        HStack(spacing: 4) {
+            Text(pattern)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(pattern)
-                    .font(.system(size: 13, design: .monospaced))
-
-                Text(patternDescription)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer()
-
-            Button(action: onDelete) {
-                Image(systemName: "xmark.circle.fill")
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.08), in: Capsule())
+    }
+}
+
+// MARK: - Add Pattern Tag
+
+private struct AddPatternTag: View {
+    @Binding var text: String
+    let onSubmit: () -> Void
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "plus")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            TextField("Add...", text: $text)
+                .font(.system(size: 12, design: .monospaced))
+                .textFieldStyle(.plain)
+                .frame(width: text.isEmpty ? 40 : max(40, CGFloat(text.count * 8)))
+                .focused($isFocused)
+                .onSubmit(onSubmit)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.04), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Flow Layout
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = layout(proposal: proposal, subviews: subviews)
+        return result.size
     }
 
-    private var iconName: String {
-        if mode == "blacklist" {
-            return isNegation ? "checkmark.circle.fill" : "xmark.circle.fill"
-        } else {
-            return isNegation ? "xmark.circle.fill" : "checkmark.circle.fill"
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
         }
     }
 
-    private var iconColor: Color {
-        if mode == "blacklist" {
-            return isNegation ? .green : .red
-        } else {
-            return isNegation ? .red : .green
-        }
-    }
+    private func layout(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var maxX: CGFloat = 0
 
-    private var patternDescription: String {
-        let action: String
-        if mode == "blacklist" {
-            action = isNegation ? "Show" : "Hide"
-        } else {
-            action = isNegation ? "Hide" : "Show"
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+
+            if currentX + size.width > maxWidth && currentX > 0 {
+                currentX = 0
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+
+            positions.append(CGPoint(x: currentX, y: currentY))
+            lineHeight = max(lineHeight, size.height)
+            currentX += size.width + spacing
+            maxX = max(maxX, currentX - spacing)
         }
 
-        if pattern == ".*" {
-            return "\(action) hidden files (starting with .)"
-        } else if pattern.hasPrefix("*.") {
-            let ext = String(pattern.dropFirst(2))
-            return "\(action) .\(ext) files"
-        } else if pattern.hasPrefix("*") && pattern.hasSuffix("*") {
-            let keyword = String(pattern.dropFirst().dropLast())
-            return "\(action) files containing '\(keyword)'"
-        } else if pattern.hasPrefix("*") {
-            let suffix = String(pattern.dropFirst())
-            return "\(action) files ending with '\(suffix)'"
-        } else if pattern.hasSuffix("*") {
-            let prefix = String(pattern.dropLast())
-            return "\(action) files starting with '\(prefix)'"
-        } else if pattern.contains("/") {
-            let path = pattern.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            return "\(action) files in '\(path)' directories"
-        } else {
-            return "\(action) '\(pattern)'"
-        }
+        return (CGSize(width: maxX, height: currentY + lineHeight), positions)
     }
 }
 
@@ -928,15 +966,15 @@ private struct HotkeySection: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 8)
 
-                // Accessibility Permission
+                // Input Monitoring Permission (for global hotkey in sandboxed apps)
                 PermissionRow(
-                    title: "Accessibility",
+                    title: "Input Monitoring",
                     description: "Required for global hotkey when app is not focused",
                     isGranted: hasAccessibilityPermission,
-                    action: { openAccessibilityPreferences() }
+                    action: { openInputMonitoringPreferences() }
                 )
 
-                // Full Disk Access
+                // Files and Folders
                 PermissionRow(
                     title: "Files and Folders",
                     description: "Required for drag-and-drop and file access",
@@ -955,7 +993,9 @@ private struct HotkeySection: View {
     }
 
     private func checkPermissions() {
-        hasAccessibilityPermission = AXIsProcessTrusted()
+        // For sandboxed apps, use CGPreflightListenEventAccess for Input Monitoring
+        // AXIsProcessTrusted always returns false in sandboxed apps
+        hasAccessibilityPermission = checkInputMonitoringPermission()
     }
 }
 
@@ -1026,6 +1066,22 @@ private struct PermissionRow: View {
     }
 }
 
+// MARK: - Permission Helpers
+
+/// Check Input Monitoring permission (works in sandboxed apps)
+/// This is the recommended approach for sandboxed apps instead of AXIsProcessTrusted
+private func checkInputMonitoringPermission() -> Bool {
+    // CGPreflightListenEventAccess checks if we have Input Monitoring permission
+    // This works in sandboxed apps, unlike AXIsProcessTrusted
+    return CGPreflightListenEventAccess()
+}
+
+/// Request Input Monitoring permission
+private func requestInputMonitoringPermission() {
+    // CGRequestListenEventAccess shows the system dialog for Input Monitoring
+    CGRequestListenEventAccess()
+}
+
 private struct HotkeyCaptureView: NSViewRepresentable {
     @Binding var isRecording: Bool
     let onCapture: (String) -> Void
@@ -1079,6 +1135,13 @@ private struct HotkeyCaptureView: NSViewRepresentable {
 
 private func openAccessibilityPreferences() {
     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        NSWorkspace.shared.open(url)
+    }
+}
+
+private func openInputMonitoringPreferences() {
+    // Open Input Monitoring settings (for sandboxed apps)
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
         NSWorkspace.shared.open(url)
     }
 }
