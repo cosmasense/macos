@@ -866,6 +866,7 @@ struct FeedbackSheetView: View {
 private struct HotkeySection: View {
     @Binding var hotkey: String
     @State private var isRecording = false
+    @State private var hasAccessibilityPermission = false
     @Environment(\.controlHotkeyMonitoring) private var controlHotkeys
 
     private var displayText: String {
@@ -874,7 +875,7 @@ private struct HotkeySection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Search Overlay Shortcut")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -920,24 +921,108 @@ private struct HotkeySection: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    openAccessibilityPreferences()
-                } label: {
-                    Label("Allow Accessibility (needed for global hotkey)", systemImage: "lock.open")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            // Permissions Section
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Permissions")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
 
-                Button {
-                    openFullDiskAccessPreferences()
-                } label: {
-                    Label("Allow Full Disk / Files access (for drag-and-drop)", systemImage: "externaldrive.badge.plus")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                // Accessibility Permission
+                PermissionRow(
+                    title: "Accessibility",
+                    description: "Required for global hotkey when app is not focused",
+                    isGranted: hasAccessibilityPermission,
+                    action: { openAccessibilityPreferences() }
+                )
+
+                // Full Disk Access
+                PermissionRow(
+                    title: "Files and Folders",
+                    description: "Required for drag-and-drop and file access",
+                    isGranted: nil, // Can't easily detect this
+                    action: { openFullDiskAccessPreferences() }
+                )
             }
         }
+        .onAppear {
+            checkPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Re-check permissions when app becomes active (user may have granted in System Settings)
+            checkPermissions()
+        }
+    }
+
+    private func checkPermissions() {
+        hasAccessibilityPermission = AXIsProcessTrusted()
+    }
+}
+
+// MARK: - Permission Row
+
+private struct PermissionRow: View {
+    let title: String
+    let description: String
+    let isGranted: Bool?  // nil means we can't detect
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Status indicator
+            Group {
+                if let granted = isGranted {
+                    Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(granted ? .green : .red)
+                } else {
+                    Image(systemName: "questionmark.circle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.system(size: 18))
+
+            // Info
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+
+                    if let granted = isGranted {
+                        Text(granted ? "Granted" : "Not Granted")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(granted ? .green : .red)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                (granted ? Color.green : Color.red).opacity(0.15),
+                                in: Capsule()
+                            )
+                    }
+                }
+
+                Text(description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            // Action button
+            Button {
+                action()
+            } label: {
+                if let granted = isGranted, granted {
+                    Text("Open Settings")
+                } else {
+                    Text("Grant Access")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

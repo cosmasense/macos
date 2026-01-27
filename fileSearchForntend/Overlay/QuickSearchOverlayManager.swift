@@ -70,8 +70,15 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             self.panel = panel
         }
 
+        // Activate the app and make the panel key to enable text field focus
+        NSApp.activate(ignoringOtherApps: true)
         panel?.orderFrontRegardless()
-        panel?.makeKey()
+        panel?.makeKeyAndOrderFront(nil)
+
+        // Force first responder after a brief delay to ensure window is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.panel?.makeFirstResponder(self?.panel?.contentView)
+        }
     }
 
     func dismiss() {

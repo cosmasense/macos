@@ -103,8 +103,11 @@ struct QuickSearchOverlayView: View {
         .shadow(color: .black.opacity(0.08), radius: 18, y: 12)
         .shadow(color: Color.accentColor.opacity(0.06), radius: 14, y: 6)
         .onAppear {
-            isSearchFocused = true
             updateLayout(true)  // Always expanded
+            // Delay focus to ensure window is fully ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isSearchFocused = true
+            }
         }
         .onExitCommand { onClose() }
     }
