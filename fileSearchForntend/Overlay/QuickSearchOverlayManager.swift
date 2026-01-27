@@ -49,9 +49,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     private var dismissalCallback: (() -> Void)?
 
     func present(appModel: AppModel, onDismiss: @escaping () -> Void) {
+        print("🎯 QuickSearchOverlayController.present() called")
         dismissalCallback = onDismiss
 
         if panel == nil {
+            print("   Creating new panel...")
             let contentView = QuickSearchOverlayView(onClose: { [weak self] in
                 self?.dismiss()
             })
@@ -61,30 +63,55 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             })
 
             let host = NSHostingController(rootView: AnyView(contentView))
-            let panel = NonActivatingPanel(contentRect: defaultFrame())
-            panel.contentViewController = host
-            panel.delegate = self
-            panel.isMovable = false
+            let newPanel = NonActivatingPanel(contentRect: defaultFrame())
+            newPanel.contentViewController = host
+            newPanel.delegate = self
+            newPanel.isMovable = false
 
             hostingController = host
-            self.panel = panel
+            self.panel = newPanel
+            print("   ✅ Panel created")
+        } else {
+            print("   Panel already exists, reusing")
         }
 
-        // Activate the app and make the panel key to enable text field focus
-        NSApp.activate(ignoringOtherApps: true)
-        panel?.orderFrontRegardless()
-        panel?.makeKeyAndOrderFront(nil)
+        guard let panel = panel else {
+            print("   ❌ Panel is nil after creation attempt!")
+            return
+        }
 
-        // Force first responder after a brief delay to ensure window is ready
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.panel?.makeFirstResponder(self?.panel?.contentView)
+        // Ensure the app is brought to the foreground
+        // This is critical when the app is running in background with no main window
+        print("   Activating app and showing panel...")
+
+        // Force the app to activate even if it's in accessory mode
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Use a small delay to ensure activation takes effect
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            guard let self = self, let panel = self.panel else { return }
+
+            // Bring panel to front regardless of app state
+            panel.orderFrontRegardless()
+            panel.makeKeyAndOrderFront(nil)
+
+            print("   ✅ Panel shown")
+
+            // Force first responder after a brief delay to ensure window is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                panel.makeFirstResponder(panel.contentView)
+            }
         }
     }
 
     func dismiss() {
-        guard panel != nil else { return }
+        print("🎯 QuickSearchOverlayController.dismiss() called")
+        guard panel != nil else {
+            print("   Panel is already nil, nothing to dismiss")
+            return
+        }
         panel?.close()
-        cleanupAfterClose()
+        // Note: cleanupAfterClose will be called via windowWillClose delegate
     }
 
     func toggle(appModel: AppModel, visible: Bool, onDismiss: @escaping () -> Void) {
@@ -112,17 +139,21 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        print("🎯 windowWillClose notification received")
         cleanupAfterClose()
     }
 
     // MARK: - Helpers
 
     private func cleanupAfterClose() {
+        print("🎯 cleanupAfterClose() called")
         panel = nil
         hostingController = nil
         let callback = dismissalCallback
         dismissalCallback = nil
+        print("   Calling dismissal callback...")
         callback?()
+        print("   ✅ Cleanup complete")
     }
 
     private func defaultFrame() -> NSRect {

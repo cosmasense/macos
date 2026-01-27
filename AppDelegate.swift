@@ -70,7 +70,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showMainWindow()
         }
         statusBarController?.onShowQuickSearch = { [weak self] in
-            self?.coordinator?.showOverlay()
+            // Use direct overlay presentation (works even when main window is closed)
+            self?.toggleOverlay()
         }
         statusBarController?.onQuit = {
             NSApplication.shared.terminate(nil)
@@ -92,6 +93,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = NSApp.windows.first(where: { $0.title == "Search Files" || $0.contentView != nil }) {
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    // MARK: - Overlay Management (Direct Control)
+
+    /// Toggle the quick search overlay - called directly from hotkey
+    /// This bypasses SwiftUI's onChange which doesn't work when main window is closed
+    func toggleOverlay() {
+        guard let coordinator = coordinator else {
+            print("⚠️ toggleOverlay: coordinator is nil")
+            return
+        }
+
+        // Toggle the state
+        let willShow = !coordinator.isOverlayVisible
+        coordinator.isOverlayVisible = willShow
+
+        // Directly present or dismiss the overlay
+        if willShow {
+            presentOverlay()
+        } else {
+            dismissOverlay()
+        }
+    }
+
+    /// Present the overlay directly (called when hotkey shows overlay)
+    func presentOverlay() {
+        guard let overlayController = overlayController,
+              let appModel = appModel,
+              let coordinator = coordinator else {
+            print("⚠️ presentOverlay: missing required references")
+            return
+        }
+
+        print("🎯 presentOverlay called directly from AppDelegate")
+        overlayController.present(appModel: appModel, onDismiss: { [weak coordinator] in
+            // Keep state in sync when dismissed via X button or clicking outside
+            coordinator?.isOverlayVisible = false
+        })
+    }
+
+    /// Dismiss the overlay directly
+    func dismissOverlay() {
+        overlayController?.dismiss()
     }
 
     // MARK: - Visibility Mode
