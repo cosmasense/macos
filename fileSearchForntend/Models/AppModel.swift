@@ -52,12 +52,20 @@ class AppModel {
     var isLoadingWatchedFolders: Bool = false
     var missingWatchedEndpoint: Bool = false
 
-    // Search state
+    // Search state (main window)
     var searchText: String = ""
     var searchTokens: [SearchToken] = []
     var searchResults: [SearchResultItem] = []
     var isSearching: Bool = false
     var searchError: String?
+
+    // Popup search state (separate instance)
+    var popupSearchText: String = ""
+    var popupSearchTokens: [SearchToken] = []
+    var popupSearchResults: [SearchResultItem] = []
+    var popupIsSearching: Bool = false
+    var popupSearchError: String?
+    @ObservationIgnored private var activePopupSearchRequestID: UUID?
     var jobsError: String?
     var backendConnectionState: BackendConnectionState = .idle
     private var lastSearchQuery: String?
@@ -441,6 +449,107 @@ class AppModel {
         }
         let components = tokenStrings + [searchText]
         return components.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    // MARK: - Popup Search (separate instance)
+
+    func performPopupSearch() {
+        let query = buildPopupSearchQuery()
+
+        // Don't search if query is empty
+        guard !query.isEmpty else { return }
+
+        // Perform API search (don't add to recent searches for popup)
+        Task {
+            await popupSearchFiles(query: query)
+        }
+    }
+
+    @MainActor
+    func popupSearchFiles(query: String) async {
+        // Strip @ tokens from the query - directory is passed separately
+        let cleanedQuery = stripPopupTokensFromQuery(query)
+        let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Allow search even if query is empty but we have directory filter
+        let directory = popupDirectoryFromTokens()
+        guard !normalizedQuery.isEmpty || directory != nil else { return }
+
+        let requestID = UUID()
+        activePopupSearchRequestID = requestID
+        popupIsSearching = true
+        popupSearchError = nil
+        popupSearchResults = []
+
+        defer {
+            if activePopupSearchRequestID == requestID {
+                popupIsSearching = false
+                activePopupSearchRequestID = nil
+            }
+        }
+
+        do {
+            let response = try await apiClient.search(
+                query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
+                directory: directory,
+                filters: nil,
+                limit: 50
+            )
+
+            guard activePopupSearchRequestID == requestID else { return }
+            popupSearchResults = response.results
+        } catch let error as APIError {
+            guard activePopupSearchRequestID == requestID else { return }
+            popupSearchError = error.localizedDescription
+        } catch {
+            guard activePopupSearchRequestID == requestID else { return }
+            popupSearchError = "An unexpected error occurred: \(error.localizedDescription)"
+        }
+    }
+
+    private func stripPopupTokensFromQuery(_ query: String) -> String {
+        var result = query
+        for token in popupSearchTokens {
+            result = result.replacingOccurrences(of: "@\(token.value)", with: "")
+        }
+        let words = result.split(separator: " ")
+        let cleanedWords = words.filter { word in
+            if word.hasPrefix("@") {
+                let folderName = String(word.dropFirst())
+                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
+            }
+            return true
+        }
+        return cleanedWords.joined(separator: " ")
+    }
+
+    private func popupDirectoryFromTokens() -> String? {
+        for token in popupSearchTokens {
+            if case .folder = token.kind {
+                if let folder = watchedFolders.first(where: { $0.name.caseInsensitiveCompare(token.value) == .orderedSame }) {
+                    return folder.path
+                }
+            }
+        }
+        return nil
+    }
+
+    private func buildPopupSearchQuery() -> String {
+        let tokenStrings = popupSearchTokens.map { token in
+            switch token.kind {
+            case .folder:
+                return "@\(token.value)"
+            }
+        }
+        let components = tokenStrings + [popupSearchText]
+        return components.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    func clearPopupSearch() {
+        popupSearchText = ""
+        popupSearchTokens = []
+        popupSearchResults = []
+        popupSearchError = nil
     }
 
     // MARK: - Backend updates

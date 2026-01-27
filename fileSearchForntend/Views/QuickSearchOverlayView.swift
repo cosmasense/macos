@@ -17,17 +17,11 @@ struct QuickSearchOverlayView: View {
     @Environment(\.updateQuickSearchLayout) private var updateLayout
 
     @FocusState private var isSearchFocused: Bool
-    private let collapsedHeight: CGFloat = 140
-    private let expandedHeight: CGFloat = 380
+    private let fixedHeight: CGFloat = 380
 
-    /// Filters search results based on file existence and user-configured filter patterns.
-    ///
-    /// **Note: This is a temporary client-side implementation.**
-    /// In the future, filtering should be performed server-side via the search API
-    /// for better performance with large result sets. See `FileFilterService` for
-    /// the planned API format and `AppModel.shouldFilterFile()` for the filtering logic.
+    /// Filters popup search results based on file existence and user-configured filter patterns.
     private var filteredResults: [SearchResultItem] {
-        model.searchResults.filter { item in
+        model.popupSearchResults.filter { item in
             // Filter out files that don't exist
             guard FileManager.default.fileExists(atPath: item.file.filePath) else { return false }
             // Apply user-configured filter patterns
@@ -64,15 +58,14 @@ struct QuickSearchOverlayView: View {
                 Spacer()
             }
 
-            SearchFieldView(isFocused: $isSearchFocused)
+            PopupSearchFieldView(isFocused: $isSearchFocused)
 
             contentArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(.horizontal, 30)
         .padding(.vertical, 20)
-        .frame(width: 940, height: overlayHeight, alignment: .topLeading)
-        .animation(.easeInOut(duration: 0.25), value: shouldExpand)
+        .frame(width: 940, height: fixedHeight, alignment: .topLeading)
         .background {
             let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
             ZStack {
@@ -111,32 +104,38 @@ struct QuickSearchOverlayView: View {
         .shadow(color: Color.accentColor.opacity(0.06), radius: 14, y: 6)
         .onAppear {
             isSearchFocused = true
-            updateLayout(shouldExpand)
+            updateLayout(true)  // Always expanded
         }
         .onExitCommand { onClose() }
-        .onChange(of: shouldExpand) { oldValue, newValue in
-            // Single source of truth for layout changes
-            if oldValue != newValue {
-                updateLayout(newValue)
-            }
-        }
     }
 
     private var contentArea: some View {
         Group {
-            if model.searchText.isEmpty {
-                // Show nothing when search is empty (collapsed state)
-                EmptyView()
-            } else if model.isSearching {
+            if model.popupSearchText.isEmpty {
+                // Empty state - prompt user to search
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("Type to search files")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.popupIsSearching {
                 ProgressView()
                     .controlSize(.regular)
-                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if filteredResults.isEmpty {
-                Text("No files found")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 18)
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.questionmark")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("No files found")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
@@ -150,17 +149,8 @@ struct QuickSearchOverlayView: View {
                 .frame(maxWidth: .infinity, minHeight: 190, idealHeight: 200)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: shouldExpand)
     }
 
-    private var overlayHeight: CGFloat {
-        shouldExpand ? expandedHeight : collapsedHeight
-    }
-
-    private var shouldExpand: Bool {
-        // Only expand if we have results AND search text is not empty
-        !model.searchText.isEmpty && !filteredResults.isEmpty
-    }
 }
 
 // MARK: - Overlay Tile
@@ -439,5 +429,353 @@ private class QuickLookHelper: NSObject, QLPreviewPanelDataSource, QLPreviewPane
 
     func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
         return false
+    }
+}
+
+// MARK: - Popup Search Field (uses popup-specific state)
+
+struct PopupSearchFieldView: View {
+    @Environment(AppModel.self) private var model
+    @FocusState.Binding var isFocused: Bool
+    @State private var selectedSuggestionIndex: Int = 0
+    @State private var backspaceMonitor: Any?
+
+    var body: some View {
+        @Bindable var model = model
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    ForEach(model.popupSearchTokens) { token in
+                        PopupTokenChipView(token: token) {
+                            removeToken(token)
+                        }
+                    }
+
+                    TextField("Search files or type @folder...", text: $model.popupSearchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .focused($isFocused)
+                        .onSubmit {
+                            handleEnterKey()
+                        }
+                        .onChange(of: model.popupSearchText) { oldValue, newValue in
+                            handleTextChange(oldValue: oldValue, newValue: newValue)
+                        }
+                        .onKeyPress(.tab) {
+                            handleTabKey()
+                            return .handled
+                        }
+                        .onKeyPress(.upArrow) {
+                            handleUpArrow()
+                            return .handled
+                        }
+                        .onKeyPress(.downArrow) {
+                            handleDownArrow()
+                            return .handled
+                        }
+                }
+
+                if !model.popupSearchText.isEmpty || !model.popupSearchTokens.isEmpty {
+                    Button(action: {
+                        model.popupSearchText = ""
+                        model.popupSearchTokens = []
+                        model.popupSearchResults = []
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+                if #available(macOS 14.0, *) {
+                    Color.clear.glassEffect(in: shape)
+                } else {
+                    shape.fill(.ultraThinMaterial)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .strokeBorder(
+                        isFocused
+                            ? Color.accentColor.opacity(0.5)
+                            : Color.white.opacity(0.2),
+                        lineWidth: isFocused ? 2 : 1
+                    )
+            )
+            .shadow(
+                color: isFocused
+                    ? Color.accentColor.opacity(0.3)
+                    : Color.black.opacity(0.08),
+                radius: isFocused ? 16 : 12,
+                x: 0,
+                y: isFocused ? 6 : 4
+            )
+
+            if model.popupSearchText.contains("@") {
+                PopupFolderSuggestionsView(selectedIndex: $selectedSuggestionIndex)
+            }
+        }
+        .onChange(of: model.popupSearchText.contains("@")) { oldValue, newValue in
+            if !newValue {
+                selectedSuggestionIndex = 0
+            }
+        }
+        .onAppear {
+            setupBackspaceMonitor()
+        }
+        .onDisappear {
+            removeBackspaceMonitor()
+        }
+    }
+
+    private func setupBackspaceMonitor() {
+        backspaceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard isFocused else { return event }
+            if event.keyCode == 51 && model.popupSearchText.isEmpty && !model.popupSearchTokens.isEmpty {
+                _ = withAnimation(.easeInOut(duration: 0.2)) {
+                    model.popupSearchTokens.removeLast()
+                }
+                return nil
+            }
+            return event
+        }
+    }
+
+    private func removeBackspaceMonitor() {
+        if let monitor = backspaceMonitor {
+            NSEvent.removeMonitor(monitor)
+            backspaceMonitor = nil
+        }
+    }
+
+    private func handleTextChange(oldValue: String, newValue: String) {
+        selectedSuggestionIndex = 0
+        checkForTokenCreation()
+    }
+
+    private func handleEnterKey() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.popupSearchText.contains("@") {
+            selectFolder(suggestions[selectedSuggestionIndex])
+        } else if !model.popupSearchText.isEmpty || !model.popupSearchTokens.isEmpty {
+            model.performPopupSearch()
+        }
+    }
+
+    private func handleTabKey() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.popupSearchText.contains("@") {
+            selectFolder(suggestions[0])
+        }
+    }
+
+    private func handleUpArrow() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.popupSearchText.contains("@") {
+            selectedSuggestionIndex = max(0, selectedSuggestionIndex - 1)
+        }
+    }
+
+    private func handleDownArrow() {
+        let suggestions = getSuggestions()
+        if !suggestions.isEmpty && model.popupSearchText.contains("@") {
+            selectedSuggestionIndex = min(suggestions.count - 1, selectedSuggestionIndex + 1)
+        }
+    }
+
+    private func getSuggestions() -> [WatchedFolder] {
+        let words = model.popupSearchText.split(separator: " ")
+        guard let lastWord = words.last else { return [] }
+
+        let word = String(lastWord)
+        guard word.hasPrefix("@"), word.count > 1 else { return [] }
+
+        let query = String(word.dropFirst()).lowercased()
+        return model.watchedFolders.filter {
+            $0.name.lowercased().hasPrefix(query)
+        }
+    }
+
+    private func removeToken(_ token: SearchToken) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            model.popupSearchTokens.removeAll { $0.id == token.id }
+        }
+    }
+
+    private func checkForTokenCreation() {
+        let words = model.popupSearchText.split(separator: " ")
+        guard let lastWord = words.last else { return }
+
+        let word = String(lastWord)
+        guard word.hasPrefix("@"), word.count > 1 else { return }
+
+        let folderName = String(word.dropFirst())
+        let matchingFolder = model.watchedFolders.first {
+            $0.name.caseInsensitiveCompare(folderName) == .orderedSame
+        }
+
+        if let folder = matchingFolder {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                createToken(for: folder.name)
+            }
+        }
+    }
+
+    private func createToken(for folderName: String) {
+        let newToken = SearchToken(kind: .folder, value: folderName)
+        if !model.popupSearchTokens.contains(newToken) {
+            model.popupSearchTokens.append(newToken)
+        }
+        model.popupSearchText = model.popupSearchText
+            .replacingOccurrences(of: "@\(folderName)", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func selectFolder(_ folder: WatchedFolder) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            let newToken = SearchToken(kind: .folder, value: folder.name)
+            if !model.popupSearchTokens.contains(newToken) {
+                model.popupSearchTokens.append(newToken)
+            }
+            let words = model.popupSearchText.split(separator: " ")
+            var newText = model.popupSearchText
+            if let lastWord = words.last, String(lastWord).hasPrefix("@") {
+                newText = model.popupSearchText
+                    .replacingOccurrences(of: String(lastWord), with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            model.popupSearchText = newText
+        }
+    }
+}
+
+// MARK: - Popup Token Chip
+
+private struct PopupTokenChipView: View {
+    let token: SearchToken
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(token.value)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            LinearGradient(
+                colors: [Color.blue.opacity(0.9), Color.blue],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
+        )
+        .shadow(color: .blue.opacity(0.3), radius: 2, x: 0, y: 1)
+    }
+}
+
+// MARK: - Popup Folder Suggestions
+
+private struct PopupFolderSuggestionsView: View {
+    @Environment(AppModel.self) private var model
+    @Binding var selectedIndex: Int
+
+    var body: some View {
+        let suggestions = getSuggestions()
+
+        if !suggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, folder in
+                    Button(action: {
+                        selectFolder(folder)
+                    }) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.blue)
+
+                            Text("@\(folder.name)")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.primary)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            index == selectedIndex
+                                ? Color.accentColor.opacity(0.15)
+                                : Color.clear
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if index < suggestions.count - 1 {
+                        Divider()
+                            .padding(.leading, 38)
+                    }
+                }
+            }
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.quaternary.opacity(0.5), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.1), radius: 12, x: 0, y: 4)
+            .padding(.top, 4)
+        }
+    }
+
+    private func getSuggestions() -> [WatchedFolder] {
+        let words = model.popupSearchText.split(separator: " ")
+        guard let lastWord = words.last else { return [] }
+
+        let word = String(lastWord)
+        guard word.hasPrefix("@"), word.count > 1 else { return [] }
+
+        let query = String(word.dropFirst()).lowercased()
+        return model.watchedFolders.filter {
+            $0.name.lowercased().hasPrefix(query)
+        }
+    }
+
+    private func selectFolder(_ folder: WatchedFolder) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            let newToken = SearchToken(kind: .folder, value: folder.name)
+            if !model.popupSearchTokens.contains(newToken) {
+                model.popupSearchTokens.append(newToken)
+            }
+            let words = model.popupSearchText.split(separator: " ")
+            var newText = model.popupSearchText
+            if let lastWord = words.last, String(lastWord).hasPrefix("@") {
+                newText = model.popupSearchText
+                    .replacingOccurrences(of: String(lastWord), with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            model.popupSearchText = newText
+        }
     }
 }
