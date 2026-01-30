@@ -47,9 +47,16 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     private var panel: NonActivatingPanel?
     private var hostingController: NSHostingController<AnyView>?
     private var dismissalCallback: (() -> Void)?
+    private weak var appModel: AppModel?
 
     func present(appModel: AppModel, onDismiss: @escaping () -> Void) {
         dismissalCallback = onDismiss
+        self.appModel = appModel
+
+        // Clear previous search state so the overlay starts collapsed
+        appModel.searchText = ""
+        appModel.searchResults = []
+        appModel.searchTokens = []
 
         if panel == nil {
             let contentView = QuickSearchOverlayView(onClose: { [weak self] in
@@ -61,6 +68,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             })
 
             let host = NSHostingController(rootView: AnyView(contentView))
+            host.view.wantsLayer = true
+            host.view.layer?.cornerRadius = 30
+            host.view.layer?.cornerCurve = .continuous
+            host.view.layer?.masksToBounds = true
+
             let panel = NonActivatingPanel(contentRect: defaultFrame())
             panel.contentViewController = host
             panel.delegate = self
@@ -70,14 +82,18 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             self.panel = panel
         }
 
+        // Reset to collapsed size and re-center on current screen
+        panel?.setFrame(defaultFrame(), display: false)
         panel?.orderFrontRegardless()
         panel?.makeKey()
     }
 
     func dismiss() {
-        guard panel != nil else { return }
-        panel?.close()
-        cleanupAfterClose()
+        guard let panel else { return }
+        panel.orderOut(nil)
+        let callback = dismissalCallback
+        dismissalCallback = nil
+        callback?()
     }
 
     func toggle(appModel: AppModel, visible: Bool, onDismiss: @escaping () -> Void) {
@@ -105,14 +121,7 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        cleanupAfterClose()
-    }
-
-    // MARK: - Helpers
-
-    private func cleanupAfterClose() {
-        panel = nil
-        hostingController = nil
+        // Panel was closed externally (e.g., Escape key) — notify coordinator
         let callback = dismissalCallback
         dismissalCallback = nil
         callback?()

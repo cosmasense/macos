@@ -133,16 +133,10 @@ struct fileSearchForntendApp: App {
         print("Registering hotkey: \(raw)")
         
         // Register through app delegate so it stays alive
-        appDelegate.registerHotkey(raw) {
-            // This executes on main thread
+        // The action closure is called on @MainActor by GlobalHotkeyMonitor
+        appDelegate.registerHotkey(raw) { @MainActor in
             print("🔥 Hotkey triggered!")
-
-            // Access coordinator from app delegate (guaranteed to be alive)
-            Task { @MainActor in
-                if let coordinator = self.appDelegate.coordinator {
-                    coordinator.toggleOverlay()
-                }
-            }
+            self.appDelegate.coordinator?.toggleOverlay()
         }
     }
 

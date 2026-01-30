@@ -145,9 +145,9 @@ final class GlobalHotkeyMonitor {
 
         print("🎯 Global hotkey triggered!")
 
-        // Execute action on main thread
+        // Execute action on main actor immediately
         if let action = self.action {
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 action()
             }
         }

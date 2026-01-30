@@ -17,6 +17,8 @@ struct QuickSearchOverlayView: View {
     @Environment(\.updateQuickSearchLayout) private var updateLayout
 
     @FocusState private var isSearchFocused: Bool
+    @State private var debounceTask: Task<Void, Never>?
+    @State private var hasExpandedOnce: Bool = false
     private let collapsedHeight: CGFloat = 140
     private let expandedHeight: CGFloat = 380
 
@@ -120,6 +122,27 @@ struct QuickSearchOverlayView: View {
                 updateLayout(newValue)
             }
         }
+        .onChange(of: model.searchText) {
+            debounceTask?.cancel()
+            let query = model.searchText
+            // Reset expansion latch when text is fully cleared
+            if query.isEmpty {
+                hasExpandedOnce = false
+            }
+            // Don't auto-search while typing a @folder token
+            guard !query.isEmpty, !query.contains("@") else { return }
+            debounceTask = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                model.performSearch()
+            }
+        }
+        .onChange(of: filteredResults.isEmpty) { _, isEmpty in
+            // Latch expanded state once results arrive
+            if !isEmpty && !model.searchText.isEmpty {
+                hasExpandedOnce = true
+            }
+        }
     }
 
     private var contentArea: some View {
@@ -127,21 +150,17 @@ struct QuickSearchOverlayView: View {
             if model.searchText.isEmpty {
                 // Show nothing when search is empty (collapsed state)
                 EmptyView()
-            } else if model.isSearching {
-                ProgressView()
-                    .controlSize(.regular)
-                    .padding(.vertical, 12)
-            } else if filteredResults.isEmpty {
+            } else if filteredResults.isEmpty && !model.isSearching {
                 Text("No files found")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 18)
-            } else {
+            } else if !filteredResults.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(filteredResults.prefix(20)) { item in
-                            OverlayFileTile(result: item)
+                    HStack(spacing: 12) {
+                        ForEach(Array(filteredResults.prefix(20).enumerated()), id: \.element.id) { index, item in
+                            OverlayFileTile(result: item, appearIndex: index)
                                 .frame(width: 150, height: 180)
                         }
                     }
@@ -158,8 +177,11 @@ struct QuickSearchOverlayView: View {
     }
 
     private var shouldExpand: Bool {
-        // Only expand if we have results AND search text is not empty
-        !model.searchText.isEmpty && !filteredResults.isEmpty
+        // Once expanded, stay expanded until search text is fully cleared
+        if model.searchText.isEmpty {
+            return false
+        }
+        return hasExpandedOnce
     }
 }
 
@@ -167,8 +189,11 @@ struct QuickSearchOverlayView: View {
 
 private struct OverlayFileTile: View {
     let result: SearchResultItem
+    let appearIndex: Int
     @Environment(AppModel.self) private var model
     @State private var thumbnail: NSImage?
+    @State private var appeared: Bool = false
+    @State private var thumbnailVisible: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -181,6 +206,13 @@ private struct OverlayFileTile: View {
                             .resizable()
                             .scaledToFit()
                             .frame(maxWidth: 100, maxHeight: 70)
+                            .opacity(thumbnailVisible ? 1 : 0)
+                            .scaleEffect(thumbnailVisible ? 1 : 0.92)
+                            .onAppear {
+                                withAnimation(.easeOut(duration: 0.25)) {
+                                    thumbnailVisible = true
+                                }
+                            }
                     } else {
                         let icon = NSWorkspace.shared.icon(forFile: result.file.filePath)
                         Image(nsImage: icon)
@@ -247,6 +279,16 @@ private struct OverlayFileTile: View {
                 .stroke(.white.opacity(0.22), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.08), radius: 8, y: 6)
+        .opacity(appeared ? 1 : 0)
+        .offset(x: appeared ? 0 : 24)
+        .onAppear {
+            // Reset for new results then animate in with stagger
+            appeared = false
+            thumbnailVisible = false
+            withAnimation(.easeOut(duration: 0.3).delay(Double(appearIndex) * 0.05)) {
+                appeared = true
+            }
+        }
         .onTapGesture(count: 2) {
             openInDefaultApp()
         }

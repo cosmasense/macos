@@ -62,6 +62,7 @@ struct SearchFieldView: View {
     @FocusState.Binding var isFocused: Bool
     @State private var selectedSuggestionIndex: Int = 0
     @State private var backspaceMonitor: Any?
+    @State private var searchGradientRotation: Double = 0
 
     var body: some View {
         @Bindable var model = model
@@ -132,25 +133,56 @@ struct SearchFieldView: View {
                     shape.fill(.ultraThinMaterial)
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 24)
-                    .strokeBorder(
-                        isFocused
-                            ? Color.accentColor.opacity(0.5)
-                            : Color.white.opacity(0.2),
-                        lineWidth: isFocused ? 2 : 1
-                    )
-                    .animation(.easeInOut(duration: 0.2), value: isFocused)
-            )
+            .overlay {
+                if model.isSearching {
+                    // Rotating gradient border while searching
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            AngularGradient(
+                                gradient: Gradient(colors: [
+                                    Color.accentColor.opacity(0.8),
+                                    Color.accentColor.opacity(0.1),
+                                    Color.cyan.opacity(0.4),
+                                    Color.accentColor.opacity(0.1),
+                                    Color.accentColor.opacity(0.8),
+                                ]),
+                                center: .center,
+                                angle: .degrees(searchGradientRotation)
+                            ),
+                            lineWidth: 2.5
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            isFocused
+                                ? Color.accentColor.opacity(0.5)
+                                : Color.white.opacity(0.2),
+                            lineWidth: isFocused ? 2 : 1
+                        )
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .animation(.easeInOut(duration: 0.3), value: model.isSearching)
             .shadow(
-                color: isFocused
-                    ? Color.accentColor.opacity(0.3)
-                    : Color.black.opacity(0.08),
-                radius: isFocused ? 16 : 12,
+                color: model.isSearching
+                    ? Color.accentColor.opacity(0.45)
+                    : (isFocused ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.08)),
+                radius: model.isSearching ? 20 : (isFocused ? 16 : 12),
                 x: 0,
-                y: isFocused ? 6 : 4
+                y: model.isSearching ? 0 : (isFocused ? 6 : 4)
             )
             .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .onChange(of: model.isSearching) { _, isSearching in
+                if isSearching {
+                    withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                        searchGradientRotation = 360
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        searchGradientRotation = 0
+                    }
+                }
+            }
 
             // Folder suggestions dropdown
             if model.searchText.contains("@") {
