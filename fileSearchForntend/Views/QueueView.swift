@@ -143,10 +143,10 @@ struct QueueStatusSummaryView: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            StatusPill(label: "Total", count: status.totalItems, color: .primary)
-            StatusPill(label: "Cooling Down", count: status.coolingDown, color: .blue)
-            StatusPill(label: "Ready", count: status.ready, color: .green)
-            StatusPill(label: "Processing", count: status.processing, color: .orange)
+            QueueCountPill(label: "Total", count: status.totalItems, color: .primary)
+            QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .blue)
+            QueueCountPill(label: "Ready", count: status.ready, color: .green)
+            QueueCountPill(label: "Processing", count: status.processing, color: .orange)
 
             Spacer()
 
@@ -165,7 +165,7 @@ struct QueueStatusSummaryView: View {
     }
 }
 
-struct StatusPill: View {
+struct QueueCountPill: View {
     let label: String
     let count: Int
     let color: Color
