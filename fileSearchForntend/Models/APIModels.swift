@@ -264,6 +264,11 @@ struct EventData: Codable {
     let srcPath: String?
     let destPath: String?
     let message: String?
+    let filePath: String?
+    let action: String?
+    let status: String?
+    let source: String?
+    let id: String?
 
     enum CodingKeys: String, CodingKey {
         case path
@@ -273,6 +278,11 @@ struct EventData: Codable {
         case srcPath = "src_path"
         case destPath = "dest_path"
         case message
+        case filePath = "file_path"
+        case action
+        case status
+        case source
+        case id
     }
 
     init(from decoder: Decoder) throws {
@@ -284,6 +294,11 @@ struct EventData: Codable {
         srcPath = try container.decodeIfPresent(String.self, forKey: .srcPath)
         destPath = try container.decodeIfPresent(String.self, forKey: .destPath)
         message = try container.decodeIfPresent(String.self, forKey: .message)
+        filePath = try container.decodeIfPresent(String.self, forKey: .filePath)
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
     }
 }
 
@@ -296,6 +311,10 @@ enum EventOpcode: String, Codable {
     // Directory processing
     case directoryProcessingStarted = "directory_processing_started"
     case directoryProcessingCompleted = "directory_processing_completed"
+
+    // Directory system events
+    case directoryDeleted = "directory_deleted"
+    case directoryMoved = "directory_moved"
 
     // File processing pipeline
     case fileParsing = "file_parsing"
@@ -313,6 +332,20 @@ enum EventOpcode: String, Codable {
     case fileModified = "file_modified"
     case fileDeleted = "file_deleted"
     case fileMoved = "file_moved"
+
+    // Queue events
+    case queueItemAdded = "queue_item_added"
+    case queueItemUpdated = "queue_item_updated"
+    case queueItemProcessing = "queue_item_processing"
+    case queueItemCompleted = "queue_item_completed"
+    case queueItemFailed = "queue_item_failed"
+    case queueItemRemoved = "queue_item_removed"
+    case queuePaused = "queue_paused"
+    case queueResumed = "queue_resumed"
+
+    // Scheduler events
+    case schedulerPaused = "scheduler_paused"
+    case schedulerResumed = "scheduler_resumed"
 
     // General events
     case statusUpdate = "status_update"
@@ -332,7 +365,8 @@ enum EventOpcode: String, Codable {
     var isDirectoryEvent: Bool {
         switch self {
         case .watchStarted, .watchAdded, .watchRemoved,
-             .directoryProcessingStarted, .directoryProcessingCompleted:
+             .directoryProcessingStarted, .directoryProcessingCompleted,
+             .directoryDeleted, .directoryMoved:
             return true
         default:
             return false
@@ -345,6 +379,18 @@ enum EventOpcode: String, Codable {
         case .fileParsing, .fileParsed, .fileSummarizing, .fileSummarized,
              .fileEmbedding, .fileEmbedded, .fileComplete, .fileFailed,
              .fileSkipped, .fileCreated, .fileModified, .fileDeleted, .fileMoved:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Whether this opcode represents a queue-level event
+    var isQueueEvent: Bool {
+        switch self {
+        case .queueItemAdded, .queueItemUpdated, .queueItemProcessing,
+             .queueItemCompleted, .queueItemFailed, .queueItemRemoved,
+             .queuePaused, .queueResumed:
             return true
         default:
             return false
@@ -497,6 +543,156 @@ struct RemovePatternRequest: Codable {
 struct RemovePatternResponse: Codable {
     let success: Bool
     let message: String
+}
+
+// MARK: - Queue Models
+
+struct QueueStatusResponse: Codable {
+    let paused: Bool
+    let manuallyPaused: Bool
+    let schedulerPaused: Bool
+    let totalItems: Int
+    let coolingDown: Int
+    let ready: Int
+    let processing: Int
+
+    enum CodingKeys: String, CodingKey {
+        case paused
+        case manuallyPaused = "manually_paused"
+        case schedulerPaused = "scheduler_paused"
+        case totalItems = "total_items"
+        case coolingDown = "cooling_down"
+        case ready
+        case processing
+    }
+}
+
+struct QueueActionResponse: Codable {
+    let success: Bool
+    let message: String
+}
+
+struct QueueItemResponse: Codable, Identifiable, Hashable {
+    let id: String
+    let filePath: String
+    let action: String
+    let status: String
+    let enqueuedAt: Double
+    let cooldownExpiresAt: Double
+    let destPath: String?
+    let retryCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case filePath = "file_path"
+        case action
+        case status
+        case enqueuedAt = "enqueued_at"
+        case cooldownExpiresAt = "cooldown_expires_at"
+        case destPath = "dest_path"
+        case retryCount = "retry_count"
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    static func == (lhs: QueueItemResponse, rhs: QueueItemResponse) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+struct QueueItemsResponse: Codable {
+    let items: [QueueItemResponse]
+}
+
+struct SchedulerRuleResponse: Codable {
+    let rule: String
+    let `operator`: String
+    let value: AnyCodableValue?
+    let enabled: Bool
+}
+
+struct SchedulerResponse: Codable {
+    let enabled: Bool
+    let combineMode: String
+    let checkIntervalSeconds: Int
+    let rules: [SchedulerRuleResponse]
+    let conditionsMet: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case combineMode = "combine_mode"
+        case checkIntervalSeconds = "check_interval_seconds"
+        case rules
+        case conditionsMet = "conditions_met"
+    }
+}
+
+struct SchedulerUpdateRequest: Codable {
+    let enabled: Bool?
+    let combineMode: String?
+    let checkIntervalSeconds: Int?
+    let rules: [SchedulerRuleRequest]?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case combineMode = "combine_mode"
+        case checkIntervalSeconds = "check_interval_seconds"
+        case rules
+    }
+}
+
+struct SchedulerRuleRequest: Codable {
+    let rule: String
+    let `operator`: String
+    let value: AnyCodableValue?
+    let enabled: Bool
+}
+
+/// Type-erased Codable value for scheduler rule values (Int, Double, Bool, String, [String])
+enum AnyCodableValue: Codable, Hashable {
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case string(String)
+    case stringArray([String])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let v = try? container.decode(Bool.self) {
+            self = .bool(v)
+        } else if let v = try? container.decode(Int.self) {
+            self = .int(v)
+        } else if let v = try? container.decode(Double.self) {
+            self = .double(v)
+        } else if let v = try? container.decode(String.self) {
+            self = .string(v)
+        } else if let v = try? container.decode([String].self) {
+            self = .stringArray(v)
+        } else {
+            throw DecodingError.typeMismatch(
+                AnyCodableValue.self,
+                DecodingError.Context(codingPath: decoder.codingPath,
+                                      debugDescription: "Unsupported value type")
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .int(let v): try container.encode(v)
+        case .double(let v): try container.encode(v)
+        case .bool(let v): try container.encode(v)
+        case .string(let v): try container.encode(v)
+        case .stringArray(let v): try container.encode(v)
+        }
+    }
+}
+
+struct MetricsResponse: Codable {
+    let metrics: [String: AnyCodableValue]
 }
 
 // MARK: - Error Models

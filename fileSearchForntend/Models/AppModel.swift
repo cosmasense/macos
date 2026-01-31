@@ -175,6 +175,11 @@ class AppModel {
         }
     }
 
+    // Queue-based progress tracking (30-minute window)
+    // Each entry: (addedAt: Date, completed: Bool)
+    @ObservationIgnored private var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
+    private static let progressWindowSeconds: TimeInterval = 30 * 60 // 30 minutes
+
     // API Client
     @ObservationIgnored private let apiClient: APIClient
     @ObservationIgnored private let updatesStream = UpdatesStream()
@@ -668,6 +673,62 @@ class AppModel {
             // Typically treated as delete + create
             break
 
+        // MARK: Queue events — accurate progress tracking
+        case .queueItemAdded:
+            if let fp = event.data.filePath {
+                trackQueueItemAdded(filePath: fp)
+            }
+
+        case .queueItemUpdated, .queueItemProcessing:
+            // No progress change needed, item is still in-flight
+            break
+
+        case .queueItemCompleted:
+            if let fp = event.data.filePath {
+                trackQueueItemCompleted(filePath: fp)
+            }
+
+        case .queueItemFailed:
+            if let fp = event.data.filePath {
+                trackQueueItemCompleted(filePath: fp) // counts toward done
+            }
+
+        case .queueItemRemoved:
+            if let fp = event.data.filePath {
+                trackQueueItemRemoved(filePath: fp)
+            }
+
+        case .queuePaused:
+            // Mark all indexing folders as paused
+            for i in watchedFolders.indices where watchedFolders[i].status == .indexing {
+                watchedFolders[i].status = .paused
+            }
+
+        case .queueResumed:
+            // Resume all paused folders
+            for i in watchedFolders.indices where watchedFolders[i].status == .paused {
+                watchedFolders[i].status = .indexing
+            }
+
+        case .schedulerPaused:
+            for i in watchedFolders.indices where watchedFolders[i].status == .indexing {
+                watchedFolders[i].status = .paused
+            }
+
+        case .schedulerResumed:
+            for i in watchedFolders.indices where watchedFolders[i].status == .paused {
+                watchedFolders[i].status = .indexing
+            }
+
+        case .directoryDeleted:
+            if let dirPath = path {
+                let normalized = (dirPath as NSString).standardizingPath
+                watchedFolders.removeAll { $0.path == normalized }
+            }
+
+        case .directoryMoved:
+            break
+
         case .error:
             // General error from backend
             if let message = event.message {
@@ -734,7 +795,68 @@ class AppModel {
         }
         mutate(&watchedFolders[index])
     }
-    
+
+    // MARK: - Queue-based progress tracking
+
+    private func trackQueueItemAdded(filePath: String) {
+        let now = Date()
+        expireOldProgressItems(now: now)
+        queueProgressItems[filePath] = (addedAt: now, completed: false)
+        updateFolderProgressFromQueue(forFilePath: filePath)
+    }
+
+    private func trackQueueItemCompleted(filePath: String) {
+        let now = Date()
+        expireOldProgressItems(now: now)
+        if queueProgressItems[filePath] != nil {
+            queueProgressItems[filePath]?.completed = true
+        }
+        updateFolderProgressFromQueue(forFilePath: filePath)
+    }
+
+    private func trackQueueItemRemoved(filePath: String) {
+        queueProgressItems.removeValue(forKey: filePath)
+        let now = Date()
+        expireOldProgressItems(now: now)
+        updateFolderProgressFromQueue(forFilePath: filePath)
+    }
+
+    private func expireOldProgressItems(now: Date) {
+        let cutoff = now.addingTimeInterval(-Self.progressWindowSeconds)
+        let expired = queueProgressItems.filter { $0.value.addedAt < cutoff && $0.value.completed }
+        for key in expired.keys {
+            queueProgressItems.removeValue(forKey: key)
+        }
+    }
+
+    private func updateFolderProgressFromQueue(forFilePath filePath: String) {
+        let normalizedFile = (filePath as NSString).standardizingPath
+        guard let folderIndex = watchedFolders.firstIndex(where: { normalizedFile.hasPrefix($0.path) }) else {
+            return
+        }
+        let folderPath = watchedFolders[folderIndex].path
+
+        // Count items belonging to this folder
+        let folderItems = queueProgressItems.filter { ($0.key as NSString).standardizingPath.hasPrefix(folderPath) }
+        let total = folderItems.count
+        let completed = folderItems.values.filter(\.completed).count
+
+        if total == 0 {
+            // No queue items in window — folder is idle or already complete
+            return
+        }
+
+        let progress = Double(completed) / Double(total)
+        watchedFolders[folderIndex].progress = progress
+        watchedFolders[folderIndex].lastModified = Date()
+
+        if progress >= 1.0 {
+            watchedFolders[folderIndex].status = .complete
+        } else if watchedFolders[folderIndex].status != .paused {
+            watchedFolders[folderIndex].status = .indexing
+        }
+    }
+
     private func directoryFromTokens() -> String? {
         guard let token = searchTokens.first(where: { $0.kind == .folder }) else {
             return nil

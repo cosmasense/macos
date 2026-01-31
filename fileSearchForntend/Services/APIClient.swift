@@ -206,6 +206,65 @@ class APIClient {
         return try await get(url: url)
     }
 
+    // MARK: - Queue
+
+    func fetchQueueStatus() async throws -> QueueStatusResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/status")
+        return try await get(url: url)
+    }
+
+    func pauseQueue() async throws -> QueueActionResponse {
+        struct EmptyBody: Encodable {}
+        let url = baseURL.appendingPathComponent("/api/queue/pause")
+        return try await post(url: url, body: EmptyBody())
+    }
+
+    func resumeQueue() async throws -> QueueActionResponse {
+        struct EmptyBody: Encodable {}
+        let url = baseURL.appendingPathComponent("/api/queue/resume")
+        return try await post(url: url, body: EmptyBody())
+    }
+
+    func fetchQueueItems() async throws -> QueueItemsResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/items")
+        return try await get(url: url)
+    }
+
+    func removeQueueItem(itemId: String) async throws -> QueueActionResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/items/\(itemId)")
+        return try await delete(url: url)
+    }
+
+    // MARK: - Scheduler
+
+    func fetchScheduler() async throws -> SchedulerResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler")
+        return try await get(url: url)
+    }
+
+    func updateScheduler(
+        enabled: Bool? = nil,
+        combineMode: String? = nil,
+        checkIntervalSeconds: Int? = nil,
+        rules: [SchedulerRuleRequest]? = nil
+    ) async throws -> SchedulerResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler")
+        let request = SchedulerUpdateRequest(
+            enabled: enabled,
+            combineMode: combineMode,
+            checkIntervalSeconds: checkIntervalSeconds,
+            rules: rules
+        )
+        return try await put(url: url, body: request)
+    }
+
+    // MARK: - System Metrics
+
+    func fetchSystemMetrics() async throws -> MetricsResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/metrics")
+        return try await get(url: url)
+    }
+
     // MARK: - Deprecated Summarizer Models (backend no longer supports these)
 
     @available(*, deprecated, message: "Backend no longer supports summarizer model selection")
