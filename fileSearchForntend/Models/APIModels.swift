@@ -178,6 +178,12 @@ struct SearchRequest: Codable {
 
 struct SearchResponse: Codable {
     let results: [SearchResultItem]
+    let totalCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case results
+        case totalCount = "total_count"
+    }
 }
 
 struct SearchResultItem: Codable, Identifiable, Hashable {
@@ -604,6 +610,16 @@ struct QueueItemResponse: Codable, Identifiable, Hashable {
 
 struct QueueItemsResponse: Codable {
     let items: [QueueItemResponse]
+    let totalCount: Int
+    let offset: Int
+    let limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case totalCount = "total_count"
+        case offset
+        case limit
+    }
 }
 
 struct SchedulerRuleResponse: Codable {

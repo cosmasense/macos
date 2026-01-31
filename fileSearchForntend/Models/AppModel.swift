@@ -12,6 +12,7 @@ import AppKit
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
     case jobs = "Jobs"
+    case queue = "Queue"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -174,6 +175,14 @@ class AppModel {
             }
         }
     }
+
+    // Queue management state
+    var queueStatus: QueueStatusResponse?
+    var queueItems: [QueueItemResponse] = []
+    var queueTotalCount: Int = 0
+    var isLoadingQueue: Bool = false
+    var queueError: String?
+    var schedulerConfig: SchedulerResponse?
 
     // Queue-based progress tracking (30-minute window)
     // Each entry: (addedAt: Date, completed: Bool)
@@ -1063,6 +1072,79 @@ class AppModel {
                 print("Missing bookmark for watched folder: \(folder.path)")
                 // We could prompt here, but it's better to wait until the user actually tries to access a file
             }
+        }
+    }
+
+    // MARK: - Queue Management
+
+    func refreshQueueStatus() async {
+        do {
+            queueStatus = try await apiClient.fetchQueueStatus()
+        } catch {
+            queueError = error.localizedDescription
+        }
+    }
+
+    func refreshQueueItems() async {
+        isLoadingQueue = true
+        defer { isLoadingQueue = false }
+
+        do {
+            let response = try await apiClient.fetchQueueItems()
+            queueItems = response.items
+            queueTotalCount = response.totalCount
+            queueError = nil
+        } catch {
+            queueError = error.localizedDescription
+        }
+    }
+
+    func toggleQueuePause() async {
+        guard let status = queueStatus else { return }
+        do {
+            if status.manuallyPaused {
+                _ = try await apiClient.resumeQueue()
+            } else {
+                _ = try await apiClient.pauseQueue()
+            }
+            await refreshQueueStatus()
+        } catch {
+            queueError = error.localizedDescription
+        }
+    }
+
+    func removeQueueItem(itemId: String) async {
+        do {
+            _ = try await apiClient.removeQueueItem(itemId: itemId)
+            await refreshQueueItems()
+        } catch {
+            queueError = error.localizedDescription
+        }
+    }
+
+    func refreshSchedulerConfig() async {
+        do {
+            schedulerConfig = try await apiClient.fetchScheduler()
+        } catch {
+            queueError = error.localizedDescription
+        }
+    }
+
+    func updateSchedulerConfig(
+        enabled: Bool? = nil,
+        combineMode: String? = nil,
+        checkIntervalSeconds: Int? = nil,
+        rules: [SchedulerRuleRequest]? = nil
+    ) async {
+        do {
+            schedulerConfig = try await apiClient.updateScheduler(
+                enabled: enabled,
+                combineMode: combineMode,
+                checkIntervalSeconds: checkIntervalSeconds,
+                rules: rules
+            )
+        } catch {
+            queueError = error.localizedDescription
         }
     }
 

@@ -39,6 +39,8 @@ struct SidebarView: View {
             return "house.fill"
         case .jobs:
             return "tray.2.fill"
+        case .queue:
+            return "tray.fill"
         case .settings:
             return "gearshape.fill"
         }

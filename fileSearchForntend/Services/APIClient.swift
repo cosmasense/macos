@@ -225,9 +225,13 @@ class APIClient {
         return try await post(url: url, body: EmptyBody())
     }
 
-    func fetchQueueItems() async throws -> QueueItemsResponse {
-        let url = baseURL.appendingPathComponent("/api/queue/items")
-        return try await get(url: url)
+    func fetchQueueItems(offset: Int = 0, limit: Int = 50) async throws -> QueueItemsResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/items"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        return try await get(url: components.url!)
     }
 
     func removeQueueItem(itemId: String) async throws -> QueueActionResponse {
