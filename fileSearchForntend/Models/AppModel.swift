@@ -69,6 +69,15 @@ class AppModel {
             reconfigureBackend()
         }
     }
+    // Backend settings
+    var backendSettings: BackendSettings?
+    var isLoadingSettings: Bool = false
+    var settingsError: String?
+    /// Tracks which setting paths are currently being saved (for per-field spinners)
+    var savingSettingPaths: Set<String> = []
+    /// Tracks which setting paths were recently saved successfully
+    var savedSettingPaths: Set<String> = []
+
     /// Whether file filtering is enabled (based on backend mode)
     var fileFilterEnabled: Bool = true
 
@@ -190,6 +199,7 @@ class AppModel {
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFilterConfig()
+            await self?.refreshSettings()
         }
     }
 
@@ -229,6 +239,7 @@ class AppModel {
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFilterConfig()
+            await self?.refreshSettings()
         }
     }
     
@@ -831,6 +842,80 @@ class AppModel {
             if !hasBookmark {
                 print("Missing bookmark for watched folder: \(folder.path)")
                 // We could prompt here, but it's better to wait until the user actually tries to access a file
+            }
+        }
+    }
+
+    // MARK: - Backend Settings
+
+    func refreshSettings() async {
+        isLoadingSettings = true
+        settingsError = nil
+        defer { isLoadingSettings = false }
+
+        do {
+            backendSettings = try await apiClient.fetchSettings()
+        } catch let error as APIError {
+            settingsError = error.localizedDescription
+        } catch {
+            settingsError = error.localizedDescription
+        }
+    }
+
+    func updateSetting(path: String, value: Any) {
+        savingSettingPaths.insert(path)
+        savedSettingPaths.remove(path)
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let updated = try await apiClient.updateSetting(path: path, value: value)
+                backendSettings = updated
+                savingSettingPaths.remove(path)
+                savedSettingPaths.insert(path)
+                // Clear the checkmark after a delay
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    self.savedSettingPaths.remove(path)
+                }
+            } catch {
+                savingSettingPaths.remove(path)
+                settingsError = error.localizedDescription
+            }
+        }
+    }
+
+    func resetSettingsToDefaults() {
+        Task { [weak self] in
+            guard let self else { return }
+            isLoadingSettings = true
+            settingsError = nil
+            defer { isLoadingSettings = false }
+
+            do {
+                let defaults = try await apiClient.fetchSettingsDefaults()
+                // PUT all default values back as the full settings object
+                let data = try JSONEncoder().encode(defaults)
+                guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+                // Flatten to dotted paths and send each top-level section
+                for (section, sectionValue) in dict {
+                    guard let sectionDict = sectionValue as? [String: Any] else { continue }
+                    for (key, value) in sectionDict {
+                        if let nested = value as? [String: Any] {
+                            for (nestedKey, nestedValue) in nested {
+                                _ = try await apiClient.updateSetting(path: "\(section).\(key).\(nestedKey)", value: nestedValue)
+                            }
+                        } else {
+                            _ = try await apiClient.updateSetting(path: "\(section).\(key)", value: value)
+                        }
+                    }
+                }
+
+                // Refresh to get the final state
+                backendSettings = try await apiClient.fetchSettings()
+            } catch {
+                settingsError = error.localizedDescription
             }
         }
     }

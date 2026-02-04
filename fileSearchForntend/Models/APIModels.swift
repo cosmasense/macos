@@ -499,6 +499,118 @@ struct RemovePatternResponse: Codable {
     let message: String
 }
 
+// MARK: - Backend Settings Models
+
+struct BackendSettings: Codable, Equatable {
+    var embedder: EmbedderSettings
+    var parser: ParserSettings
+    var summarizer: SummarizerSettings
+}
+
+struct EmbedderSettings: Codable, Equatable {
+    var dimensions: Int
+    var localDimensions: Int
+    var localModel: String
+    var model: String
+    var provider: String
+
+    enum CodingKeys: String, CodingKey {
+        case dimensions
+        case localDimensions = "local_dimensions"
+        case localModel = "local_model"
+        case model
+        case provider
+    }
+}
+
+struct ParserSettings: Codable, Equatable {
+    var extractionStrategy: String
+    var spotlightEnabled: Bool
+    var spotlightTimeoutSeconds: Int
+    var whisper: WhisperSettings
+
+    enum CodingKeys: String, CodingKey {
+        case extractionStrategy = "extraction_strategy"
+        case spotlightEnabled = "spotlight_enabled"
+        case spotlightTimeoutSeconds = "spotlight_timeout_seconds"
+        case whisper
+    }
+}
+
+struct WhisperSettings: Codable, Equatable {
+    var localModel: String
+    var onlineModel: String
+    var provider: String
+
+    enum CodingKeys: String, CodingKey {
+        case localModel = "local_model"
+        case onlineModel = "online_model"
+        case provider
+    }
+}
+
+struct SummarizerSettings: Codable, Equatable {
+    var chunkOverlapTokens: Int
+    var llamacpp: LlamaCppSettings
+    var maxTokensPerRequest: Int
+    var ollama: OllamaSettings
+    var online: OnlineSettings
+    var provider: String
+
+    enum CodingKeys: String, CodingKey {
+        case chunkOverlapTokens = "chunk_overlap_tokens"
+        case llamacpp
+        case maxTokensPerRequest = "max_tokens_per_request"
+        case ollama
+        case online
+        case provider
+    }
+}
+
+struct LlamaCppSettings: Codable, Equatable {
+    var contextLength: Int
+    var filename: String
+    var modelPath: String
+    var nCtx: Int
+    var nGpuLayers: Int
+    var nThreads: Int
+    var repoId: String
+    var verbose: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case contextLength = "context_length"
+        case filename
+        case modelPath = "model_path"
+        case nCtx = "n_ctx"
+        case nGpuLayers = "n_gpu_layers"
+        case nThreads = "n_threads"
+        case repoId = "repo_id"
+        case verbose
+    }
+}
+
+struct OllamaSettings: Codable, Equatable {
+    var contextLength: Int
+    var host: String
+    var model: String
+
+    enum CodingKeys: String, CodingKey {
+        case contextLength = "context_length"
+        case host
+        case model
+    }
+}
+
+struct OnlineSettings: Codable, Equatable {
+    var contextLength: Int
+    var model: String
+
+    enum CodingKeys: String, CodingKey {
+        case contextLength = "context_length"
+        case model
+    }
+}
+
 // MARK: - Error Models
 
 enum APIError: Error, LocalizedError {

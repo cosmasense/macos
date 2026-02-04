@@ -206,6 +206,35 @@ class APIClient {
         return try await get(url: url)
     }
 
+    // MARK: - Settings
+
+    func fetchSettings() async throws -> BackendSettings {
+        let url = baseURL.appendingPathComponent("/api/settings/")
+        return try await get(url: url)
+    }
+
+    func fetchSettingsDefaults() async throws -> BackendSettings {
+        let url = baseURL.appendingPathComponent("/api/settings/defaults")
+        return try await get(url: url)
+    }
+
+    /// Update settings using dotted TOML paths.
+    /// The backend expects `{"dotted.path": value}` and returns the full updated settings.
+    func updateSetting(path: String, value: Any) async throws -> BackendSettings {
+        let url = baseURL.appendingPathComponent("/api/settings/")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let body: [String: Any] = [path: value]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
     // MARK: - Deprecated Summarizer Models (backend no longer supports these)
 
     @available(*, deprecated, message: "Backend no longer supports summarizer model selection")
