@@ -38,7 +38,6 @@ final class StatusBarController: NSObject {
 
         setupMenu()
         statusItem?.menu = menu
-        print("✅ Status bar item created successfully")
     }
 
     func remove() {

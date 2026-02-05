@@ -2,7 +2,20 @@
 //  APIModels.swift
 //  fileSearchForntend
 //
-//  API response and request models matching the new backend API
+//  Codable models for backend API communication.
+//  All types use CodingKeys to map snake_case API fields to camelCase Swift properties.
+//
+//  Organization:
+//  - File Models      (12-58)   - FileResponse, FileStatsResponse
+//  - Watch/Job Models (60-168)  - Job management requests/responses
+//  - Search Models    (170-207) - Search request/response types
+//  - Status Models    (209-215) - Backend status
+//  - SSE Event Models (217-405) - Server-Sent Events types
+//  - Filter Models    (437-552) - File filter configuration
+//  - Queue Models     (554-680) - Queue status, items, processed files
+//  - Scheduler Models (682-765) - Scheduler rules and configuration
+//  - Settings Models  (771-809) - Backend settings
+//  - Error Models     (811-837) - API error types
 //
 
 import Foundation
@@ -551,6 +564,63 @@ struct RemovePatternResponse: Codable {
     let message: String
 }
 
+// MARK: - Processed File Models (Failed / Recent)
+
+struct ProcessedFileItem: Codable, Identifiable, Hashable {
+    let filePath: String
+    let filename: String
+    let fileExtension: String
+    let processingError: String?
+    let status: String
+    let updatedAt: Int?
+
+    var id: String { filePath }
+
+    enum CodingKeys: String, CodingKey {
+        case filePath = "file_path"
+        case filename
+        case fileExtension = "extension"
+        case processingError = "processing_error"
+        case status
+        case updatedAt = "updated_at"
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(filePath)
+    }
+
+    static func == (lhs: ProcessedFileItem, rhs: ProcessedFileItem) -> Bool {
+        lhs.filePath == rhs.filePath
+    }
+}
+
+struct ProcessedFilesResponse: Codable {
+    let files: [ProcessedFileItem]
+    let totalCount: Int
+    let offset: Int
+    let limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case files
+        case totalCount = "total_count"
+        case offset
+        case limit
+    }
+}
+
+struct ReindexRequest: Codable {
+    let filePath: String
+
+    enum CodingKeys: String, CodingKey {
+        case filePath = "file_path"
+    }
+}
+
+struct ReindexResponse: Codable {
+    let success: Bool
+    let message: String
+}
+
 // MARK: - Queue Models
 
 struct QueueStatusResponse: Codable {
@@ -559,7 +629,7 @@ struct QueueStatusResponse: Codable {
     let schedulerPaused: Bool
     let totalItems: Int
     let coolingDown: Int
-    let ready: Int
+    let waiting: Int
     let processing: Int
 
     enum CodingKeys: String, CodingKey {
@@ -568,7 +638,7 @@ struct QueueStatusResponse: Codable {
         case schedulerPaused = "scheduler_paused"
         case totalItems = "total_items"
         case coolingDown = "cooling_down"
-        case ready
+        case waiting
         case processing
     }
 }
@@ -709,6 +779,46 @@ enum AnyCodableValue: Codable, Hashable {
 
 struct MetricsResponse: Codable {
     let metrics: [String: AnyCodableValue]
+}
+
+// MARK: - Backend Settings Models
+
+struct BackendSettingsResponse: Codable {
+    let queue: QueueConfigResponse
+    let scheduler: SchedulerConfigSettingsResponse
+    let summarizer: SummarizerConfigSettingsResponse?
+}
+
+struct SummarizerConfigSettingsResponse: Codable {
+    let idleUnloadSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case idleUnloadSeconds = "idle_unload_seconds"
+    }
+}
+
+struct QueueConfigResponse: Codable {
+    let cooldownSeconds: Int
+    let maxConcurrency: Int
+    let maxRetries: Int
+
+    enum CodingKeys: String, CodingKey {
+        case cooldownSeconds = "cooldown_seconds"
+        case maxConcurrency = "max_concurrency"
+        case maxRetries = "max_retries"
+    }
+}
+
+struct SchedulerConfigSettingsResponse: Codable {
+    let enabled: Bool
+    let combineMode: String
+    let checkIntervalSeconds: Int
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case combineMode = "combine_mode"
+        case checkIntervalSeconds = "check_interval_seconds"
+    }
 }
 
 // MARK: - Error Models

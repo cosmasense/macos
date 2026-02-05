@@ -186,7 +186,7 @@ private struct OverlayFileTile: View {
                 .shadow(radius: 3, y: 2)
 
                 // Filename
-                Text(result.file.title?.isEmpty == false ? result.file.title! : result.file.filename)
+                Text((result.file.title?.isEmpty == false ? result.file.title : nil) ?? result.file.filename)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)

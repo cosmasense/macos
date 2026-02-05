@@ -133,13 +133,8 @@ struct fileSearchForntendApp: App {
             return
         }
 
-        print("Registering hotkey: \(raw)")
-
         // Register through app delegate so it stays alive
         appDelegate.registerHotkey(raw) { [weak appDelegate] in
-            // This executes on main thread
-            print("🔥 Hotkey triggered!")
-
             // Use AppDelegate's direct overlay toggle (bypasses SwiftUI onChange)
             // This ensures the overlay works even when main window is closed
             Task { @MainActor in

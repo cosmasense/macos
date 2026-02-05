@@ -7,6 +7,101 @@
 
 import SwiftUI
 
+// MARK: - Rule Type Metadata
+
+/// Mirrors backend SCHEDULER_RULE_TYPES for type-specific UI rendering
+enum SchedulerRuleType: String, CaseIterable, Identifiable {
+    case batteryLevel = "battery_level"
+    case powerSource = "power_source"
+    case cpuIdle = "cpu_idle"
+    case timeWindow = "time_window"
+    case cpuTemperature = "cpu_temperature"
+    case fanSpeed = "fan_speed"
+    case gpuUsage = "gpu_usage"
+    case memoryUsage = "memory_usage"
+    case queueSize = "queue_size"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .batteryLevel: return "Battery Level"
+        case .powerSource: return "Power Source"
+        case .cpuIdle: return "CPU Idle"
+        case .timeWindow: return "Time Window"
+        case .cpuTemperature: return "CPU Temperature"
+        case .fanSpeed: return "Fan Speed"
+        case .gpuUsage: return "GPU Usage"
+        case .memoryUsage: return "Memory Usage"
+        case .queueSize: return "Queue Size"
+        }
+    }
+
+    var valueType: ValueType {
+        switch self {
+        case .powerSource, .cpuIdle: return .boolean
+        case .batteryLevel, .gpuUsage, .memoryUsage: return .percentage
+        case .cpuTemperature, .fanSpeed, .queueSize: return .number
+        case .timeWindow: return .timeRange
+        }
+    }
+
+    var defaultOperator: String {
+        switch self {
+        case .powerSource, .cpuIdle: return "eq"
+        case .batteryLevel: return "gte"
+        case .gpuUsage, .memoryUsage, .cpuTemperature, .fanSpeed: return "lte"
+        case .queueSize: return "gte"
+        case .timeWindow: return "within"
+        }
+    }
+
+    var unit: String? {
+        switch self {
+        case .batteryLevel, .gpuUsage, .memoryUsage: return "%"
+        case .cpuTemperature: return "\u{00B0}C"
+        case .fanSpeed: return "RPM"
+        default: return nil
+        }
+    }
+
+    var minValue: Int {
+        switch self {
+        case .batteryLevel, .gpuUsage, .memoryUsage, .queueSize: return 0
+        case .cpuTemperature: return 0
+        case .fanSpeed: return 0
+        default: return 0
+        }
+    }
+
+    var maxValue: Int {
+        switch self {
+        case .batteryLevel, .gpuUsage, .memoryUsage: return 100
+        case .cpuTemperature: return 120
+        case .fanSpeed: return 10000
+        case .queueSize: return 1000
+        default: return 100
+        }
+    }
+
+    var booleanLabels: (trueLabel: String, falseLabel: String) {
+        switch self {
+        case .powerSource: return ("Plugged In", "On Battery")
+        case .cpuIdle: return ("Idle", "Busy")
+        default: return ("Yes", "No")
+        }
+    }
+
+    enum ValueType {
+        case boolean
+        case percentage
+        case number
+        case timeRange
+    }
+}
+
+// MARK: - Main View
+
 struct SchedulerSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var enabled: Bool = false
@@ -101,7 +196,7 @@ struct SchedulerSettingsView: View {
     private func save() async {
         let ruleRequests = rules.map { rule in
             SchedulerRuleRequest(
-                rule: rule.ruleType,
+                rule: rule.ruleType.rawValue,
                 operator: rule.op,
                 value: rule.codableValue,
                 enabled: rule.enabled
@@ -119,39 +214,77 @@ struct SchedulerSettingsView: View {
 
 struct EditableRule: Identifiable {
     let id = UUID()
-    var ruleType: String = "battery_level"
-    var op: String = "gt"
-    var value: String = ""
+    var ruleType: SchedulerRuleType = .batteryLevel
+    var op: String = "gte"
     var enabled: Bool = true
 
-    init() {}
+    // Value storage for different types
+    var numberValue: Int = 80
+    var boolValue: Bool = true
+    var startTime: Date = Calendar.current.date(from: DateComponents(hour: 22, minute: 0)) ?? Date()
+    var endTime: Date = Calendar.current.date(from: DateComponents(hour: 6, minute: 0)) ?? Date()
+
+    init() {
+        self.op = ruleType.defaultOperator
+    }
 
     init(from response: SchedulerRuleResponse) {
-        self.ruleType = response.rule
-        self.op = response.operator
+        self.ruleType = SchedulerRuleType(rawValue: response.rule) ?? .batteryLevel
+        self.op = response.operator.isEmpty ? ruleType.defaultOperator : response.operator
         self.enabled = response.enabled
+
         if let v = response.value {
-            switch v {
-            case .int(let i): self.value = "\(i)"
-            case .double(let d): self.value = "\(d)"
-            case .bool(let b): self.value = b ? "true" : "false"
-            case .string(let s): self.value = s
-            case .stringArray(let arr): self.value = arr.joined(separator: ",")
+            switch ruleType.valueType {
+            case .boolean:
+                if case .bool(let b) = v {
+                    self.boolValue = b
+                } else if case .string(let s) = v {
+                    self.boolValue = s.lowercased() == "true" || s == "ac"
+                }
+            case .percentage, .number:
+                if case .int(let i) = v {
+                    self.numberValue = i
+                } else if case .double(let d) = v {
+                    self.numberValue = Int(d)
+                } else if case .string(let s) = v, let i = Int(s) {
+                    self.numberValue = i
+                }
+            case .timeRange:
+                // Parse time range string like "22:00-06:00"
+                if case .string(let s) = v {
+                    parseTimeRange(s)
+                }
             }
         }
     }
 
+    private mutating func parseTimeRange(_ value: String) {
+        let parts = value.split(separator: "-")
+        guard parts.count == 2 else { return }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+
+        if let start = formatter.date(from: String(parts[0])) {
+            startTime = start
+        }
+        if let end = formatter.date(from: String(parts[1])) {
+            endTime = end
+        }
+    }
+
     var codableValue: AnyCodableValue? {
-        if let intVal = Int(value) {
-            return .int(intVal)
+        switch ruleType.valueType {
+        case .boolean:
+            return .bool(boolValue)
+        case .percentage, .number:
+            return .int(numberValue)
+        case .timeRange:
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            let rangeString = "\(formatter.string(from: startTime))-\(formatter.string(from: endTime))"
+            return .string(rangeString)
         }
-        if let doubleVal = Double(value) {
-            return .double(doubleVal)
-        }
-        if value.lowercased() == "true" { return .bool(true) }
-        if value.lowercased() == "false" { return .bool(false) }
-        if !value.isEmpty { return .string(value) }
-        return nil
     }
 }
 
@@ -161,38 +294,32 @@ struct SchedulerRuleRow: View {
     @Binding var rule: EditableRule
     let onRemove: () -> Void
 
-    private let ruleTypes = [
-        "battery_level", "power_source", "cpu_idle",
-        "time_window", "cpu_temperature", "fan_speed"
-    ]
-
-    private let operators = ["gt", "lt", "eq", "gte", "lte", "within"]
-
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
+            // Enable toggle
             Toggle("", isOn: $rule.enabled)
                 .labelsHidden()
-                .frame(width: 40)
+                .frame(width: 30)
 
+            // Rule type picker
             Picker("Type", selection: $rule.ruleType) {
-                ForEach(ruleTypes, id: \.self) { type in
-                    Text(type.replacingOccurrences(of: "_", with: " ").capitalized)
-                        .tag(type)
+                ForEach(SchedulerRuleType.allCases) { type in
+                    Text(type.label).tag(type)
                 }
             }
-            .frame(width: 160)
-
-            Picker("Op", selection: $rule.op) {
-                ForEach(operators, id: \.self) { op in
-                    Text(op).tag(op)
-                }
+            .labelsHidden()
+            .frame(width: 140)
+            .onChange(of: rule.ruleType) { _, newType in
+                // Update operator to default for new type
+                rule.op = newType.defaultOperator
             }
-            .frame(width: 80)
 
-            TextField("Value", text: $rule.value)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 120)
+            // Type-specific value input
+            valueInputView
 
+            Spacer()
+
+            // Remove button
             Button(action: onRemove) {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
@@ -202,8 +329,110 @@ struct SchedulerRuleRow: View {
             .help("Remove rule")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var valueInputView: some View {
+        switch rule.ruleType.valueType {
+        case .boolean:
+            booleanInput
+        case .percentage:
+            percentageInput
+        case .number:
+            numberInput
+        case .timeRange:
+            timeRangeInput
+        }
+    }
+
+    // MARK: - Boolean Input (Toggle or Segmented)
+
+    private var booleanInput: some View {
+        let labels = rule.ruleType.booleanLabels
+        return Picker("", selection: $rule.boolValue) {
+            Text(labels.trueLabel).tag(true)
+            Text(labels.falseLabel).tag(false)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 180)
+    }
+
+    // MARK: - Percentage Input (Slider + Number)
+
+    private var percentageInput: some View {
+        HStack(spacing: 8) {
+            operatorPicker
+
+            Slider(
+                value: Binding(
+                    get: { Double(rule.numberValue) },
+                    set: { rule.numberValue = Int($0) }
+                ),
+                in: Double(rule.ruleType.minValue)...Double(rule.ruleType.maxValue),
+                step: 5
+            )
+            .frame(width: 120)
+
+            Text("\(rule.numberValue)%")
+                .font(.system(size: 13, design: .monospaced))
+                .frame(width: 45, alignment: .trailing)
+        }
+    }
+
+    // MARK: - Number Input (Stepper)
+
+    private var numberInput: some View {
+        HStack(spacing: 8) {
+            operatorPicker
+
+            TextField("", value: $rule.numberValue, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 80)
+
+            if let unit = rule.ruleType.unit {
+                Text(unit)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Time Range Input
+
+    private var timeRangeInput: some View {
+        HStack(spacing: 8) {
+            Text("From")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            DatePicker("", selection: $rule.startTime, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .frame(width: 80)
+
+            Text("to")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            DatePicker("", selection: $rule.endTime, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .frame(width: 80)
+        }
+    }
+
+    // MARK: - Operator Picker (for numeric types)
+
+    private var operatorPicker: some View {
+        Picker("", selection: $rule.op) {
+            Text("\u{2265}").tag("gte")  // ≥
+            Text(">").tag("gt")
+            Text("=").tag("eq")
+            Text("<").tag("lt")
+            Text("\u{2264}").tag("lte")  // ≤
+        }
+        .labelsHidden()
+        .frame(width: 55)
     }
 }
 

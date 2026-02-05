@@ -55,10 +55,7 @@ final class GlobalHotkeyMonitor {
     func update(hotkey: String, action: @escaping () -> Void) {
         stop()
 
-        print("📝 Attempting to register global hotkey: \(hotkey)")
-
         guard let parsed = parse(hotkey: hotkey) else {
-            print("❌ Failed to parse hotkey: \(hotkey)")
             return
         }
 
@@ -66,19 +63,11 @@ final class GlobalHotkeyMonitor {
         self.targetKeyCode = parsed.keyCode
         self.targetModifiers = parsed.modifiers
 
-        print("✅ Parsed hotkey - keyCode: \(parsed.keyCode), modifiers: \(parsed.modifiers.rawValue)")
-
         // Method 1: Try Carbon RegisterEventHotKey (works without accessibility permission)
-        let carbonRegistered = registerCarbonHotKey(
+        _ = registerCarbonHotKey(
             keyCode: UInt32(parsed.keyCode),
             modifiers: carbonModifiers(from: parsed.modifiers)
         )
-
-        if carbonRegistered {
-            print("✅ Carbon hotkey registered successfully")
-        } else {
-            print("⚠️ Carbon hotkey registration failed, falling back to NSEvent monitors")
-        }
 
         // Method 2: Also set up NSEvent monitors as backup
         // Global monitor - catches events when app is NOT focused
@@ -86,10 +75,6 @@ final class GlobalHotkeyMonitor {
             globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 self?.handleKeyEvent(event)
             }
-            print("✅ Global NSEvent monitor installed (Input Monitoring permission granted)")
-        } else {
-            print("⚠️ No Input Monitoring permission - global monitor not installed")
-            print("   Go to System Settings > Privacy & Security > Input Monitoring to grant permission")
         }
 
         // Local monitor - catches events when app IS focused
@@ -99,9 +84,6 @@ final class GlobalHotkeyMonitor {
             }
             return event
         }
-        print("✅ Local NSEvent monitor installed")
-
-        print("🎯 Global hotkey ready: \(hotkey)")
     }
 
     func stop() {
@@ -126,7 +108,6 @@ final class GlobalHotkeyMonitor {
         }
 
         action = nil
-        print("🛑 Hotkey unregistered")
     }
 
     // MARK: - NSEvent Handling
@@ -140,8 +121,6 @@ final class GlobalHotkeyMonitor {
               eventModifiers == targetModifiers else {
             return false
         }
-
-        print("🎯 Global hotkey triggered via NSEvent!")
 
         DispatchQueue.main.async { [weak self] in
             self?.action?()
@@ -180,8 +159,6 @@ final class GlobalHotkeyMonitor {
                 return OSStatus(eventNotHandledErr)
             }
 
-            print("🎯 Global hotkey triggered via Carbon!")
-
             DispatchQueue.main.async {
                 monitor.action?()
             }
@@ -199,7 +176,6 @@ final class GlobalHotkeyMonitor {
         )
 
         guard installStatus == noErr else {
-            print("❌ Failed to install Carbon event handler: \(installStatus)")
             return false
         }
 
@@ -215,10 +191,6 @@ final class GlobalHotkeyMonitor {
         )
 
         if registerStatus != noErr {
-            print("❌ Failed to register Carbon hotkey: \(registerStatus)")
-            if registerStatus == -9868 {
-                print("   Error -9868: On macOS Sequoia, hotkeys must use Command or Control modifier")
-            }
             if let handler = carbonEventHandler {
                 RemoveEventHandler(handler)
                 carbonEventHandler = nil
@@ -246,7 +218,6 @@ final class GlobalHotkeyMonitor {
         guard let last = parts.last else { return nil }
 
         guard let keyCode = keyCodeFromString(String(last)) else {
-            print("Failed to get keycode for: \(last)")
             return nil
         }
 

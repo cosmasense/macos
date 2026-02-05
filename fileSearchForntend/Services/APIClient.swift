@@ -226,17 +226,56 @@ class APIClient {
     }
 
     func fetchQueueItems(offset: Int = 0, limit: Int = 50) async throws -> QueueItemsResponse {
-        var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/items"), resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/items"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
         components.queryItems = [
             URLQueryItem(name: "offset", value: "\(offset)"),
             URLQueryItem(name: "limit", value: "\(limit)"),
         ]
-        return try await get(url: components.url!)
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
     }
 
     func removeQueueItem(itemId: String) async throws -> QueueActionResponse {
         let url = baseURL.appendingPathComponent("/api/queue/items/\(itemId)")
         return try await delete(url: url)
+    }
+
+    func fetchFailedFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/failed"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
+    func fetchRecentFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/recent"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
+    func reindexFile(filePath: String) async throws -> ReindexResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/reindex")
+        let request = ReindexRequest(filePath: filePath)
+        return try await post(url: url, body: request)
     }
 
     // MARK: - Scheduler
@@ -267,6 +306,19 @@ class APIClient {
     func fetchSystemMetrics() async throws -> MetricsResponse {
         let url = baseURL.appendingPathComponent("/api/queue/metrics")
         return try await get(url: url)
+    }
+
+    // MARK: - Backend Settings
+
+    func fetchBackendSettings() async throws -> BackendSettingsResponse {
+        let url = baseURL.appendingPathComponent("/api/settings/")
+        return try await get(url: url)
+    }
+
+    func updateBackendSetting(path: String, value: AnyCodableValue) async throws -> BackendSettingsResponse {
+        let url = baseURL.appendingPathComponent("/api/settings/")
+        let body: [String: AnyCodableValue] = [path: value]
+        return try await put(url: url, body: body)
     }
 
     // MARK: - Deprecated Summarizer Models (backend no longer supports these)

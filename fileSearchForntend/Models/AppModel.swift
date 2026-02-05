@@ -2,12 +2,21 @@
 //  AppModel.swift
 //  fileSearchForntend
 //
-//  Main app state management using @Observable
+//  Main app state management using @Observable.
+//  Core state, initialization, and SSE event handling.
+//
+//  Extended by:
+//  - AppModel+Search.swift   - Search functionality
+//  - AppModel+Queue.swift    - Queue management
+//  - AppModel+Folders.swift  - Watched folder operations
+//  - AppModel+Settings.swift - Backend/filter settings
 //
 
 import Foundation
 import Observation
 import AppKit
+
+// MARK: - Navigation
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
@@ -18,15 +27,20 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+// MARK: - App Model
+
 @MainActor
 @Observable
 class AppModel {
+
+    // MARK: - Types
+
     enum BackendConnectionState: Equatable {
         case idle
         case connecting
         case connected
         case error(String)
-        
+
         var statusDescription: String {
             switch self {
             case .idle:
@@ -40,37 +54,52 @@ class AppModel {
             }
         }
     }
-    
-    nonisolated private static let backendURLDefaultsKey = "backendURL"
-    nonisolated private static let bookmarksDefaultsKey = "watchedFolderBookmarks"
-    
-    // Navigation
+
+    enum BookmarkError: Error {
+        case userCancelled
+        case folderUnknown
+    }
+
+    // MARK: - Constants
+
+    nonisolated static let backendURLDefaultsKey = "backendURL"
+    nonisolated static let bookmarksDefaultsKey = "watchedFolderBookmarks"
+    static let progressWindowSeconds: TimeInterval = 30 * 60 // 30 minutes
+
+    // MARK: - Navigation State
+
     var selection: SidebarItem? = .home
 
-    // Data
+    // MARK: - Watched Folders State
+
     var watchedFolders: [WatchedFolder] = []
-    var recentSearches: [RecentSearch] = []
     var isLoadingWatchedFolders: Bool = false
     var missingWatchedEndpoint: Bool = false
+    var jobsError: String?
 
-    // Search state (main window)
+    // MARK: - Main Window Search State
+
     var searchText: String = ""
     var searchTokens: [SearchToken] = []
     var searchResults: [SearchResultItem] = []
     var isSearching: Bool = false
     var searchError: String?
+    var recentSearches: [RecentSearch] = []
+    @ObservationIgnored var lastSearchQuery: String?
+    @ObservationIgnored var activeSearchRequestID: UUID?
 
-    // Popup search state (separate instance)
+    // MARK: - Popup Search State (Quick Search Overlay)
+
     var popupSearchText: String = ""
     var popupSearchTokens: [SearchToken] = []
     var popupSearchResults: [SearchResultItem] = []
     var popupIsSearching: Bool = false
     var popupSearchError: String?
-    @ObservationIgnored private var activePopupSearchRequestID: UUID?
-    var jobsError: String?
+    @ObservationIgnored var activePopupSearchRequestID: UUID?
+
+    // MARK: - Backend Connection State
+
     var backendConnectionState: BackendConnectionState = .idle
-    private var lastSearchQuery: String?
-    @ObservationIgnored private var activeSearchRequestID: UUID?
     var backendURL: String {
         didSet {
             guard backendURL != oldValue else { return }
@@ -78,35 +107,34 @@ class AppModel {
             reconfigureBackend()
         }
     }
-    /// Whether file filtering is enabled (based on backend mode)
+
+    // MARK: - Filter Configuration State
+
     var fileFilterEnabled: Bool = true
-
-    /// Current filter mode (local, may differ from saved)
     var filterMode: String = "blacklist"
-
-    /// Mode-specific pattern storage (NEW)
     var blacklistExclude: [String] = []
     var blacklistInclude: [String] = []
     var whitelistInclude: [String] = []
     var whitelistExclude: [String] = []
+    var savedFilterMode: String = "blacklist"
+    var savedBlacklistExclude: [String] = []
+    var savedBlacklistInclude: [String] = []
+    var savedWhitelistInclude: [String] = []
+    var savedWhitelistExclude: [String] = []
+    var isLoadingFilterConfig: Bool = false
+    var filterConfigError: String?
 
-    /// Legacy exclude/include patterns (derived from mode-specific patterns)
+    /// Derived exclude patterns based on current mode
     var excludePatterns: [String] {
         filterMode == "blacklist" ? blacklistExclude : whitelistExclude
     }
 
+    /// Derived include patterns based on current mode
     var includePatterns: [String] {
         filterMode == "blacklist" ? blacklistInclude : whitelistInclude
     }
 
-    /// Saved state from backend (for dirty tracking)
-    private var savedFilterMode: String = "blacklist"
-    private var savedBlacklistExclude: [String] = []
-    private var savedBlacklistInclude: [String] = []
-    private var savedWhitelistInclude: [String] = []
-    private var savedWhitelistExclude: [String] = []
-
-    /// Whether there are unsaved changes
+    /// Whether there are unsaved filter changes
     var hasUnsavedFilterChanges: Bool {
         filterMode != savedFilterMode ||
         blacklistExclude != savedBlacklistExclude ||
@@ -115,31 +143,19 @@ class AppModel {
         whitelistExclude != savedWhitelistExclude
     }
 
-    /// Whether filter config is loading
-    var isLoadingFilterConfig: Bool = false
-
-    /// Filter config loading error
-    var filterConfigError: String?
-
-    /// Filter patterns for UI display - derived from backend patterns
+    /// Filter patterns for UI display
     var fileFilterPatterns: [FileFilterPattern] {
         get {
             var patterns: [FileFilterPattern] = []
-
-            // Add exclude patterns
             for pattern in excludePatterns {
                 patterns.append(FileFilterPattern(pattern: pattern, isEnabled: true))
             }
-
-            // Add include patterns with ! prefix
             for pattern in includePatterns {
                 patterns.append(FileFilterPattern(pattern: "!\(pattern)", isEnabled: true))
             }
-
             return patterns
         }
         set {
-            // Extract exclude and include patterns from the array
             var newExclude: [String] = []
             var newInclude: [String] = []
 
@@ -151,7 +167,6 @@ class AppModel {
                 }
             }
 
-            // Update mode-specific arrays based on current mode
             if filterMode == "blacklist" {
                 blacklistExclude = newExclude
                 blacklistInclude = newInclude
@@ -162,7 +177,7 @@ class AppModel {
         }
     }
 
-    /// Legacy property for backwards compatibility - now derived from filter patterns
+    /// Legacy property - derives from filter patterns
     var hideHiddenFiles: Bool {
         get {
             fileFilterEnabled && excludePatterns.contains(".*")
@@ -176,32 +191,34 @@ class AppModel {
         }
     }
 
-    // Queue management state
+    // MARK: - Backend Settings State
+
+    var backendSettings: BackendSettingsResponse?
+
+    // MARK: - Queue State
+
     var queueStatus: QueueStatusResponse?
     var queueItems: [QueueItemResponse] = []
     var queueTotalCount: Int = 0
     var isLoadingQueue: Bool = false
     var queueError: String?
     var schedulerConfig: SchedulerResponse?
+    var failedFiles: [ProcessedFileItem] = []
+    var recentFiles: [ProcessedFileItem] = []
+    @ObservationIgnored var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
 
-    // Queue-based progress tracking (30-minute window)
-    // Each entry: (addedAt: Date, completed: Bool)
-    @ObservationIgnored private var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
-    private static let progressWindowSeconds: TimeInterval = 30 * 60 // 30 minutes
+    // MARK: - Services
 
-    // API Client
-    @ObservationIgnored private let apiClient: APIClient
-    @ObservationIgnored private let updatesStream = UpdatesStream()
-    @ObservationIgnored nonisolated(unsafe) private var securityBookmarks: [String: Data] = [:]
-    @ObservationIgnored private let bookmarkQueue = DispatchQueue(label: "com.filesearch.bookmarks", attributes: .concurrent)
-    
-    enum BookmarkError: Error {
-        case userCancelled
-        case folderUnknown
-    }
+    @ObservationIgnored let apiClient: APIClient
+    @ObservationIgnored let updatesStream = UpdatesStream()
+    @ObservationIgnored nonisolated(unsafe) var securityBookmarks: [String: Data] = [:]
+    @ObservationIgnored let bookmarkQueue = DispatchQueue(label: "com.filesearch.bookmarks", attributes: .concurrent)
+
+    // MARK: - Initialization
 
     init(apiClient: APIClient? = nil) {
         self.apiClient = apiClient ?? APIClient.shared
+
         let storedURL = UserDefaults.standard.string(forKey: Self.backendURLDefaultsKey)
         self.backendURL = storedURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? storedURL!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -209,9 +226,11 @@ class AppModel {
 
         configureStreams()
         loadSecurityBookmarks()
+
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFilterConfig()
+            await self?.refreshBackendSettings()
         }
     }
 
@@ -219,28 +238,30 @@ class AppModel {
         updatesStream.disconnect()
     }
 
+    // MARK: - Backend Connection
+
     private func configureStreams() {
-        if let url = URL(string: backendURL) {
-            apiClient.updateBaseURL(url)
-            updatesStream.connect(to: url)
-        } else {
-            backendConnectionState = .error("Invalid backend URL")
-        }
-        
         updatesStream.onEvent = { [weak self] event in
             guard let self else { return }
             Task { @MainActor [weak self] in
                 self?.handleBackend(event: event)
             }
         }
-        
+
         updatesStream.onStateChange = { [weak self] state in
             Task { @MainActor [weak self] in
                 self?.handleUpdatesState(state)
             }
         }
+
+        if let url = URL(string: backendURL) {
+            apiClient.updateBaseURL(url)
+            updatesStream.connect(to: url)
+        } else {
+            backendConnectionState = .error("Invalid backend URL")
+        }
     }
-    
+
     private func reconfigureBackend() {
         guard let url = URL(string: backendURL) else {
             backendConnectionState = .error("Invalid backend URL")
@@ -248,326 +269,14 @@ class AppModel {
         }
         apiClient.updateBaseURL(url)
         updatesStream.connect(to: url)
+
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFilterConfig()
-        }
-    }
-    
-    // MARK: - Folder Management
-
-    func addFolder(url: URL) {
-        // Start accessing the security-scoped resource
-        let granted = url.startAccessingSecurityScopedResource()
-        defer {
-            if granted {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        
-        storeSecurityBookmark(for: url)
-        let path = url.path
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await apiClient.startWatchingDirectory(path: path)
-                await refreshWatchedFolders()
-            } catch let error as APIError {
-                jobsError = error.localizedDescription
-            } catch {
-                jobsError = error.localizedDescription
-            }
+            await self?.refreshBackendSettings()
         }
     }
 
-    func removeFolder(_ folder: WatchedFolder) {
-        guard let jobId = folder.backendID else {
-            jobsError = "Cannot remove folder: missing backend ID"
-            return
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let response = try await apiClient.deleteWatchJob(jobId: jobId)
-                if response.success {
-                    // Remove from local list immediately for responsive UI
-                    watchedFolders.removeAll { $0.id == folder.id }
-                    // Also refresh from backend to ensure consistency
-                    await refreshWatchedFolders()
-                } else {
-                    jobsError = response.message
-                }
-            } catch let error as APIError {
-                jobsError = error.localizedDescription
-            } catch {
-                jobsError = error.localizedDescription
-            }
-        }
-    }
-    
-    func reindex(folder: WatchedFolder) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await apiClient.indexDirectory(path: folder.path)
-            } catch let error as APIError {
-                jobsError = error.localizedDescription
-            } catch {
-                jobsError = error.localizedDescription
-            }
-        }
-    }
-    
-    func refreshWatchedFolders() async {
-        isLoadingWatchedFolders = true
-        defer { isLoadingWatchedFolders = false }
-
-        do {
-            let response = try await apiClient.fetchWatchJobs()
-            missingWatchedEndpoint = false
-            watchedFolders = response.jobs
-                .map { WatchedFolder(response: $0) }
-                .sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
-        } catch let error as APIError {
-            handleWatchListError(error)
-        } catch {
-            jobsError = "Unable to load watched folders: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Search
-
-    func performSearch() {
-        let query = buildSearchQuery()
-        
-        // Don't search if query is empty
-        guard !query.isEmpty else { return }
-        
-        // Add to recent searches
-        let newSearch = RecentSearch(
-            date: Date(),
-            rawQuery: query,
-            tokens: searchTokens
-        )
-        recentSearches.insert(newSearch, at: 0)
-        
-        // Perform API search
-        Task {
-            await searchFiles(query: query)
-        }
-    }
-    
-    @MainActor
-    func searchFiles(query: String) async {
-        // Strip @ tokens from the query - directory is passed separately
-        let cleanedQuery = stripTokensFromQuery(query)
-        let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Allow search even if query is empty but we have directory filter
-        let directory = directoryFromTokens()
-        guard !normalizedQuery.isEmpty || directory != nil else { return }
-
-        let requestID = UUID()
-        activeSearchRequestID = requestID
-        lastSearchQuery = query // Store original query for retry
-        isSearching = true
-        searchError = nil
-        searchResults = []
-
-        defer {
-            if activeSearchRequestID == requestID {
-                isSearching = false
-                activeSearchRequestID = nil
-            }
-        }
-
-        do {
-            // Use new POST /api/search endpoint
-            // Don't pass filters - directory is enough
-            let response = try await apiClient.search(
-                query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
-                directory: directory,
-                filters: nil,
-                limit: 50
-            )
-
-            guard activeSearchRequestID == requestID else { return }
-            searchResults = response.results
-        } catch let error as APIError {
-            guard activeSearchRequestID == requestID else { return }
-            searchError = error.localizedDescription
-        } catch {
-            guard activeSearchRequestID == requestID else { return }
-            searchError = "An unexpected error occurred: \(error.localizedDescription)"
-        }
-    }
-
-    private func stripTokensFromQuery(_ query: String) -> String {
-        // Remove @FolderName patterns from the query
-        var result = query
-        for token in searchTokens {
-            result = result.replacingOccurrences(of: "@\(token.value)", with: "")
-        }
-        // Also remove any remaining @ patterns that might match watched folders
-        let words = result.split(separator: " ")
-        let cleanedWords = words.filter { word in
-            if word.hasPrefix("@") {
-                let folderName = String(word.dropFirst())
-                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
-            }
-            return true
-        }
-        return cleanedWords.joined(separator: " ")
-    }
-    
-    func clearSearchResults() {
-        searchResults = []
-        searchError = nil
-    }
-
-    func loadRecentSearch(_ search: RecentSearch) {
-        searchTokens = search.tokens
-        // Extract text without tokens
-        let tokenStrings = search.tokens.map { "@\($0.value)" }
-        var text = search.rawQuery
-        for tokenStr in tokenStrings {
-            text = text.replacingOccurrences(of: tokenStr, with: "")
-        }
-        searchText = text.trimmingCharacters(in: .whitespaces)
-        
-        // Perform the search automatically
-        Task {
-            await searchFiles(query: search.rawQuery)
-        }
-    }
-    
-    var canRetryLastSearch: Bool {
-        guard let query = lastSearchQuery else { return false }
-        return !query.isEmpty
-    }
-    
-    func retryLastSearch() {
-        guard canRetryLastSearch, let query = lastSearchQuery else { return }
-        Task {
-            await searchFiles(query: query)
-        }
-    }
-
-    private func buildSearchQuery() -> String {
-        let tokenStrings = searchTokens.map { token in
-            switch token.kind {
-            case .folder:
-                return "@\(token.value)"
-            }
-        }
-        let components = tokenStrings + [searchText]
-        return components.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-    }
-
-    // MARK: - Popup Search (separate instance)
-
-    func performPopupSearch() {
-        let query = buildPopupSearchQuery()
-
-        // Don't search if query is empty
-        guard !query.isEmpty else { return }
-
-        // Perform API search (don't add to recent searches for popup)
-        Task {
-            await popupSearchFiles(query: query)
-        }
-    }
-
-    @MainActor
-    func popupSearchFiles(query: String) async {
-        // Strip @ tokens from the query - directory is passed separately
-        let cleanedQuery = stripPopupTokensFromQuery(query)
-        let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Allow search even if query is empty but we have directory filter
-        let directory = popupDirectoryFromTokens()
-        guard !normalizedQuery.isEmpty || directory != nil else { return }
-
-        let requestID = UUID()
-        activePopupSearchRequestID = requestID
-        popupIsSearching = true
-        popupSearchError = nil
-        popupSearchResults = []
-
-        defer {
-            if activePopupSearchRequestID == requestID {
-                popupIsSearching = false
-                activePopupSearchRequestID = nil
-            }
-        }
-
-        do {
-            let response = try await apiClient.search(
-                query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
-                directory: directory,
-                filters: nil,
-                limit: 50
-            )
-
-            guard activePopupSearchRequestID == requestID else { return }
-            popupSearchResults = response.results
-        } catch let error as APIError {
-            guard activePopupSearchRequestID == requestID else { return }
-            popupSearchError = error.localizedDescription
-        } catch {
-            guard activePopupSearchRequestID == requestID else { return }
-            popupSearchError = "An unexpected error occurred: \(error.localizedDescription)"
-        }
-    }
-
-    private func stripPopupTokensFromQuery(_ query: String) -> String {
-        var result = query
-        for token in popupSearchTokens {
-            result = result.replacingOccurrences(of: "@\(token.value)", with: "")
-        }
-        let words = result.split(separator: " ")
-        let cleanedWords = words.filter { word in
-            if word.hasPrefix("@") {
-                let folderName = String(word.dropFirst())
-                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
-            }
-            return true
-        }
-        return cleanedWords.joined(separator: " ")
-    }
-
-    private func popupDirectoryFromTokens() -> String? {
-        for token in popupSearchTokens {
-            if case .folder = token.kind {
-                if let folder = watchedFolders.first(where: { $0.name.caseInsensitiveCompare(token.value) == .orderedSame }) {
-                    return folder.path
-                }
-            }
-        }
-        return nil
-    }
-
-    private func buildPopupSearchQuery() -> String {
-        let tokenStrings = popupSearchTokens.map { token in
-            switch token.kind {
-            case .folder:
-                return "@\(token.value)"
-            }
-        }
-        let components = tokenStrings + [popupSearchText]
-        return components.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-    }
-
-    func clearPopupSearch() {
-        popupSearchText = ""
-        popupSearchTokens = []
-        popupSearchResults = []
-        popupSearchError = nil
-    }
-
-    // MARK: - Backend updates
-    
     private func handleUpdatesState(_ state: UpdatesStream.State) {
         switch state {
         case .idle:
@@ -580,13 +289,16 @@ class AppModel {
             backendConnectionState = .error(message)
         }
     }
-    
+
+    // MARK: - SSE Event Handling
+
     private func handleBackend(event: BackendUpdateEvent) {
-        // For directory events, path is the directory itself
-        // For file events, path is the file path
         let path = event.data.path
 
         switch event.opcode {
+
+        // MARK: Watch Events
+
         case .watchStarted, .watchAdded:
             if let dirPath = path {
                 upsertFolder(forDirectory: dirPath) { folder in
@@ -601,10 +313,11 @@ class AppModel {
 
         case .watchRemoved:
             if let dirPath = path {
-                // Remove folder from local list when watch is removed
                 let normalized = (dirPath as NSString).standardizingPath
                 watchedFolders.removeAll { $0.path == normalized }
             }
+
+        // MARK: Directory Events
 
         case .directoryProcessingStarted:
             if let dirPath = path {
@@ -620,12 +333,29 @@ class AppModel {
 
         case .directoryProcessingCompleted:
             if let dirPath = path {
-                upsertFolder(forDirectory: dirPath) { folder in
-                    folder.status = .complete
-                    folder.progress = 1.0
-                    folder.lastModified = Date()
+                let normalized = (dirPath as NSString).standardizingPath
+                let hasActiveQueueItems = queueProgressItems.contains {
+                    ($0.key as NSString).standardizingPath.hasPrefix(normalized) && !$0.value.completed
+                }
+                if !hasActiveQueueItems {
+                    upsertFolder(forDirectory: dirPath) { folder in
+                        folder.status = .complete
+                        folder.progress = 1.0
+                        folder.lastModified = Date()
+                    }
                 }
             }
+
+        case .directoryDeleted:
+            if let dirPath = path {
+                let normalized = (dirPath as NSString).standardizingPath
+                watchedFolders.removeAll { $0.path == normalized }
+            }
+
+        case .directoryMoved:
+            break
+
+        // MARK: File Processing Events
 
         case .fileParsing, .fileParsed, .fileSummarizing, .fileSummarized,
              .fileEmbedding, .fileEmbedded, .fileComplete:
@@ -634,8 +364,6 @@ class AppModel {
             }
 
         case .fileSkipped:
-            // File was skipped (already processed or filtered out)
-            // Just bump progress slightly
             if let filePath = path {
                 updateFolder(forFilePath: filePath) { folder in
                     folder.progress = min(1.0, folder.progress + 0.02)
@@ -657,20 +385,17 @@ class AppModel {
             }
 
         case .fileCreated, .fileModified:
-            // File was created or modified - processing will follow
             if let filePath = path {
                 updateFolder(forFilePath: filePath) { folder in
                     if folder.status == .complete {
                         folder.status = .indexing
-                        folder.progress = 0.9  // Near complete, just updating
+                        folder.progress = 0.9
                     }
                     folder.lastModified = Date()
                 }
             }
 
         case .fileDeleted:
-            // File was deleted from watched directory
-            // No progress update needed, but could update lastModified
             if let filePath = path {
                 updateFolder(forFilePath: filePath) { folder in
                     folder.lastModified = Date()
@@ -678,18 +403,16 @@ class AppModel {
             }
 
         case .fileMoved:
-            // File was moved - handled by src_path and dest_path
-            // Typically treated as delete + create
             break
 
-        // MARK: Queue events — accurate progress tracking
+        // MARK: Queue Events
+
         case .queueItemAdded:
             if let fp = event.data.filePath {
                 trackQueueItemAdded(filePath: fp)
             }
 
         case .queueItemUpdated, .queueItemProcessing:
-            // No progress change needed, item is still in-flight
             break
 
         case .queueItemCompleted:
@@ -699,7 +422,7 @@ class AppModel {
 
         case .queueItemFailed:
             if let fp = event.data.filePath {
-                trackQueueItemCompleted(filePath: fp) // counts toward done
+                trackQueueItemCompleted(filePath: fp)
             }
 
         case .queueItemRemoved:
@@ -708,13 +431,11 @@ class AppModel {
             }
 
         case .queuePaused:
-            // Mark all indexing folders as paused
             for i in watchedFolders.indices where watchedFolders[i].status == .indexing {
                 watchedFolders[i].status = .paused
             }
 
         case .queueResumed:
-            // Resume all paused folders
             for i in watchedFolders.indices where watchedFolders[i].status == .paused {
                 watchedFolders[i].status = .indexing
             }
@@ -729,610 +450,23 @@ class AppModel {
                 watchedFolders[i].status = .indexing
             }
 
-        case .directoryDeleted:
-            if let dirPath = path {
-                let normalized = (dirPath as NSString).standardizingPath
-                watchedFolders.removeAll { $0.path == normalized }
-            }
-
-        case .directoryMoved:
-            break
+        // MARK: System Events
 
         case .error:
-            // General error from backend
             if let message = event.message {
                 jobsError = message
             }
 
         case .info, .statusUpdate:
-            // Informational messages - could log or display
             break
 
         case .shuttingDown:
-            // Backend is shutting down
             backendConnectionState = .error("Backend shutting down")
 
         case .unknown:
-            // Unknown opcode - log for debugging
+            #if DEBUG
             print("Unknown SSE opcode received")
+            #endif
         }
-    }
-    
-    private func upsertFolder(
-        forDirectory directory: String,
-        mutate: (inout WatchedFolder) -> Void
-    ) {
-        let normalized = (directory as NSString).standardizingPath
-        if let index = watchedFolders.firstIndex(where: { $0.path == normalized }) {
-            mutate(&watchedFolders[index])
-            return
-        }
-        
-        var folder = WatchedFolder(
-            name: URL(fileURLWithPath: normalized).lastPathComponent,
-            path: normalized,
-            progress: 0.0,
-            status: .idle
-        )
-        mutate(&folder)
-        watchedFolders.append(folder)
-        watchedFolders.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-    
-    private func bumpProgress(forFilePath path: String, completed: Bool) {
-        updateFolder(forFilePath: path) { folder in
-            if folder.status == .idle {
-                folder.status = .indexing
-            }
-            let increment = completed ? 0.15 : 0.05
-            folder.progress = min(1.0, folder.progress + increment)
-            folder.lastModified = Date()
-            if folder.progress >= 0.99 && completed {
-                folder.status = .complete
-                folder.progress = 1.0
-            }
-        }
-    }
-    
-    private func updateFolder(
-        forFilePath filePath: String,
-        mutate: (inout WatchedFolder) -> Void
-    ) {
-        let normalizedFile = (filePath as NSString).standardizingPath
-        guard let index = watchedFolders.firstIndex(where: { normalizedFile.hasPrefix($0.path) }) else {
-            return
-        }
-        mutate(&watchedFolders[index])
-    }
-
-    // MARK: - Queue-based progress tracking
-
-    private func trackQueueItemAdded(filePath: String) {
-        let now = Date()
-        expireOldProgressItems(now: now)
-        queueProgressItems[filePath] = (addedAt: now, completed: false)
-        updateFolderProgressFromQueue(forFilePath: filePath)
-    }
-
-    private func trackQueueItemCompleted(filePath: String) {
-        let now = Date()
-        expireOldProgressItems(now: now)
-        if queueProgressItems[filePath] != nil {
-            queueProgressItems[filePath]?.completed = true
-        }
-        updateFolderProgressFromQueue(forFilePath: filePath)
-    }
-
-    private func trackQueueItemRemoved(filePath: String) {
-        queueProgressItems.removeValue(forKey: filePath)
-        let now = Date()
-        expireOldProgressItems(now: now)
-        updateFolderProgressFromQueue(forFilePath: filePath)
-    }
-
-    private func expireOldProgressItems(now: Date) {
-        let cutoff = now.addingTimeInterval(-Self.progressWindowSeconds)
-        let expired = queueProgressItems.filter { $0.value.addedAt < cutoff && $0.value.completed }
-        for key in expired.keys {
-            queueProgressItems.removeValue(forKey: key)
-        }
-    }
-
-    private func updateFolderProgressFromQueue(forFilePath filePath: String) {
-        let normalizedFile = (filePath as NSString).standardizingPath
-        guard let folderIndex = watchedFolders.firstIndex(where: { normalizedFile.hasPrefix($0.path) }) else {
-            return
-        }
-        let folderPath = watchedFolders[folderIndex].path
-
-        // Count items belonging to this folder
-        let folderItems = queueProgressItems.filter { ($0.key as NSString).standardizingPath.hasPrefix(folderPath) }
-        let total = folderItems.count
-        let completed = folderItems.values.filter(\.completed).count
-
-        if total == 0 {
-            // No queue items in window — folder is idle or already complete
-            return
-        }
-
-        let progress = Double(completed) / Double(total)
-        watchedFolders[folderIndex].progress = progress
-        watchedFolders[folderIndex].lastModified = Date()
-
-        if progress >= 1.0 {
-            watchedFolders[folderIndex].status = .complete
-        } else if watchedFolders[folderIndex].status != .paused {
-            watchedFolders[folderIndex].status = .indexing
-        }
-    }
-
-    private func directoryFromTokens() -> String? {
-        guard let token = searchTokens.first(where: { $0.kind == .folder }) else {
-            return nil
-        }
-        if let folder = watchedFolders.first(where: { $0.name == token.value }) {
-            return folder.path
-        }
-        return token.value
-    }
-    
-    private func filtersFromTokens(directory: String?) -> [String: String]? {
-        if let dir = directory {
-            return ["folder": dir]
-        }
-        return nil
-    }
-    
-    private func handleWatchListError(_ error: APIError) {
-        switch error {
-        case .serverError(let statusCode, _)
-            where statusCode == 404:
-            missingWatchedEndpoint = true
-            jobsError = nil
-        default:
-            jobsError = error.localizedDescription
-        }
-    }
-    
-    func dismissFolderIssue(_ folder: WatchedFolder) {
-        guard let index = watchedFolders.firstIndex(where: { $0.id == folder.id }) else { return }
-        watchedFolders[index].lastIssueMessage = nil
-        watchedFolders[index].lastIssueDate = nil
-        watchedFolders[index].skippedFileCount = 0
-    }
-    
-    // MARK: - Settings helpers
-    
-    func testBackendConnection() async -> (success: Bool, message: String) {
-        do {
-            let status = try await apiClient.fetchStatus()
-            let jobsCount = status.jobs ?? 0
-            return (true, "Connected (\(jobsCount) jobs running)")
-        } catch let error as APIError {
-            return (false, error.localizedDescription)
-        } catch {
-            return (false, error.localizedDescription)
-        }
-    }
-
-    // MARK: - Security Bookmarks
-
-    nonisolated func storeSecurityBookmark(for url: URL) {
-        let normalized = (url.path as NSString).standardizingPath
-        do {
-            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-            bookmarkQueue.async(flags: .barrier) { [weak self] in
-                self?.securityBookmarks[normalized] = data
-                self?.persistBookmarks()
-            }
-            print("Stored security bookmark for: \(normalized)")
-        } catch {
-            print("Failed to store bookmark for \(normalized): \(error)")
-        }
-    }
-
-    nonisolated func withSecurityScopedAccess<T>(for filePath: String, perform: () throws -> T) throws -> T {
-        let normalized = (filePath as NSString).standardizingPath
-        
-        // First try to find an existing bookmark that covers this file
-        var bookmarkEntry: (key: String, value: Data)?
-        bookmarkQueue.sync {
-            bookmarkEntry = securityBookmarks.first(where: { normalized.hasPrefix($0.key) })
-        }
-        
-        if let bookmarkEntry = bookmarkEntry {
-            do {
-                var isStale = false
-                let scopedURL = try URL(resolvingBookmarkData: bookmarkEntry.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
-                
-                // If stale, recreate the bookmark
-                if isStale {
-                    print("Bookmark is stale for \(bookmarkEntry.key), recreating...")
-                    storeSecurityBookmark(for: scopedURL)
-                }
-                
-                let granted = scopedURL.startAccessingSecurityScopedResource()
-                defer {
-                    if granted {
-                        scopedURL.stopAccessingSecurityScopedResource()
-                    }
-                }
-                
-                if !granted {
-                    print("Failed to start accessing security scoped resource for \(scopedURL.path)")
-                    throw BookmarkError.folderUnknown
-                }
-                
-                return try perform()
-            } catch {
-                print("Error resolving bookmark: \(error)")
-                // Remove the invalid bookmark
-                bookmarkQueue.async(flags: .barrier) { [weak self] in
-                    self?.securityBookmarks.removeValue(forKey: bookmarkEntry.key)
-                    self?.persistBookmarks()
-                }
-            }
-        }
-        
-        // No bookmark found, prompt user for access
-        print("No bookmark found for \(normalized), prompting user...")
-        try promptForBookmark(for: normalized)
-        
-        // After prompting, try again with the newly created bookmark
-        bookmarkQueue.sync {
-            bookmarkEntry = securityBookmarks.first(where: { normalized.hasPrefix($0.key) })
-        }
-        
-        if let bookmarkEntry = bookmarkEntry {
-            var isStale = false
-            let scopedURL = try URL(resolvingBookmarkData: bookmarkEntry.value, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
-            let granted = scopedURL.startAccessingSecurityScopedResource()
-            defer {
-                if granted {
-                    scopedURL.stopAccessingSecurityScopedResource()
-                }
-            }
-            return try perform()
-        }
-        
-        // If we still don't have access, throw an error
-        print("Failed to obtain security bookmark after prompting")
-        throw BookmarkError.folderUnknown
-    }
-
-    nonisolated private func persistBookmarks() {
-        // This is called from bookmarkQueue.async, so we're already on that queue
-        // Just read the bookmarks directly (we're inside the barrier)
-        let encoded = securityBookmarks.mapValues { $0.base64EncodedString() }
-        UserDefaults.standard.set(encoded, forKey: Self.bookmarksDefaultsKey)
-    }
-    
-    private func loadSecurityBookmarks() {
-        guard let stored = UserDefaults.standard.dictionary(forKey: Self.bookmarksDefaultsKey) as? [String: String] else {
-            securityBookmarks = [:]
-            return
-        }
-        securityBookmarks = stored.reduce(into: [:]) { partialResult, item in
-            if let data = Data(base64Encoded: item.value) {
-                partialResult[(item.key as NSString).standardizingPath] = data
-            }
-        }
-    }
-    
-    nonisolated private func promptForBookmark(for path: String) throws {
-        // This will be called from main thread, so we can use assumeIsolated
-        // Get watched folders info and show panel on main thread
-        let result = MainActor.assumeIsolated {
-            // Get folder info
-            let folderInfo = self.watchedFolders.first(where: { path.hasPrefix(($0.path as NSString).standardizingPath) })
-            
-            // Create and show panel
-            let panel = NSOpenPanel()
-            if let folder = folderInfo {
-                panel.message = "fileSearchForntend needs access to \(folder.name) to open files."
-                panel.directoryURL = URL(fileURLWithPath: folder.path)
-            } else {
-                // If we can't find a watched folder, try to get the parent directory
-                let fileURL = URL(fileURLWithPath: path)
-                let parentURL = fileURL.deletingLastPathComponent()
-                panel.message = "fileSearchForntend needs access to open this file."
-                panel.directoryURL = parentURL
-            }
-            
-            panel.prompt = "Grant Access"
-            panel.canChooseDirectories = true
-            panel.canChooseFiles = false
-            panel.allowsMultipleSelection = false
-            
-            // Show panel and return result
-            if panel.runModal() == .OK {
-                return panel.url
-            } else {
-                return nil
-            }
-        }
-        
-        // Store bookmark if user selected a folder
-        if let url = result {
-            storeSecurityBookmark(for: url)
-        } else {
-            throw BookmarkError.userCancelled
-        }
-    }
-    
-    /// Request access to all watched folders that don't have bookmarks yet
-    func ensureBookmarksForWatchedFolders() {
-        for folder in watchedFolders {
-            let normalized = (folder.path as NSString).standardizingPath
-            var hasBookmark = false
-            bookmarkQueue.sync {
-                hasBookmark = securityBookmarks[normalized] != nil
-            }
-            if !hasBookmark {
-                print("Missing bookmark for watched folder: \(folder.path)")
-                // We could prompt here, but it's better to wait until the user actually tries to access a file
-            }
-        }
-    }
-
-    // MARK: - Queue Management
-
-    func refreshQueueStatus() async {
-        do {
-            queueStatus = try await apiClient.fetchQueueStatus()
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    func refreshQueueItems() async {
-        isLoadingQueue = true
-        defer { isLoadingQueue = false }
-
-        do {
-            let response = try await apiClient.fetchQueueItems()
-            queueItems = response.items
-            queueTotalCount = response.totalCount
-            queueError = nil
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    func toggleQueuePause() async {
-        guard let status = queueStatus else { return }
-        do {
-            if status.manuallyPaused {
-                _ = try await apiClient.resumeQueue()
-            } else {
-                _ = try await apiClient.pauseQueue()
-            }
-            await refreshQueueStatus()
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    func removeQueueItem(itemId: String) async {
-        do {
-            _ = try await apiClient.removeQueueItem(itemId: itemId)
-            await refreshQueueItems()
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    func refreshSchedulerConfig() async {
-        do {
-            schedulerConfig = try await apiClient.fetchScheduler()
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    func updateSchedulerConfig(
-        enabled: Bool? = nil,
-        combineMode: String? = nil,
-        checkIntervalSeconds: Int? = nil,
-        rules: [SchedulerRuleRequest]? = nil
-    ) async {
-        do {
-            schedulerConfig = try await apiClient.updateScheduler(
-                enabled: enabled,
-                combineMode: combineMode,
-                checkIntervalSeconds: checkIntervalSeconds,
-                rules: rules
-            )
-        } catch {
-            queueError = error.localizedDescription
-        }
-    }
-
-    // MARK: - Filter Configuration (Backend-Synced)
-
-    /// Refresh filter configuration from backend
-    func refreshFilterConfig() async {
-        isLoadingFilterConfig = true
-        filterConfigError = nil
-
-        defer { isLoadingFilterConfig = false }
-
-        do {
-            let config = try await apiClient.fetchFilterConfig()
-
-            // Update local state
-            filterMode = config.mode
-            blacklistExclude = config.blacklistExclude
-            blacklistInclude = config.blacklistInclude
-            whitelistInclude = config.whitelistInclude
-            whitelistExclude = config.whitelistExclude
-            fileFilterEnabled = true
-
-            // Save as the "clean" state for dirty tracking
-            savedFilterMode = config.mode
-            savedBlacklistExclude = config.blacklistExclude
-            savedBlacklistInclude = config.blacklistInclude
-            savedWhitelistInclude = config.whitelistInclude
-            savedWhitelistExclude = config.whitelistExclude
-        } catch let error as APIError {
-            filterConfigError = error.localizedDescription
-            print("Failed to fetch filter config: \(error)")
-        } catch {
-            filterConfigError = error.localizedDescription
-            print("Failed to fetch filter config: \(error)")
-        }
-    }
-
-    /// Add a new filter pattern (local only - doesn't save to backend)
-    /// Call saveFilterConfig() to persist changes
-    func addFilterPattern(_ pattern: String, description: String? = nil) {
-        // Determine if it's an include or exclude pattern
-        let isNegation = pattern.hasPrefix("!")
-        let effectivePattern = isNegation ? String(pattern.dropFirst()) : pattern
-
-        // Add to appropriate mode-specific array
-        if filterMode == "blacklist" {
-            if isNegation {
-                if !blacklistInclude.contains(effectivePattern) {
-                    blacklistInclude.append(effectivePattern)
-                }
-            } else {
-                if !blacklistExclude.contains(effectivePattern) {
-                    blacklistExclude.append(effectivePattern)
-                }
-            }
-        } else {
-            if isNegation {
-                if !whitelistExclude.contains(effectivePattern) {
-                    whitelistExclude.append(effectivePattern)
-                }
-            } else {
-                if !whitelistInclude.contains(effectivePattern) {
-                    whitelistInclude.append(effectivePattern)
-                }
-            }
-        }
-    }
-
-    /// Remove a filter pattern (local only - doesn't save to backend)
-    /// Call saveFilterConfig() to persist changes
-    func removeFilterPattern(_ pattern: FileFilterPattern) {
-        let effectivePattern = pattern.effectivePattern
-
-        // Remove from appropriate mode-specific array
-        if filterMode == "blacklist" {
-            if pattern.isNegation {
-                blacklistInclude.removeAll { $0 == effectivePattern }
-            } else {
-                blacklistExclude.removeAll { $0 == effectivePattern }
-            }
-        } else {
-            if pattern.isNegation {
-                whitelistExclude.removeAll { $0 == effectivePattern }
-            } else {
-                whitelistInclude.removeAll { $0 == effectivePattern }
-            }
-        }
-    }
-
-    /// Save filter configuration changes to backend
-    func saveFilterConfig() async {
-        isLoadingFilterConfig = true
-        filterConfigError = nil
-
-        defer { isLoadingFilterConfig = false }
-
-        do {
-            let response = try await apiClient.updateFilterConfig(
-                mode: filterMode,
-                blacklistExclude: blacklistExclude,
-                blacklistInclude: blacklistInclude,
-                whitelistInclude: whitelistInclude,
-                whitelistExclude: whitelistExclude,
-                applyImmediately: true
-            )
-
-            if response.success {
-                // Update saved state
-                savedFilterMode = response.config.mode
-                savedBlacklistExclude = response.config.blacklistExclude
-                savedBlacklistInclude = response.config.blacklistInclude
-                savedWhitelistInclude = response.config.whitelistInclude
-                savedWhitelistExclude = response.config.whitelistExclude
-
-                // Sync local state with backend response
-                filterMode = response.config.mode
-                blacklistExclude = response.config.blacklistExclude
-                blacklistInclude = response.config.blacklistInclude
-                whitelistInclude = response.config.whitelistInclude
-                whitelistExclude = response.config.whitelistExclude
-            } else {
-                filterConfigError = response.message
-            }
-        } catch let error as APIError {
-            filterConfigError = error.localizedDescription
-        } catch {
-            filterConfigError = error.localizedDescription
-        }
-    }
-
-    /// Discard unsaved filter configuration changes
-    func discardFilterChanges() {
-        filterMode = savedFilterMode
-        blacklistExclude = savedBlacklistExclude
-        blacklistInclude = savedBlacklistInclude
-        whitelistInclude = savedWhitelistInclude
-        whitelistExclude = savedWhitelistExclude
-        filterConfigError = nil
-    }
-
-    /// Reset filter patterns to defaults
-    func resetFilterPatternsToDefaults() {
-        Task {
-            do {
-                let response = try await apiClient.resetFilterConfig()
-                if response.success {
-                    // Update both local and saved state
-                    filterMode = response.config.mode
-                    blacklistExclude = response.config.blacklistExclude
-                    blacklistInclude = response.config.blacklistInclude
-                    whitelistInclude = response.config.whitelistInclude
-                    whitelistExclude = response.config.whitelistExclude
-
-                    savedFilterMode = response.config.mode
-                    savedBlacklistExclude = response.config.blacklistExclude
-                    savedBlacklistInclude = response.config.blacklistInclude
-                    savedWhitelistInclude = response.config.whitelistInclude
-                    savedWhitelistExclude = response.config.whitelistExclude
-                } else {
-                    filterConfigError = response.message
-                }
-            } catch let error as APIError {
-                filterConfigError = error.localizedDescription
-            } catch {
-                filterConfigError = error.localizedDescription
-            }
-        }
-    }
-
-    /// Update filter mode (local only - doesn't save to backend)
-    /// Call saveFilterConfig() to persist changes
-    func updateFilterMode(_ mode: String) {
-        filterMode = mode
-        // Mode change is now just a local state update
-        // Patterns automatically switch via excludePatterns/includePatterns computed properties
-    }
-
-    /// Check if a file should be filtered based on current settings
-    ///
-    /// **Note: Filtering is now handled server-side.**
-    /// This method is kept for backward compatibility but uses the backend patterns.
-    func shouldFilterFile(filePath: String, filename: String) -> Bool {
-        guard fileFilterEnabled else { return false }
-        return FileFilterService.shouldFilter(
-            filePath: filePath,
-            filename: filename,
-            patterns: fileFilterPatterns
-        )
     }
 }

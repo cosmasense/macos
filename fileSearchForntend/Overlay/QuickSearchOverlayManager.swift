@@ -49,11 +49,9 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     private var dismissalCallback: (() -> Void)?
 
     func present(appModel: AppModel, onDismiss: @escaping () -> Void) {
-        print("🎯 QuickSearchOverlayController.present() called")
         dismissalCallback = onDismiss
 
         if panel == nil {
-            print("   Creating new panel...")
             let contentView = QuickSearchOverlayView(onClose: { [weak self] in
                 self?.dismiss()
             })
@@ -70,19 +68,14 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
 
             hostingController = host
             self.panel = newPanel
-            print("   ✅ Panel created")
-        } else {
-            print("   Panel already exists, reusing")
         }
 
         guard let panel = panel else {
-            print("   ❌ Panel is nil after creation attempt!")
             return
         }
 
         // Ensure the app is brought to the foreground
         // This is critical when the app is running in background with no main window
-        print("   Activating app and showing panel...")
 
         // Force the app to activate even if it's in accessory mode
         NSApp.activate(ignoringOtherApps: true)
@@ -95,8 +88,6 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
             panel.makeKeyAndOrderFront(nil)
 
-            print("   ✅ Panel shown")
-
             // Force first responder after a brief delay to ensure window is ready
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 panel.makeFirstResponder(panel.contentView)
@@ -105,9 +96,7 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     }
 
     func dismiss() {
-        print("🎯 QuickSearchOverlayController.dismiss() called")
         guard panel != nil else {
-            print("   Panel is already nil, nothing to dismiss")
             return
         }
         panel?.close()
@@ -125,7 +114,7 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     func updateLayout(isExpanded: Bool) {
         guard let panel else { return }
         let height = isExpanded ? expandedHeight : collapsedHeight
-        
+
         // Calculate new frame keeping the bottom anchored
         let currentFrame = panel.frame
         let newFrame = NSRect(
@@ -134,26 +123,22 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             width: currentFrame.width,
             height: height
         )
-        
+
         panel.setFrame(newFrame, display: true, animate: true)
     }
 
     func windowWillClose(_ notification: Notification) {
-        print("🎯 windowWillClose notification received")
         cleanupAfterClose()
     }
 
     // MARK: - Helpers
 
     private func cleanupAfterClose() {
-        print("🎯 cleanupAfterClose() called")
         panel = nil
         hostingController = nil
         let callback = dismissalCallback
         dismissalCallback = nil
-        print("   Calling dismissal callback...")
         callback?()
-        print("   ✅ Cleanup complete")
     }
 
     private func defaultFrame() -> NSRect {
@@ -164,11 +149,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         let primaryScreen = NSScreen.main ?? NSScreen.screens.first
         let frame = primaryScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let x = frame.midX - (panelWidth / 2)
-        
+
         // Keep the BOTTOM of the panel fixed at bottomOffset from screen bottom
         // Only expand upward by adjusting Y based on height
         let y = frame.minY + bottomOffset
-        
+
         return NSRect(x: x, y: y, width: panelWidth, height: height)
     }
 }
