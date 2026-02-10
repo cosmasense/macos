@@ -20,6 +20,7 @@ struct IndexingSettingsSection: View {
     @State private var schedulerCheckInterval: Int = 30
     @State private var schedulerRules: [EditableRule] = []
     @State private var hasLoadedScheduler: Bool = false
+    @State private var hasUnsavedChanges: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -79,118 +80,100 @@ struct IndexingSettingsSection: View {
                 .padding(.vertical, 4)
             }
 
-            // Scheduler
+            // Scheduler — uses the shared SchedulerEditor component
             GroupBox("Scheduler") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable Scheduler", isOn: $schedulerEnabled)
-                        .font(.system(size: 14, weight: .medium))
-
-                    HStack {
-                        Text("Combine Mode")
-                            .font(.system(size: 13, weight: .medium))
-                        Picker("", selection: $schedulerCombineMode) {
-                            Text("ALL").tag("ALL")
-                            Text("ANY").tag("ANY")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 160)
-                    }
-
-                    HStack {
-                        Text("Check Interval (seconds)")
-                            .font(.system(size: 13, weight: .medium))
-                        Stepper(
-                            value: $schedulerCheckInterval,
-                            in: 5...600,
-                            step: 5
-                        ) {
-                            Text("\(schedulerCheckInterval)")
-                                .font(.system(size: 13, design: .monospaced))
-                                .frame(width: 40, alignment: .trailing)
-                        }
-                    }
-
-                    Divider()
-
-                    // Rules
-                    HStack {
-                        Text("Rules")
-                            .font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                        Button {
-                            schedulerRules.append(EditableRule())
-                        } label: {
-                            Label("Add Rule", systemImage: "plus")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-
-                    ForEach(schedulerRules.indices, id: \.self) { index in
-                        SchedulerRuleRow(rule: $schedulerRules[index]) {
-                            schedulerRules.remove(at: index)
-                        }
-                    }
-
-                    if schedulerRules.isEmpty {
-                        Text("No rules configured.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // Save button
-                    HStack {
-                        Spacer()
-                        Button("Save Scheduler") {
-                            Task { await saveScheduler() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                    }
-                }
+                SchedulerEditor(
+                    enabled: $schedulerEnabled,
+                    combineMode: $schedulerCombineMode,
+                    checkInterval: $schedulerCheckInterval,
+                    rules: $schedulerRules,
+                    hasUnsavedChanges: $hasUnsavedChanges,
+                    onSave: saveScheduler
+                )
                 .padding(.vertical, 4)
             }
 
             // Live Metrics
             GroupBox("System Metrics") {
-                if let metrics = metricsResponse?.metrics {
-                    HStack(spacing: 16) {
-                        MetricBadge(
-                            icon: batteryIcon(for: metrics),
-                            label: "Battery",
-                            value: batteryText(from: metrics)
-                        )
+                if let response = metricsResponse {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Row 1: Power & thermal
+                        HStack(spacing: 0) {
+                            MetricBadge(
+                                icon: batteryIcon(for: response.metrics),
+                                label: "Battery",
+                                value: batteryText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: powerIcon(for: response.metrics),
+                                label: "Power",
+                                value: powerText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: "thermometer.medium",
+                                label: "CPU Temp",
+                                value: cpuTempText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: "fan.fill",
+                                label: "Fan",
+                                value: fanText(from: response.metrics)
+                            )
+                        }
 
-                        MetricBadge(
-                            icon: powerIcon(for: metrics),
-                            label: "Power",
-                            value: powerText(from: metrics)
-                        )
+                        // Row 2: Resources & status
+                        HStack(spacing: 0) {
+                            MetricBadge(
+                                icon: "memorychip",
+                                label: "Memory",
+                                value: memoryText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: "gauge.medium",
+                                label: "Pressure",
+                                value: memoryPressureText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: "rectangle.3.group",
+                                label: "GPU",
+                                value: gpuText(from: response.metrics)
+                            )
+                            Spacer()
+                            MetricBadge(
+                                icon: "bolt.slash",
+                                label: "Low Power",
+                                value: lowPowerText(from: response.metrics)
+                            )
+                        }
 
-                        MetricBadge(
-                            icon: "thermometer.medium",
-                            label: "CPU Temp",
-                            value: cpuTempText(from: metrics)
-                        )
-
-                        MetricBadge(
-                            icon: "fan.fill",
-                            label: "Fan",
-                            value: fanText(from: metrics)
-                        )
-
-                        MetricBadge(
-                            icon: "memorychip",
-                            label: "Memory",
-                            value: memoryText(from: metrics)
-                        )
-
-                        MetricBadge(
-                            icon: "gpu",
-                            label: "GPU",
-                            value: gpuText(from: metrics)
-                        )
+                        // Row 3: Models
+                        if !response.models.isEmpty {
+                            Divider()
+                            Text("Models")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 16) {
+                                ForEach(response.models, id: \.name) { model in
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(model.loaded ? .green : .gray)
+                                            .frame(width: 8, height: 8)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(model.name)
+                                                .font(.system(size: 12, weight: .medium))
+                                            Text(modelIdleText(model))
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     .padding(.vertical, 4)
                 } else {
@@ -244,6 +227,7 @@ struct IndexingSettingsSection: View {
             checkIntervalSeconds: schedulerCheckInterval,
             rules: ruleRequests
         )
+        hasUnsavedChanges = false
     }
 
     // MARK: - Metrics helpers
@@ -282,15 +266,13 @@ struct IndexingSettingsSection: View {
     }
 
     private func powerIcon(for metrics: [String: AnyCodableValue]) -> String {
-        guard let source = stringValue(metrics["power_source"]) else { return "battery.100" }
-        return source.lowercased().contains("ac") || source.lowercased().contains("plug")
-            ? "powerplug.fill" : "battery.100"
+        guard let plugged = boolValue(metrics["power_source_plugged"]) else { return "battery.100" }
+        return plugged ? "powerplug.fill" : "battery.100"
     }
 
     private func powerText(from metrics: [String: AnyCodableValue]) -> String {
-        guard let source = stringValue(metrics["power_source"]) else { return "N/A" }
-        return source.lowercased().contains("ac") || source.lowercased().contains("plug")
-            ? "Plugged In" : "Battery"
+        guard let plugged = boolValue(metrics["power_source_plugged"]) else { return "N/A" }
+        return plugged ? "Plugged In" : "Battery"
     }
 
     private func cpuTempText(from metrics: [String: AnyCodableValue]) -> String {
@@ -333,6 +315,30 @@ struct IndexingSettingsSection: View {
         return "N/A"
     }
 
+    private func memoryPressureText(from metrics: [String: AnyCodableValue]) -> String {
+        if let pct = doubleValue(metrics["memory_pressure"]) {
+            return String(format: "%.0f%%", pct)
+        }
+        if let pct = intValue(metrics["memory_pressure"]) {
+            return "\(pct)%"
+        }
+        return "N/A"
+    }
+
+    private func modelIdleText(_ model: ModelStatus) -> String {
+        if !model.loaded { return "Unloaded" }
+        guard let idle = model.idleSeconds else { return "Loaded" }
+        if idle < 60 { return "Idle \(Int(idle))s" }
+        return "Idle \(Int(idle / 60))m"
+    }
+
+    private func lowPowerText(from metrics: [String: AnyCodableValue]) -> String {
+        if let val = boolValue(metrics["low_power_mode"]) {
+            return val ? "On" : "Off"
+        }
+        return "N/A"
+    }
+
     private func intValue(_ v: AnyCodableValue?) -> Int? {
         guard let v else { return nil }
         switch v {
@@ -354,6 +360,12 @@ struct IndexingSettingsSection: View {
     private func stringValue(_ v: AnyCodableValue?) -> String? {
         guard let v else { return nil }
         if case .string(let s) = v { return s }
+        return nil
+    }
+
+    private func boolValue(_ v: AnyCodableValue?) -> Bool? {
+        guard let v else { return nil }
+        if case .bool(let b) = v { return b }
         return nil
     }
 }

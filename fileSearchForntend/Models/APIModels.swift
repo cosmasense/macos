@@ -631,6 +631,7 @@ struct QueueStatusResponse: Codable {
     let coolingDown: Int
     let waiting: Int
     let processing: Int
+    let failingRules: [String]
 
     enum CodingKeys: String, CodingKey {
         case paused
@@ -640,6 +641,19 @@ struct QueueStatusResponse: Codable {
         case coolingDown = "cooling_down"
         case waiting
         case processing
+        case failingRules = "failing_rules"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        paused = try container.decode(Bool.self, forKey: .paused)
+        manuallyPaused = try container.decode(Bool.self, forKey: .manuallyPaused)
+        schedulerPaused = try container.decode(Bool.self, forKey: .schedulerPaused)
+        totalItems = try container.decode(Int.self, forKey: .totalItems)
+        coolingDown = try container.decode(Int.self, forKey: .coolingDown)
+        waiting = try container.decode(Int.self, forKey: .waiting)
+        processing = try container.decode(Int.self, forKey: .processing)
+        failingRules = (try? container.decode([String].self, forKey: .failingRules)) ?? []
     }
 }
 
@@ -699,12 +713,33 @@ struct SchedulerRuleResponse: Codable {
     let enabled: Bool
 }
 
+struct SchedulerRuleResult: Codable {
+    let rule: String
+    let passed: Bool
+    let metricAvailable: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case rule
+        case passed
+        case metricAvailable = "metric_available"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rule = try container.decode(String.self, forKey: .rule)
+        passed = try container.decode(Bool.self, forKey: .passed)
+        metricAvailable = try container.decodeIfPresent(Bool.self, forKey: .metricAvailable) ?? true
+    }
+}
+
 struct SchedulerResponse: Codable {
     let enabled: Bool
     let combineMode: String
     let checkIntervalSeconds: Int
     let rules: [SchedulerRuleResponse]
     let conditionsMet: Bool
+    let warnings: [String]
+    let ruleResults: [SchedulerRuleResult]
 
     enum CodingKeys: String, CodingKey {
         case enabled
@@ -712,6 +747,19 @@ struct SchedulerResponse: Codable {
         case checkIntervalSeconds = "check_interval_seconds"
         case rules
         case conditionsMet = "conditions_met"
+        case warnings
+        case ruleResults = "rule_results"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        combineMode = try container.decode(String.self, forKey: .combineMode)
+        checkIntervalSeconds = try container.decode(Int.self, forKey: .checkIntervalSeconds)
+        rules = try container.decode([SchedulerRuleResponse].self, forKey: .rules)
+        conditionsMet = try container.decode(Bool.self, forKey: .conditionsMet)
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        ruleResults = try container.decodeIfPresent([SchedulerRuleResult].self, forKey: .ruleResults) ?? []
     }
 }
 
@@ -743,10 +791,13 @@ enum AnyCodableValue: Codable, Hashable {
     case bool(Bool)
     case string(String)
     case stringArray([String])
+    case null
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let v = try? container.decode(Bool.self) {
+        if container.decodeNil() {
+            self = .null
+        } else if let v = try? container.decode(Bool.self) {
             self = .bool(v)
         } else if let v = try? container.decode(Int.self) {
             self = .int(v)
@@ -773,12 +824,44 @@ enum AnyCodableValue: Codable, Hashable {
         case .bool(let v): try container.encode(v)
         case .string(let v): try container.encode(v)
         case .stringArray(let v): try container.encode(v)
+        case .null: try container.encodeNil()
         }
+    }
+}
+
+struct ModelStatus: Codable {
+    let name: String
+    let loaded: Bool
+    let idleSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case loaded
+        case idleSeconds = "idle_seconds"
     }
 }
 
 struct MetricsResponse: Codable {
     let metrics: [String: AnyCodableValue]
+    let models: [ModelStatus]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        metrics = try container.decode([String: AnyCodableValue].self, forKey: .metrics)
+        models = (try? container.decode([ModelStatus].self, forKey: .models)) ?? []
+    }
+}
+
+struct SchedulerTestResponse: Codable {
+    let conditionsMet: Bool
+    let ruleResults: [SchedulerRuleResult]
+    let metrics: [String: AnyCodableValue]
+
+    enum CodingKeys: String, CodingKey {
+        case conditionsMet = "conditions_met"
+        case ruleResults = "rule_results"
+        case metrics
+    }
 }
 
 // MARK: - Backend Settings Models

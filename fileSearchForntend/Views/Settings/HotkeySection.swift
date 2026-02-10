@@ -11,6 +11,7 @@ import AppKit
 // MARK: - Hotkey Section
 
 struct HotkeySection: View {
+    @Environment(AppModel.self) private var model
     @Binding var hotkey: String
     @State private var isRecording = false
     @State private var hasAccessibilityPermission = false
@@ -78,16 +79,27 @@ struct HotkeySection: View {
                 // Input Monitoring Permission (for global hotkey in sandboxed apps)
                 PermissionRow(
                     title: "Input Monitoring",
-                    description: "Required for global hotkey when app is not focused",
+                    description: hasAccessibilityPermission
+                        ? "Global hotkey works when app is not focused"
+                        : "Grant to use the global hotkey when app is not focused",
                     isGranted: hasAccessibilityPermission,
-                    action: { openInputMonitoringPreferences() }
+                    action: {
+                        if !hasAccessibilityPermission {
+                            requestInputMonitoringPermission()
+                        } else {
+                            openInputMonitoringPreferences()
+                        }
+                    }
                 )
 
-                // Files and Folders
+                // Files and Folders — sandboxed app uses security-scoped bookmarks
+                let bookmarkCount = model.securityBookmarks.count
                 PermissionRow(
                     title: "Files and Folders",
-                    description: "Required for drag-and-drop and file access",
-                    isGranted: nil, // Can't easily detect this
+                    description: bookmarkCount > 0
+                        ? "Access granted to \(bookmarkCount) folder\(bookmarkCount == 1 ? "" : "s") via bookmarks"
+                        : "Add a folder to watch to grant file access",
+                    isGranted: bookmarkCount > 0,
                     action: { openFullDiskAccessPreferences() }
                 )
             }

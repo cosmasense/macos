@@ -308,6 +308,11 @@ class APIClient {
         return try await get(url: url)
     }
 
+    func testSchedulerRules() async throws -> SchedulerTestResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler/test")
+        return try await post(url: url, body: Optional<String>.none)
+    }
+
     // MARK: - Backend Settings
 
     func fetchBackendSettings() async throws -> BackendSettingsResponse {

@@ -436,8 +436,12 @@ class AppModel {
             }
 
         case .queueResumed:
-            for i in watchedFolders.indices where watchedFolders[i].status == .paused {
-                watchedFolders[i].status = .indexing
+            // Only resume folders if the queue is truly unpaused (scheduler may still hold it)
+            Task { await refreshQueueStatus() }
+            if queueStatus?.schedulerPaused != true {
+                for i in watchedFolders.indices where watchedFolders[i].status == .paused {
+                    watchedFolders[i].status = .indexing
+                }
             }
 
         case .schedulerPaused:
@@ -446,8 +450,12 @@ class AppModel {
             }
 
         case .schedulerResumed:
-            for i in watchedFolders.indices where watchedFolders[i].status == .paused {
-                watchedFolders[i].status = .indexing
+            // Only resume folders if the queue is truly unpaused (manual pause may still hold it)
+            Task { await refreshQueueStatus() }
+            if queueStatus?.manuallyPaused != true {
+                for i in watchedFolders.indices where watchedFolders[i].status == .paused {
+                    watchedFolders[i].status = .indexing
+                }
             }
 
         // MARK: System Events

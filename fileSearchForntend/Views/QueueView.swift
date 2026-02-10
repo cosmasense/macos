@@ -271,29 +271,71 @@ struct QueueView: View {
 // MARK: - Status Summary
 
 struct QueueStatusSummaryView: View {
+    @Environment(AppModel.self) private var model
     let status: QueueStatusResponse
 
     var body: some View {
-        HStack(spacing: 16) {
-            QueueCountPill(label: "Total", count: status.totalItems, color: .primary)
-            QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .blue)
-            QueueCountPill(label: "Waiting", count: status.waiting, color: .green)
-            QueueCountPill(label: "Processing", count: status.processing, color: .orange)
-
-            Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 16) {
+                QueueCountPill(label: "Total", count: status.totalItems, color: .primary)
+                QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .blue)
+                QueueCountPill(label: "Waiting", count: status.waiting, color: .green)
+                QueueCountPill(label: "Processing", count: status.processing, color: .orange)
+                Spacer()
+            }
 
             if status.paused {
-                HStack(spacing: 4) {
-                    Image(systemName: "pause.circle.fill")
-                    Text(status.schedulerPaused ? "Scheduler Paused" : "Paused")
+                HStack(spacing: 8) {
+                    Image(systemName: pauseIcon)
+                        .font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pauseTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                        if !pauseReason.isEmpty {
+                            Text(pauseReason)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
                 }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(.orange.opacity(0.15), in: Capsule())
+                .foregroundStyle(pauseBannerColor)
+                .padding(10)
+                .background(pauseBannerColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             }
         }
+    }
+
+    private var pauseIcon: String {
+        if status.schedulerPaused {
+            return "calendar.badge.clock"
+        }
+        return "pause.circle.fill"
+    }
+
+    private var pauseBannerColor: Color {
+        status.schedulerPaused ? .orange : .yellow
+    }
+
+    private var pauseTitle: String {
+        if status.manuallyPaused && status.schedulerPaused {
+            return "Paused by user and scheduler"
+        } else if status.schedulerPaused {
+            return "Paused by scheduler"
+        } else {
+            return "Paused by user"
+        }
+    }
+
+    private var pauseReason: String {
+        if status.schedulerPaused {
+            let labels = status.failingRules.compactMap { SchedulerRuleType(rawValue: $0)?.label }
+            if !labels.isEmpty {
+                return "Failing: " + labels.joined(separator: ", ")
+            }
+            return "Scheduler conditions not met"
+        }
+        return ""
     }
 }
 
@@ -345,14 +387,6 @@ struct QueueItemRow: View {
 
             Spacer()
 
-            // Action badge
-            Text(item.action.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(actionColor, in: Capsule())
-
             // Status pill
             Text(item.status.replacingOccurrences(of: "_", with: " ").capitalized)
                 .font(.system(size: 11, weight: .medium))
@@ -384,16 +418,6 @@ struct QueueItemRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var actionColor: Color {
-        switch item.action {
-        case "index": return .blue
-        case "delete": return .red
-        case "move": return .purple
-        case "embed_fallback": return .orange
-        default: return .gray
-        }
     }
 
     private var statusColor: Color {
