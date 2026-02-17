@@ -60,14 +60,14 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
     
     init(response: JobResponse) {
         let folderName = URL(fileURLWithPath: response.path).lastPathComponent
-        let status: IndexStatus = response.isActive ? .complete : .idle
-
+        // isActive means the watch job is enabled, not that indexing is complete.
+        // Real status/progress comes from SSE events; default to idle.
         self.init(
             backendID: response.id,
             name: folderName,
             path: response.path,
-            progress: response.isActive ? 1.0 : 0.0,
-            status: status,
+            progress: 0.0,
+            status: .idle,
             lastModified: response.updatedAt ?? response.createdAt ?? Date(),
             recursive: response.recursive,
             filePattern: response.filePattern

@@ -24,6 +24,8 @@ struct ContentView: View {
                     HomeView()
                 case .jobs:
                     JobsView()
+                case .queue:
+                    QueueView()
                 case .settings:
                     SettingsView()
                 }

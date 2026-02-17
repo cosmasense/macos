@@ -36,6 +36,9 @@ struct fileSearchForntendApp: App {
                             setHotkeyMonitoring(enabled: enabled)
                         })
                         .onChange(of: coordinator.isOverlayVisible) { _, newValue in
+                            // Note: This handler is for UI-driven state changes (e.g., menu commands)
+                            // The hotkey uses AppDelegate.toggleOverlay() which bypasses this
+                            // to work even when the main window is closed
                             overlayController.toggle(
                                 appModel: appModel,
                                 visible: newValue,
@@ -129,14 +132,14 @@ struct fileSearchForntendApp: App {
             appDelegate.stopHotkey()
             return
         }
-        
-        print("Registering hotkey: \(raw)")
-        
+
         // Register through app delegate so it stays alive
-        // The action closure is called on @MainActor by GlobalHotkeyMonitor
-        appDelegate.registerHotkey(raw) { @MainActor in
-            print("🔥 Hotkey triggered!")
-            self.appDelegate.coordinator?.toggleOverlay()
+        appDelegate.registerHotkey(raw) { [weak appDelegate] in
+            // Use AppDelegate's direct overlay toggle (bypasses SwiftUI onChange)
+            // This ensures the overlay works even when main window is closed
+            Task { @MainActor in
+                appDelegate?.toggleOverlay()
+            }
         }
     }
 

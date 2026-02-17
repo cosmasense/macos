@@ -206,33 +206,124 @@ class APIClient {
         return try await get(url: url)
     }
 
-    // MARK: - Settings
+    // MARK: - Queue
 
-    func fetchSettings() async throws -> BackendSettings {
+    func fetchQueueStatus() async throws -> QueueStatusResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/status")
+        return try await get(url: url)
+    }
+
+    func pauseQueue() async throws -> QueueActionResponse {
+        struct EmptyBody: Encodable {}
+        let url = baseURL.appendingPathComponent("/api/queue/pause")
+        return try await post(url: url, body: EmptyBody())
+    }
+
+    func resumeQueue() async throws -> QueueActionResponse {
+        struct EmptyBody: Encodable {}
+        let url = baseURL.appendingPathComponent("/api/queue/resume")
+        return try await post(url: url, body: EmptyBody())
+    }
+
+    func fetchQueueItems(offset: Int = 0, limit: Int = 50) async throws -> QueueItemsResponse {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/items"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
+    func removeQueueItem(itemId: String) async throws -> QueueActionResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/items/\(itemId)")
+        return try await delete(url: url)
+    }
+
+    func fetchFailedFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/failed"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
+    func fetchRecentFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/recent"), resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+        ]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
+    func reindexFile(filePath: String) async throws -> ReindexResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/reindex")
+        let request = ReindexRequest(filePath: filePath)
+        return try await post(url: url, body: request)
+    }
+
+    // MARK: - Scheduler
+
+    func fetchScheduler() async throws -> SchedulerResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler")
+        return try await get(url: url)
+    }
+
+    func updateScheduler(
+        enabled: Bool? = nil,
+        combineMode: String? = nil,
+        checkIntervalSeconds: Int? = nil,
+        rules: [SchedulerRuleRequest]? = nil
+    ) async throws -> SchedulerResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler")
+        let request = SchedulerUpdateRequest(
+            enabled: enabled,
+            combineMode: combineMode,
+            checkIntervalSeconds: checkIntervalSeconds,
+            rules: rules
+        )
+        return try await put(url: url, body: request)
+    }
+
+    // MARK: - System Metrics
+
+    func fetchSystemMetrics() async throws -> MetricsResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/metrics")
+        return try await get(url: url)
+    }
+
+    func testSchedulerRules() async throws -> SchedulerTestResponse {
+        let url = baseURL.appendingPathComponent("/api/queue/scheduler/test")
+        return try await post(url: url, body: Optional<String>.none)
+    }
+
+    // MARK: - Backend Settings
+
+    func fetchBackendSettings() async throws -> BackendSettingsResponse {
         let url = baseURL.appendingPathComponent("/api/settings/")
         return try await get(url: url)
     }
 
-    func fetchSettingsDefaults() async throws -> BackendSettings {
-        let url = baseURL.appendingPathComponent("/api/settings/defaults")
-        return try await get(url: url)
-    }
-
-    /// Update settings using dotted TOML paths.
-    /// The backend expects `{"dotted.path": value}` and returns the full updated settings.
-    func updateSetting(path: String, value: Any) async throws -> BackendSettings {
+    func updateBackendSetting(path: String, value: AnyCodableValue) async throws -> BackendSettingsResponse {
         let url = baseURL.appendingPathComponent("/api/settings/")
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let body: [String: Any] = [path: value]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        return try handleResponse(data: data, response: response)
+        let body: [String: AnyCodableValue] = [path: value]
+        return try await put(url: url, body: body)
     }
 
     // MARK: - Deprecated Summarizer Models (backend no longer supports these)

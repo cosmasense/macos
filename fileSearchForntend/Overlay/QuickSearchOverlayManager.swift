@@ -53,10 +53,12 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         dismissalCallback = onDismiss
         self.appModel = appModel
 
-        // Clear previous search state so the overlay starts collapsed
-        appModel.searchText = ""
-        appModel.searchResults = []
-        appModel.searchTokens = []
+        // Clear previous popup search state so the overlay starts fresh & collapsed
+        appModel.popupSearchText = ""
+        appModel.popupSearchResults = []
+        appModel.popupSearchTokens = []
+        appModel.popupSearchError = nil
+        appModel.popupOpenCount += 1
 
         if panel == nil {
             let contentView = QuickSearchOverlayView(onClose: { [weak self] in
@@ -73,13 +75,13 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             host.view.layer?.cornerCurve = .continuous
             host.view.layer?.masksToBounds = true
 
-            let panel = NonActivatingPanel(contentRect: defaultFrame())
-            panel.contentViewController = host
-            panel.delegate = self
-            panel.isMovable = false
+            let newPanel = NonActivatingPanel(contentRect: defaultFrame())
+            newPanel.contentViewController = host
+            newPanel.delegate = self
+            newPanel.isMovable = false
 
             hostingController = host
-            self.panel = panel
+            self.panel = newPanel
         }
 
         // Reset to collapsed size and re-center on current screen
@@ -107,7 +109,7 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
     func updateLayout(isExpanded: Bool) {
         guard let panel else { return }
         let height = isExpanded ? expandedHeight : collapsedHeight
-        
+
         // Calculate new frame keeping the bottom anchored
         let currentFrame = panel.frame
         let newFrame = NSRect(
@@ -116,7 +118,7 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             width: currentFrame.width,
             height: height
         )
-        
+
         panel.setFrame(newFrame, display: true, animate: true)
     }
 
@@ -135,11 +137,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         let primaryScreen = NSScreen.main ?? NSScreen.screens.first
         let frame = primaryScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let x = frame.midX - (panelWidth / 2)
-        
+
         // Keep the BOTTOM of the panel fixed at bottomOffset from screen bottom
         // Only expand upward by adjusting Y based on height
         let y = frame.minY + bottomOffset
-        
+
         return NSRect(x: x, y: y, width: panelWidth, height: height)
     }
 }

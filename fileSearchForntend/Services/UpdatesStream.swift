@@ -43,11 +43,13 @@ class UpdatesStream: NSObject {
     }
 
     func connect(to baseURL: URL) {
-        disconnect()
+        // Clean up synchronously (we're on @MainActor) to avoid race conditions
+        // where a deferred disconnect Task overwrites the new connection state.
+        cleanupConnection()
 
-        // Construct SSE URL
+        // Construct SSE URL (trailing slash required — Quart redirects without it)
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true)!
-        components.path = "/api/updates"
+        components.path = "/api/updates/"
 
         guard let sseURL = components.url else {
             onStateChange?(.failed("Invalid SSE URL"))
@@ -61,15 +63,19 @@ class UpdatesStream: NSObject {
 
     nonisolated func disconnect() {
         Task { @MainActor in
-            reconnectTimer?.invalidate()
-            reconnectTimer = nil
-            dataTask?.cancel()
-            dataTask = nil
-            eventBuffer = ""
-            currentURL = nil
-            reconnectAttempts = 0
-            onStateChange?(.idle)
+            self.cleanupConnection()
+            self.currentURL = nil
+            self.onStateChange?(.idle)
         }
+    }
+
+    private func cleanupConnection() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        dataTask?.cancel()
+        dataTask = nil
+        eventBuffer = ""
+        reconnectAttempts = 0
     }
 
     private func startConnection() {
@@ -170,17 +176,20 @@ extension UpdatesStream: URLSessionDataDelegate {
             return
         }
 
-        Task { @MainActor in
-            if (200...299).contains(httpResponse.statusCode) {
+        if (200...299).contains(httpResponse.statusCode) {
+            // Allow data flow immediately — don't defer behind main actor
+            completionHandler(.allow)
+            Task { @MainActor in
                 self.onStateChange?(.connected)
                 self.reconnectAttempts = 0
-                completionHandler(.allow)
-            } else {
+            }
+        } else {
+            completionHandler(.cancel)
+            Task { @MainActor in
                 let error = NSError(domain: "SSEError", code: httpResponse.statusCode, userInfo: [
                     NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode)"
                 ])
                 self.handleConnectionError(error)
-                completionHandler(.cancel)
             }
         }
     }
