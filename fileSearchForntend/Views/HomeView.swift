@@ -61,6 +61,8 @@ struct SearchFieldView: View {
     @Environment(AppModel.self) private var model
     @FocusState.Binding var isFocused: Bool
     @State private var selectedSuggestionIndex: Int = 0
+    @State private var backspaceMonitor: Any?
+    @State private var searchGradientRotation: Double = 0
 
     var body: some View {
         @Bindable var model = model
@@ -105,9 +107,6 @@ struct SearchFieldView: View {
                             handleDownArrow()
                             return .handled
                         }
-                        .onKeyPress(.delete) {
-                            return handleBackspace()
-                        }
                 }
 
                 // Clear button
@@ -127,35 +126,63 @@ struct SearchFieldView: View {
             .padding(.vertical, 12)
             // Layered Liquid Glass for enhanced visibility
             .background {
-                ZStack {
-                    // Bottom layer - more opaque
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(.regularMaterial)
-
-                    // Top layer - ultra thin for glass effect
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(.ultraThinMaterial)
+                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+                if #available(macOS 14.0, *) {
+                    Color.clear.glassEffect(in: shape)
+                } else {
+                    shape.fill(.ultraThinMaterial)
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 24)
-                    .strokeBorder(
-                        isFocused
-                            ? Color.accentColor.opacity(0.5)
-                            : Color.white.opacity(0.2),
-                        lineWidth: isFocused ? 2 : 1
-                    )
-                    .animation(.easeInOut(duration: 0.2), value: isFocused)
-            )
+            .overlay {
+                if model.isSearching {
+                    // Rotating gradient border while searching
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            AngularGradient(
+                                gradient: Gradient(colors: [
+                                    Color.accentColor.opacity(0.8),
+                                    Color.accentColor.opacity(0.1),
+                                    Color.cyan.opacity(0.4),
+                                    Color.accentColor.opacity(0.1),
+                                    Color.accentColor.opacity(0.8),
+                                ]),
+                                center: .center,
+                                angle: .degrees(searchGradientRotation)
+                            ),
+                            lineWidth: 2.5
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(
+                            isFocused
+                                ? Color.accentColor.opacity(0.5)
+                                : Color.white.opacity(0.2),
+                            lineWidth: isFocused ? 2 : 1
+                        )
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .animation(.easeInOut(duration: 0.3), value: model.isSearching)
             .shadow(
-                color: isFocused
-                    ? Color.accentColor.opacity(0.3)
-                    : Color.black.opacity(0.08),
-                radius: isFocused ? 16 : 12,
+                color: model.isSearching
+                    ? Color.accentColor.opacity(0.45)
+                    : (isFocused ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.08)),
+                radius: model.isSearching ? 20 : (isFocused ? 16 : 12),
                 x: 0,
-                y: isFocused ? 6 : 4
+                y: model.isSearching ? 0 : (isFocused ? 6 : 4)
             )
             .animation(.easeInOut(duration: 0.2), value: isFocused)
+            .onChange(of: model.isSearching) { _, isSearching in
+                if isSearching {
+                    withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                        searchGradientRotation = 360
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        searchGradientRotation = 0
+                    }
+                }
+            }
 
             // Folder suggestions dropdown
             if model.searchText.contains("@") {
@@ -169,6 +196,37 @@ struct SearchFieldView: View {
                 selectedSuggestionIndex = 0
             }
         }
+        .onAppear {
+            setupBackspaceMonitor()
+        }
+        .onDisappear {
+            removeBackspaceMonitor()
+        }
+    }
+
+    // MARK: - Backspace Monitor for Token Deletion
+
+    private func setupBackspaceMonitor() {
+        backspaceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Only handle when search field is focused
+            guard isFocused else { return event }
+
+            // Check for backspace key (keyCode 51)
+            if event.keyCode == 51 && model.searchText.isEmpty && !model.searchTokens.isEmpty {
+                _ = withAnimation(.easeInOut(duration: 0.2)) {
+                    model.searchTokens.removeLast()
+                }
+                return nil // Consume the event
+            }
+            return event
+        }
+    }
+
+    private func removeBackspaceMonitor() {
+        if let monitor = backspaceMonitor {
+            NSEvent.removeMonitor(monitor)
+            backspaceMonitor = nil
+        }
     }
 
     // MARK: - Keyboard Handlers
@@ -176,21 +234,6 @@ struct SearchFieldView: View {
     private func handleTextChange(oldValue: String, newValue: String) {
         selectedSuggestionIndex = 0
         checkForTokenCreation()
-    }
-
-    private func handleBackspace() -> KeyPress.Result {
-        // Delete the last token when text field is empty
-        // Return .ignored to allow normal text deletion when text exists
-        if model.searchText.isEmpty && !model.searchTokens.isEmpty {
-            // Prevent default backspace behavior and delete the token
-            withAnimation(.easeInOut(duration: 0.2)) {
-                model.searchTokens.removeLast()
-            }
-            // Return .handled to prevent the default backspace action
-            return .handled
-        }
-        // Return .ignored to allow normal text deletion
-        return .ignored
     }
 
     private func handleEnterKey() {

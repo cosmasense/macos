@@ -2,196 +2,353 @@
 //  SearchResultsView.swift
 //  fileSearchForntend
 //
-//  Displays search results with file metadata
+//  Displays search results with loading and error states
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
+import AppKit
+import QuickLookThumbnailing
+import QuickLookUI
 
 struct SearchResultsView: View {
     @Environment(AppModel.self) private var model
+    @State private var selectedResultID: String?
+    @FocusState private var resultsKeyFocus: Bool
+
+    /// Filters search results based on file existence and user-configured filter patterns.
+    ///
+    /// **Note: This is a temporary client-side implementation.**
+    /// In the future, filtering should be performed server-side via the search API
+    /// for better performance with large result sets. See `FileFilterService` for
+    /// the planned API format and `AppModel.shouldFilterFile()` for the filtering logic.
+    private var filteredResults: [SearchResultItem] {
+        model.searchResults.filter { item in
+            // Filter out files that don't exist
+            guard FileManager.default.fileExists(atPath: item.file.filePath) else { return false }
+            // Apply user-configured filter patterns
+            if model.shouldFilterFile(filePath: item.file.filePath, filename: item.file.filename) {
+                return false
+            }
+            return true
+        }
+    }
+
+    private var selectedResult: SearchResultItem? {
+        filteredResults.first { $0.id == selectedResultID }
+    }
+
+    private func openResult(_ result: SearchResultItem) {
+        do {
+            try model.withSecurityScopedAccess(for: result.file.filePath) {
+                let url = URL(fileURLWithPath: result.file.filePath)
+                NSWorkspace.shared.open(url)
+            }
+        } catch AppModel.BookmarkError.userCancelled {
+            print("User cancelled file access permission")
+        } catch AppModel.BookmarkError.folderUnknown {
+            // Show alert to user
+            let alert = NSAlert()
+            alert.messageText = "Cannot Open File"
+            alert.informativeText = "Unable to access this file. Please grant access to the containing folder when prompted."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Failed to Open File"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    private func previewResult(_ result: SearchResultItem) {
+        do {
+            try model.withSecurityScopedAccess(for: result.file.filePath) {
+                let url = URL(fileURLWithPath: result.file.filePath)
+                QuickLookPreviewCoordinator.shared.present(url: url)
+            }
+        } catch AppModel.BookmarkError.userCancelled {
+            print("User cancelled file access permission")
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Preview File"
+            alert.informativeText = "Unable to access this file. Please grant access to the containing folder."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    private func openSelectedResult() {
+        guard let result = selectedResult else { return }
+        openResult(result)
+    }
+
+    private func previewSelectedResult() {
+        guard let result = selectedResult else { return }
+        previewResult(result)
+    }
     
+    private func pruneSelectionIfNeeded() {
+        if let id = selectedResultID,
+           !filteredResults.contains(where: { $0.id == id }) {
+            selectedResultID = nil
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            if model.isSearching {
-                // Loading state
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                    Text("Searching...")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 60)
-            } else if let error = model.searchError {
-                // Error state
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.red.opacity(0.7))
-                    
-                    Text("Search Error")
-                        .font(.system(size: 18, weight: .semibold))
-                    
-                    Text(error)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                    
-                    Button("Try Again") {
-                        model.clearSearchResults()
+        @Bindable var model = model
+        return GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if model.isSearching {
+                        LoadingStateView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 60)
+                    } else if let error = model.searchError {
+                        ErrorStateView(error: error)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                    } else if !filteredResults.isEmpty {
+                        ResultsListView(
+                            results: filteredResults,
+                            selectedResultID: $selectedResultID,
+                            onSelect: { id in
+                                selectedResultID = id
+                                resultsKeyFocus = true
+                            },
+                            onOpen: { openResult($0) },
+                            onPreview: { previewResult($0) }
+                        )
+                    } else if !model.searchResults.isEmpty {
+                        FilteredResultsEmptyView()
+                    } else {
+                        EmptyResultsView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 60)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 60)
-            } else if model.searchResults.isEmpty {
-                // Empty state
-                VStack(spacing: 16) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.quaternary)
-                    
-                    Text("No results found")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    
-                    Text("Try a different search query")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
+            }
+            .frame(height: geometry.size.height)
+        }
+        .focusable(true)
+        .focusEffectDisabled()
+        .focused($resultsKeyFocus)
+        .onKeyPress(.downArrow) {
+            moveSelection(1)
+            return filteredResults.isEmpty ? .ignored : .handled
+        }
+        .onKeyPress(.upArrow) {
+            moveSelection(-1)
+            return filteredResults.isEmpty ? .ignored : .handled
+        }
+        .onKeyPress(.space) {
+            previewSelectedResult()
+            return selectedResultID == nil ? .ignored : .handled
+        }
+        .onKeyPress(.return) {
+            openSelectedResult()
+            return selectedResultID == nil ? .ignored : .handled
+        }
+        .onChange(of: filteredResults, initial: false) { _, _ in
+            pruneSelectionIfNeeded()
+        }
+    }
+    
+    private func moveSelection(_ delta: Int) {
+        guard !filteredResults.isEmpty else { return }
+        if selectedResultID == nil {
+            selectedResultID = filteredResults.first?.id
+            return
+        }
+        if let index = filteredResults.firstIndex(where: { $0.id == selectedResultID }),
+           filteredResults.indices.contains(index + delta) {
+            selectedResultID = filteredResults[index + delta].id
+        }
+    }
+}
+
+
+// MARK: - Loading State
+
+struct LoadingStateView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .frame(maxWidth: 32)
+                .frame(height: 32)
+
+            Text("Searching files...")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Error State
+
+struct ErrorStateView: View {
+    @Environment(AppModel.self) private var model
+    let error: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.red.opacity(0.8))
+
+            Text("Search Failed")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text(error)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.canRetryLastSearch {
+                Button(action: {
+                    model.retryLastSearch()
+                }) {
+                    Label("Retry Search", systemImage: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .medium))
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 60)
-            } else {
-                // Results list
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("\(model.searchResults.count) results")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            model.clearSearchResults()
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12))
-                                Text("Clear")
-                                    .font(.system(size: 12))
-                            }
-                            .foregroundStyle(.secondary)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 8)
+            }
+        }
+        .padding(.horizontal, 40)
+    }
+}
+
+// MARK: - Empty Results
+
+struct EmptyResultsView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48))
+                .foregroundStyle(.quaternary)
+
+            Text("No Results Found")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text("Try different search terms or check your folder filters")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+}
+
+// MARK: - Results List
+
+struct ResultsListView: View {
+    let results: [SearchResultItem]
+    @Binding var selectedResultID: String?
+    let onSelect: (String) -> Void
+    let onOpen: (SearchResultItem) -> Void
+    let onPreview: (SearchResultItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(results.count) result\(results.count == 1 ? "" : "s")")
+                .font(.system(size: 18, weight: .semibold))
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 8) {
+                ForEach(results) { result in
+                    SearchResultRow(
+                        result: result,
+                        isSelected: selectedResultID == result.id,
+                        onSelect: {
+                            onSelect(result.id)
+                        },
+                        onOpen: {
+                            onOpen(result)
+                        },
+                        onPreview: {
+                            onPreview(result)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 4)
-                    
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(model.searchResults) { result in
-                                SearchResultRow(result: result)
-                            }
-                        }
-                    }
+                    )
                 }
             }
         }
     }
 }
 
+// MARK: - Search Result Row
+
 struct SearchResultRow: View {
     let result: SearchResultItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onOpen: () -> Void
+    let onPreview: () -> Void
     @State private var isHovered = false
-    
+    @State private var showingDetail = false
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                // File icon
-                Image(systemName: fileIcon)
-                    .font(.system(size: 20))
-                    .foregroundStyle(fileIconColor)
-                    .frame(width: 24)
-                
+                FileThumbnailView(
+                    url: URL(fileURLWithPath: result.file.filePath),
+                    onPreview: onPreview
+                )
+
                 VStack(alignment: .leading, spacing: 4) {
-                    // Filename
-                    Text(result.file.filename)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    
-                    // File path
+                    HStack(spacing: 8) {
+                        Text(result.file.filename)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Text(String(format: "%.0f%%", result.relevanceScore * 100))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.quaternary.opacity(0.3), in: Capsule())
+
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.quaternary)
+                            .opacity(isHovered ? 1 : 0)
+                    }
+
                     Text(result.file.filePath)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                }
-                
-                Spacer()
-                
-                // Relevance score
-                HStack(spacing: 4) {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 10))
-                    Text(String(format: "%.0f%%", result.relevanceScore * 100))
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.yellow)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.yellow.opacity(0.15))
-                .clipShape(Capsule())
-            }
-            
-            // Title and summary if available
-            if let title = result.file.title, !title.isEmpty {
-                Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            
-            if let summary = result.file.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            
-            // Metadata
-            HStack(spacing: 16) {
-                Label(
-                    formatDate(result.file.modified),
-                    systemImage: "calendar"
-                )
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                
-                if !result.file.fileExtension.isEmpty {
-                    Label(
-                        result.file.fileExtension.uppercased(),
-                        systemImage: "doc"
-                    )
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                        .truncationMode(.middle)
+
+                    if let summary = result.file.summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                            .padding(.top, 4)
+                    }
                 }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+            RoundedRectangle(cornerRadius: 14)
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : (isHovered ? Color.primary.opacity(0.03) : Color.clear))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(
-                    isHovered ? Color.accentColor.opacity(0.3) : Color.clear,
-                    lineWidth: 1
-                )
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.white.opacity(0.08), lineWidth: isSelected ? 1 : 0.8)
         )
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -199,118 +356,208 @@ struct SearchResultRow: View {
                 isHovered = hovering
             }
         }
-        .onTapGesture {
-            openFile()
+        .simultaneousGesture(TapGesture(count: 1).onEnded {
+            onSelect()
+            showingDetail = true
+        })
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            onOpen()
+        })
+        .contextMenu {
+            Button("Quick Look") {
+                onPreview()
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
+            }
+        }
+        .popover(isPresented: $showingDetail) {
+            SearchResultDetailView(result: result) {
+                showingDetail = false
+            }
+            .frame(width: 360)
+            .padding()
         }
         .onDrag {
-            let url = URL(fileURLWithPath: result.file.filePath)
-            let itemProvider = NSItemProvider()
-            
-            // Register the file URL
-            itemProvider.registerFileRepresentation(forTypeIdentifier: "public.file-url", visibility: .all) { completion in
-                completion(url, true, nil)
-                return nil
-            }
-            
-            // Register the actual file data with appropriate UTType
-            if let utType = UTType(filenameExtension: result.file.fileExtension) {
-                itemProvider.registerFileRepresentation(forTypeIdentifier: utType.identifier, visibility: .all) { completion in
-                    completion(url, true, nil)
-                    return nil
-                }
-            }
-            
-            // Also register as NSURL for backwards compatibility
-            itemProvider.registerObject(url as NSURL, visibility: .all)
-            
-            return itemProvider
+            createDragProvider()
         }
     }
     
-    private var fileIcon: String {
-        switch result.file.fileExtension.lowercased() {
-        case "pdf":
-            return "doc.fill"
-        case "txt", "md":
-            return "doc.text.fill"
-        case "jpg", "jpeg", "png", "gif", "heic":
-            return "photo.fill"
-        case "mov", "mp4", "avi":
-            return "video.fill"
-        case "mp3", "wav", "aac":
-            return "music.note"
-        case "zip", "rar", "7z":
-            return "archivebox.fill"
-        case "swift", "py", "js", "java", "cpp", "c", "h":
-            return "chevron.left.forwardslash.chevron.right"
-        default:
-            return "doc.fill"
-        }
-    }
-    
-    private var fileIconColor: Color {
-        switch result.file.fileExtension.lowercased() {
-        case "pdf":
-            return .red
-        case "txt", "md":
-            return .blue
-        case "jpg", "jpeg", "png", "gif", "heic":
-            return .orange
-        case "mov", "mp4", "avi":
-            return .purple
-        case "mp3", "wav", "aac":
-            return .pink
-        case "swift", "py", "js", "java", "cpp", "c", "h":
-            return .green
-        default:
-            return .gray
-        }
-    }
-    
-    private func formatDate(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
-    
-    private func openFile() {
+    private func createDragProvider() -> NSItemProvider {
         let url = URL(fileURLWithPath: result.file.filePath)
-        NSWorkspace.shared.open(url)
+        
+        // Read file data and copy to temp location - this makes it work like Finder
+        var tempFileURL: URL?
+        do {
+            try model.withSecurityScopedAccess(for: url.path) {
+                // Copy file to temp directory
+                let tempDir = FileManager.default.temporaryDirectory
+                let tempFile = tempDir.appendingPathComponent(result.file.filename)
+                
+                // Remove if exists
+                try? FileManager.default.removeItem(at: tempFile)
+                
+                // Copy the file
+                try FileManager.default.copyItem(at: url, to: tempFile)
+                tempFileURL = tempFile
+            }
+        } catch {
+            print("Failed to copy file for drag: \(error)")
+        }
+        
+        // If we successfully created a temp copy, use that
+        // This makes it behave exactly like dragging from Finder!
+        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
+            provider.suggestedName = result.file.filename
+            return provider
+        }
+        
+        // Fallback: just provide the original URL
+        let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
+        provider.suggestedName = result.file.filename
+        return provider
+    }
+}
+
+// MARK: - File Thumbnail & Filter Toggle
+
+private struct FileThumbnailView: View {
+    let url: URL
+    var onPreview: () -> Void
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.quaternary.opacity(0.3))
+                    Image(systemName: "doc.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 40, height: 40)
+            }
+        }
+        .onAppear(perform: generateThumbnail)
+        .onTapGesture(count: 1, perform: onPreview)
+    }
+
+    private func generateThumbnail() {
+        guard image == nil else { return }
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: 120, height: 120),
+            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+            guard let cgImage = representation?.cgImage else { return }
+            let nsImage = NSImage(cgImage: cgImage, size: .zero)
+            DispatchQueue.main.async {
+                image = nsImage
+            }
+        }
+    }
+}
+
+private struct FilteredResultsEmptyView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+
+            Text("All results are hidden files")
+                .font(.system(size: 17, weight: .semibold))
+
+            Text("Update Settings → General to show files whose names start with “.”.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+}
+
+private struct SearchResultDetailView: View {
+    let result: SearchResultItem
+    let onClose: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(result.file.filename)
+                    .font(.title3.bold())
+                Spacer()
+                Button("Close") { onClose() }
+                    .buttonStyle(.borderless)
+            }
+            
+            Text(result.file.filePath)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            
+            if let summary = result.file.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Accessed \(format(date: result.file.accessed))", systemImage: "clock")
+                Label("Created \(format(date: result.file.created))", systemImage: "doc")
+                Label("Modified \(format(date: result.file.modified))", systemImage: "pencil")
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+        }
+    }
+    
+    private func format(date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Quick Look Coordinator
+
+private final class QuickLookPreviewCoordinator: NSObject, QLPreviewPanelDataSource {
+    static let shared = QuickLookPreviewCoordinator()
+    private var urls: [URL] = []
+
+    func present(url: URL) {
+        urls = [url]
+        guard let panel = QLPreviewPanel.shared() else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+        panel.dataSource = self
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        urls.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        urls[index] as NSURL
     }
 }
 
 #Preview {
-    let model = AppModel()
-    model.searchResults = [
-        SearchResultItem(
-            file: FileResponse(
-                filePath: "/Users/you/Documents/example.pdf",
-                filename: "example.pdf",
-                fileExtension: "pdf",
-                created: Date().addingTimeInterval(-86400 * 30),
-                modified: Date().addingTimeInterval(-86400 * 2),
-                accessed: Date(),
-                title: "Example Document",
-                summary: "This is an example document with some content for testing."
-            ),
-            relevanceScore: 0.95
-        ),
-        SearchResultItem(
-            file: FileResponse(
-                filePath: "/Users/you/Documents/notes.txt",
-                filename: "notes.txt",
-                fileExtension: "txt",
-                created: Date().addingTimeInterval(-86400 * 10),
-                modified: Date().addingTimeInterval(-86400),
-                accessed: Date(),
-                title: "My Notes",
-                summary: "Quick notes about various topics."
-            ),
-            relevanceScore: 0.78
-        )
-    ]
-    
-    return SearchResultsView()
-        .environment(model)
-        .frame(width: 680, height: 500)
+    SearchResultsView()
+        .environment(AppModel())
+        .frame(width: 800, height: 600)
 }

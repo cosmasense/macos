@@ -172,33 +172,34 @@ struct CompactSearchResultCard: View {
     
     private func createDragProvider() -> NSItemProvider {
         let url = URL(fileURLWithPath: result.file.filePath)
-        let provider = NSItemProvider()
         
-        // Register file URL using the proper data representation method from Stack Overflow
-        provider.registerDataRepresentation(forTypeIdentifier: "public.file-url", visibility: .all) { completion in
-            do {
-                let data = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-                completion(data, nil)
-            } catch {
-                let urlData = url.absoluteURL.dataRepresentation
-                completion(urlData, nil)
-            }
-            return nil
+        // Copy file to temp directory - this makes it work like Finder
+        var tempFileURL: URL?
+        do {
+            // Copy file to temp directory
+            let tempDir = FileManager.default.temporaryDirectory
+            let tempFile = tempDir.appendingPathComponent(result.file.filename)
+            
+            // Remove if exists
+            try? FileManager.default.removeItem(at: tempFile)
+            
+            // Copy the file
+            try FileManager.default.copyItem(at: url, to: tempFile)
+            tempFileURL = tempFile
+        } catch {
+            print("Failed to copy file for drag: \(error)")
         }
         
-        // Also register using the UTType file URL identifier
-        provider.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) { completion in
-            let urlData = url.absoluteURL.dataRepresentation
-            completion(urlData, nil)
-            return nil
+        // If we successfully created a temp copy, use that
+        // This makes it behave exactly like dragging from Finder!
+        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
+            provider.suggestedName = result.file.filename
+            return provider
         }
         
-        // Register as NSURL object for apps that expect URL objects (like Outlook)
-        provider.registerObject(url as NSURL, visibility: .all)
-        
-        // Set the suggested name
+        // Fallback: just provide the original URL
+        let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
         provider.suggestedName = result.file.filename
-        
         return provider
     }
 }
