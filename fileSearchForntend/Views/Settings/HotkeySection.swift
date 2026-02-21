@@ -13,6 +13,7 @@ import AppKit
 struct HotkeySection: View {
     @Environment(AppModel.self) private var model
     @Binding var hotkey: String
+    @AppStorage("overlayTriggerMode") private var triggerMode = "hotkey"
     @State private var isRecording = false
     @State private var hasAccessibilityPermission = false
     @Environment(\.controlHotkeyMonitoring) private var controlHotkeys
@@ -28,46 +29,68 @@ struct HotkeySection: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 12) {
-                Text(displayText)
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 200, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(.white.opacity(0.12))
-                    )
-
-                Button(isRecording ? "Cancel" : "Record") {
-                    isRecording.toggle()
-                    controlHotkeys(!isRecording)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button("Clear") {
-                    hotkey = ""
-                    controlHotkeys(true)
-                    isRecording = false
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .disabled(hotkey.isEmpty)
+            // Trigger mode picker
+            Picker("Trigger Mode", selection: $triggerMode) {
+                Text("Both Command Keys").tag("dualCommand")
+                Text("Custom Shortcut").tag("hotkey")
             }
-            .background(
-                HotkeyCaptureView(isRecording: $isRecording) { key in
-                    hotkey = key.lowercased()
-                    isRecording = false
-                    controlHotkeys(true)
-                }
-                .allowsHitTesting(false)
-            )
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 300)
 
-            Text("Click record, then press the key you'd like to use. Leave blank to disable the shortcut.")
-                .font(.system(size: 12))
+            if triggerMode == "dualCommand" {
+                HStack(spacing: 8) {
+                    Image(systemName: "command")
+                        .font(.system(size: 16))
+                    Text("Press both \u{2318} keys simultaneously to toggle Quick Search")
+                        .font(.system(size: 13))
+                }
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            } else {
+                HStack(spacing: 12) {
+                    Text(displayText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 200, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(.white.opacity(0.12))
+                        )
+
+                    Button(isRecording ? "Cancel" : "Record") {
+                        isRecording.toggle()
+                        controlHotkeys(!isRecording)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Clear") {
+                        hotkey = ""
+                        controlHotkeys(true)
+                        isRecording = false
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .disabled(hotkey.isEmpty)
+                }
+                .background(
+                    HotkeyCaptureView(isRecording: $isRecording) { key in
+                        hotkey = key.lowercased()
+                        isRecording = false
+                        controlHotkeys(true)
+                    }
+                    .allowsHitTesting(false)
+                )
+
+                Text("Click record, then press the key you'd like to use. Leave blank to disable the shortcut.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
 
             // Permissions Section
             VStack(alignment: .leading, spacing: 10) {

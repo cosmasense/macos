@@ -10,10 +10,12 @@ import AppKit
 class AppDelegate: NSObject, NSApplicationDelegate {
     // Strong reference - stays alive for app lifetime
     var hotkeyMonitor: GlobalHotkeyMonitor?
+    var dualCmdMonitor: DualCommandKeyMonitor?
     var overlayController: QuickSearchOverlayController?
     var coordinator: AppCoordinator?
     var appModel: AppModel?
     var statusBarController: StatusBarController?
+    var cosmaManager: CosmaManager?
 
     private static let visibilityModeKey = "appVisibilityMode"
 
@@ -22,6 +24,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Apply saved visibility mode
         applyVisibilityMode(currentVisibilityMode)
+
+        // Listen for visibility mode changes from settings UI
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleVisibilityModeChanged(_:)),
+            name: .visibilityModeChanged,
+            object: nil
+        )
+    }
+
+    @objc private func handleVisibilityModeChanged(_ notification: Notification) {
+        guard let rawValue = notification.object as? String,
+              let mode = AppVisibilityMode(rawValue: rawValue) else { return }
+        print("📬 Received visibility mode change notification: \(mode.rawValue)")
+        applyVisibilityMode(mode)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        cosmaManager?.teardown()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -43,8 +64,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor?.update(hotkey: hotkey, action: action)
     }
 
+    func registerDualCommandKey(action: @escaping () -> Void) {
+        stopHotkey()
+        if dualCmdMonitor == nil {
+            dualCmdMonitor = DualCommandKeyMonitor()
+            print("Created new DualCommandKeyMonitor in AppDelegate")
+        }
+        dualCmdMonitor?.start(action: action)
+    }
+
     func stopHotkey() {
         hotkeyMonitor?.stop()
+        dualCmdMonitor?.stop()
     }
 
     // MARK: - Status Bar
@@ -76,7 +107,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController?.onQuit = {
             NSApplication.shared.terminate(nil)
         }
+        statusBarController?.onStartBackend = { [weak self] in
+            guard let cm = self?.cosmaManager else { return }
+            Task { @MainActor in
+                await cm.startManagedBackend()
+            }
+        }
+        statusBarController?.onStopBackend = { [weak self] in
+            self?.cosmaManager?.stopServer()
+        }
+        statusBarController?.onRestartBackend = { [weak self] in
+            guard let cm = self?.cosmaManager else { return }
+            Task { @MainActor in
+                await cm.restartServer()
+            }
+        }
+        statusBarController?.onCheckForUpdates = { [weak self] in
+            guard let cm = self?.cosmaManager else { return }
+            Task { @MainActor in
+                await cm.checkForUpdates()
+            }
+        }
         statusBarController?.setup()
+        syncStatusBarWithCosmaManager()
         print("✅ Status bar controller initialized and setup called")
     }
 
@@ -92,6 +145,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Find and show main window
         if let window = NSApp.windows.first(where: { $0.title == "Search Files" || $0.contentView != nil }) {
             window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    // MARK: - CosmaManager Sync
+
+    func syncStatusBarWithCosmaManager() {
+        guard let cm = cosmaManager, let sbc = statusBarController else { return }
+        sbc.isManagedMode = cm.isManaged
+        sbc.backendIsRunning = cm.isRunning
+        sbc.ownsProcess = cm.ownsProcess
+        sbc.backendStatusText = cm.stageDescription
+
+        if case .available(_, let latest) = cm.updateStatus {
+            sbc.updateAvailableText = "Update available: v\(latest)"
+        } else {
+            sbc.updateAvailableText = nil
         }
     }
 

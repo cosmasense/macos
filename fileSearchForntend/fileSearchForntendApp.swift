@@ -14,9 +14,11 @@ struct fileSearchForntendApp: App {
     @State private var appModel = AppModel()
     @State private var coordinator = AppCoordinator()
     @State private var overlayController = QuickSearchOverlayController()
+    @State private var cosmaManager = CosmaManager()
     @State private var hotkeyMonitoringEnabled = true
     @State private var isBackendConnected = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
+    @AppStorage("overlayTriggerMode") private var overlayTriggerMode = "hotkey"
 
     var body: some Scene {
         WindowGroup {
@@ -24,6 +26,7 @@ struct fileSearchForntendApp: App {
                 if isBackendConnected {
                     ContentView()
                         .environment(appModel)
+                        .environment(cosmaManager)
                         .frame(minWidth: 900, minHeight: 600)
                         .containerBackground(.ultraThinMaterial, for: .window)
                         .environment(\.presentQuickSearchOverlay, {
@@ -48,13 +51,17 @@ struct fileSearchForntendApp: App {
                             )
                         }
                         .onChange(of: overlayHotkey) { _, newValue in
-                            if hotkeyMonitoringEnabled {
+                            if hotkeyMonitoringEnabled && overlayTriggerMode == "hotkey" {
                                 registerHotkey(newValue)
                             }
                         }
+                        .onChange(of: overlayTriggerMode) { _, _ in
+                            if hotkeyMonitoringEnabled {
+                                registerActiveTrigger()
+                            }
+                        }
                         .onAppear {
-                            // Register hotkey when main view appears
-                            registerHotkey(overlayHotkey)
+                            registerActiveTrigger()
                         }
                 } else {
                     BackendConnectionView(onConnected: {
@@ -63,6 +70,7 @@ struct fileSearchForntendApp: App {
                         }
                     })
                     .environment(appModel)
+                    .environment(cosmaManager)
                     .frame(minWidth: 500, minHeight: 400)
                 }
             }
@@ -72,13 +80,59 @@ struct fileSearchForntendApp: App {
                 appDelegate.coordinator = coordinator
                 appDelegate.overlayController = overlayController
                 appDelegate.appModel = appModel
+                appDelegate.cosmaManager = cosmaManager
+
+                // Auto-start managed backend or detect existing one
+                Task {
+                    // On first launch, if a backend is already running, disable managed mode
+                    if cosmaManager.isManaged && !UserDefaults.standard.bool(forKey: "cosmaManagerEnabledHasBeenSet") {
+                        do {
+                            let _ = try await APIClient.shared.fetchStatus()
+                            // Backend already running — user manages it themselves
+                            cosmaManager.isManaged = false
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isBackendConnected = true
+                            }
+                            return
+                        } catch {
+                            // No backend running — keep managed mode on, proceed with install
+                        }
+                    }
+
+                    guard cosmaManager.isManaged else { return }
+
+                    await cosmaManager.startManagedBackend()
+                    // Poll for backend readiness
+                    for _ in 0..<30 {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        do {
+                            let _ = try await APIClient.shared.fetchStatus()
+                            await MainActor.run {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isBackendConnected = true
+                                }
+                            }
+                            return
+                        } catch {}
+                    }
+                }
+            }
+            .onChange(of: cosmaManager.setupStage) {
+                appDelegate.syncStatusBarWithCosmaManager()
+            }
+            .onChange(of: cosmaManager.updateStatus) {
+                appDelegate.syncStatusBarWithCosmaManager()
             }
         }
         .windowStyle(.automatic)
         .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
             CommandMenu("Quick Search") {
-                if let shortcut = parsedShortcut {
+                if overlayTriggerMode == "dualCommand" {
+                    Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search (Both \u{2318} Keys)") {
+                        coordinator.toggleOverlay()
+                    }
+                } else if let shortcut = parsedShortcut {
                     Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search") {
                         coordinator.toggleOverlay()
                     }
@@ -127,6 +181,20 @@ struct fileSearchForntendApp: App {
         return modifiers
     }
 
+    private func registerActiveTrigger() {
+        appDelegate.stopHotkey()
+
+        if overlayTriggerMode == "dualCommand" {
+            appDelegate.registerDualCommandKey { [weak appDelegate] in
+                Task { @MainActor in
+                    appDelegate?.toggleOverlay()
+                }
+            }
+        } else {
+            registerHotkey(overlayHotkey)
+        }
+    }
+
     private func registerHotkey(_ raw: String) {
         guard !raw.isEmpty else {
             appDelegate.stopHotkey()
@@ -146,7 +214,7 @@ struct fileSearchForntendApp: App {
     private func setHotkeyMonitoring(enabled: Bool) {
         hotkeyMonitoringEnabled = enabled
         if enabled {
-            registerHotkey(overlayHotkey)
+            registerActiveTrigger()
         } else {
             appDelegate.stopHotkey()
         }

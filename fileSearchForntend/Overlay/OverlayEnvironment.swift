@@ -19,6 +19,10 @@ private struct ControlHotkeyMonitoringKey: EnvironmentKey {
     static let defaultValue: (Bool) -> Void = { _ in }
 }
 
+private struct QuickSearchDragStateKey: EnvironmentKey {
+    static let defaultValue: (Bool) -> Void = { _ in }
+}
+
 extension EnvironmentValues {
     var presentQuickSearchOverlay: () -> Void {
         get { self[PresentQuickSearchOverlayKey.self] }
@@ -33,5 +37,10 @@ extension EnvironmentValues {
     var controlHotkeyMonitoring: (Bool) -> Void {
         get { self[ControlHotkeyMonitoringKey.self] }
         set { self[ControlHotkeyMonitoringKey.self] = newValue }
+    }
+
+    var quickSearchDragState: (Bool) -> Void {
+        get { self[QuickSearchDragStateKey.self] }
+        set { self[QuickSearchDragStateKey.self] = newValue }
     }
 }

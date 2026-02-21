@@ -19,8 +19,8 @@ struct QuickSearchOverlayView: View {
     @FocusState private var isSearchFocused: Bool
     @State private var debounceTask: Task<Void, Never>?
     @State private var isExpanded: Bool = false
-    private let collapsedHeight: CGFloat = 140
-    private let expandedHeight: CGFloat = 380
+    private let collapsedHeight: CGFloat = 96
+    private let expandedHeight: CGFloat = 286
 
     /// Filters popup search results based on file existence and user-configured filter patterns.
     private var filteredResults: [SearchResultItem] {
@@ -37,30 +37,7 @@ struct QuickSearchOverlayView: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .background(.thinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.escape, modifiers: [])
-                .help("Close")
-
-                DragHandle()
-                    .frame(height: 18)
-                    .padding(.trailing, 6)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
-
-                Spacer()
-            }
-
+        VStack(spacing: 14) {
             PopupSearchFieldView(isFocused: $isSearchFocused)
 
             if isExpanded {
@@ -69,9 +46,16 @@ struct QuickSearchOverlayView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.97, anchor: .top)))
             }
         }
+        .overlay {
+            Button(action: onClose) { EmptyView() }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
+                .frame(width: 0, height: 0)
+                .opacity(0)
+        }
         .padding(.horizontal, 30)
-        .padding(.vertical, 20)
-        .frame(width: 940, height: isExpanded ? expandedHeight : collapsedHeight, alignment: .topLeading)
+        .padding(.vertical, 24)
+        .frame(width: 626, height: isExpanded ? expandedHeight : collapsedHeight)
         .background {
             let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
             ZStack {
@@ -95,8 +79,8 @@ struct QuickSearchOverlayView: View {
                     .strokeBorder(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.78),
-                                Color.white.opacity(0.34)
+                                Color.white.opacity(0.6),
+                                Color.black.opacity(0.12)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -111,8 +95,8 @@ struct QuickSearchOverlayView: View {
                 .strokeBorder(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.45),
-                            Color.white.opacity(0.12)
+                            Color.white.opacity(0.35),
+                            Color.black.opacity(0.15)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -185,12 +169,12 @@ struct QuickSearchOverlayView: View {
                     HStack(spacing: 12) {
                         ForEach(Array(filteredResults.prefix(20).enumerated()), id: \.element.id) { index, item in
                             OverlayFileTile(result: item, appearIndex: index)
-                                .frame(width: 150, height: 180)
+                                .frame(width: 150, height: 170)
                         }
                     }
                     .padding(.horizontal, 4)
                 }
-                .frame(maxWidth: .infinity, minHeight: 190, idealHeight: 200)
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -203,6 +187,7 @@ private struct OverlayFileTile: View {
     let result: SearchResultItem
     let appearIndex: Int
     @Environment(AppModel.self) private var model
+    @Environment(\.quickSearchDragState) private var dragState
     @State private var thumbnail: NSImage?
     @State private var appeared: Bool = false
     @State private var thumbnailVisible: Bool = false
@@ -335,7 +320,8 @@ private struct OverlayFileTile: View {
             }
         }
         .onDrag {
-            dragProvider()
+            dragState(true)
+            return dragProvider()
         } preview: {
             let icon = thumbnail ?? NSWorkspace.shared.icon(forFile: result.file.filePath)
             VStack {
@@ -617,14 +603,6 @@ struct PopupSearchFieldView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: isFocused)
             .animation(.easeInOut(duration: 0.3), value: model.popupIsSearching)
-            .shadow(
-                color: model.popupIsSearching
-                    ? Color.accentColor.opacity(0.5)
-                    : (isFocused ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.08)),
-                radius: model.popupIsSearching ? 24 : (isFocused ? 16 : 12),
-                x: 0,
-                y: model.popupIsSearching ? 0 : (isFocused ? 6 : 4)
-            )
             .onChange(of: model.popupIsSearching) { _, searching in
                 if searching {
                     withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {

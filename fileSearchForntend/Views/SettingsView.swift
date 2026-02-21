@@ -17,6 +17,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(CosmaManager.self) private var cosmaManager
     @Environment(\.presentQuickSearchOverlay) private var presentOverlay
     @AppStorage("launchAtStartup") private var launchAtStartup = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
@@ -25,6 +26,38 @@ struct SettingsView: View {
         @Bindable var model = model
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
+                // Update banner
+                if case .available(let installed, let latest) = cosmaManager.updateStatus {
+                    HStack {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .foregroundStyle(.white)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Cosma Update Available")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                            Text("v\(installed) → v\(latest)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        Spacer()
+                        Button("Update Now") {
+                            Task { await cosmaManager.performUpdate() }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.white)
+                        .controlSize(.small)
+
+                        Button("Dismiss") {
+                            cosmaManager.dismissUpdate()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .controlSize(.small)
+                    }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.blue))
+                }
+
                 HotkeySection(hotkey: $overlayHotkey)
 
                 Button {
@@ -74,5 +107,6 @@ struct SettingsView: View {
 
 #Preview {
     SettingsView()
+        .environment(CosmaManager())
         .frame(width: 800, height: 600)
 }

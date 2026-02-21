@@ -12,9 +12,23 @@ final class StatusBarController: NSObject {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
 
+    // Existing callbacks
     var onShowMainWindow: (() -> Void)?
     var onShowQuickSearch: (() -> Void)?
     var onQuit: (() -> Void)?
+
+    // Backend management callbacks
+    var onStartBackend: (() -> Void)?
+    var onStopBackend: (() -> Void)?
+    var onRestartBackend: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
+
+    // Backend state (triggers menu rebuild on change)
+    var isManagedMode: Bool = false { didSet { if oldValue != isManagedMode { rebuildMenu() } } }
+    var backendIsRunning: Bool = false { didSet { if oldValue != backendIsRunning { rebuildMenu() } } }
+    var ownsProcess: Bool = false { didSet { if oldValue != ownsProcess { rebuildMenu() } } }
+    var backendStatusText: String = "" { didSet { if oldValue != backendStatusText { rebuildMenu() } } }
+    var updateAvailableText: String? { didSet { if oldValue != updateAvailableText { rebuildMenu() } } }
 
     func setup() {
         // Ensure we're on main thread for UI operations
@@ -36,7 +50,7 @@ final class StatusBarController: NSObject {
             button.image?.isTemplate = true
         }
 
-        setupMenu()
+        rebuildMenu()
         statusItem?.menu = menu
     }
 
@@ -55,8 +69,10 @@ final class StatusBarController: NSObject {
         }
     }
 
-    private func setupMenu() {
-        menu = NSMenu()
+    private func rebuildMenu() {
+        guard statusItem != nil else { return }
+
+        let newMenu = NSMenu()
 
         // Show Main Window
         let showWindowItem = NSMenuItem(
@@ -65,7 +81,7 @@ final class StatusBarController: NSObject {
             keyEquivalent: ""
         )
         showWindowItem.target = self
-        menu?.addItem(showWindowItem)
+        newMenu.addItem(showWindowItem)
 
         // Quick Search
         let quickSearchItem = NSMenuItem(
@@ -74,9 +90,64 @@ final class StatusBarController: NSObject {
             keyEquivalent: ""
         )
         quickSearchItem.target = self
-        menu?.addItem(quickSearchItem)
+        newMenu.addItem(quickSearchItem)
 
-        menu?.addItem(NSMenuItem.separator())
+        // Backend section (only if managed mode)
+        if isManagedMode {
+            newMenu.addItem(NSMenuItem.separator())
+
+            // Status line (disabled info item)
+            let statusItem = NSMenuItem(
+                title: "Backend: \(backendStatusText)",
+                action: nil,
+                keyEquivalent: ""
+            )
+            statusItem.isEnabled = false
+            newMenu.addItem(statusItem)
+
+            // Start/Stop/Restart (only when we own the process)
+            if ownsProcess {
+                if backendIsRunning {
+                    let restartItem = NSMenuItem(
+                        title: "Restart Backend",
+                        action: #selector(restartBackend),
+                        keyEquivalent: ""
+                    )
+                    restartItem.target = self
+                    newMenu.addItem(restartItem)
+
+                    let stopItem = NSMenuItem(
+                        title: "Stop Backend",
+                        action: #selector(stopBackend),
+                        keyEquivalent: ""
+                    )
+                    stopItem.target = self
+                    newMenu.addItem(stopItem)
+                } else {
+                    let startItem = NSMenuItem(
+                        title: "Start Backend",
+                        action: #selector(startBackend),
+                        keyEquivalent: ""
+                    )
+                    startItem.target = self
+                    newMenu.addItem(startItem)
+                }
+            }
+
+            // Update available
+            if let updateText = updateAvailableText {
+                let updateItem = NSMenuItem(
+                    title: updateText,
+                    action: #selector(checkForUpdates),
+                    keyEquivalent: ""
+                )
+                updateItem.target = self
+                updateItem.image = NSImage(systemSymbolName: "arrow.up.circle", accessibilityDescription: "Update")
+                newMenu.addItem(updateItem)
+            }
+        }
+
+        newMenu.addItem(NSMenuItem.separator())
 
         // Quit
         let quitItem = NSMenuItem(
@@ -85,7 +156,10 @@ final class StatusBarController: NSObject {
             keyEquivalent: "q"
         )
         quitItem.target = self
-        menu?.addItem(quitItem)
+        newMenu.addItem(quitItem)
+
+        menu = newMenu
+        self.statusItem?.menu = newMenu
     }
 
     @objc private func showMainWindow() {
@@ -96,9 +170,31 @@ final class StatusBarController: NSObject {
         onShowQuickSearch?()
     }
 
+    @objc private func startBackend() {
+        onStartBackend?()
+    }
+
+    @objc private func stopBackend() {
+        onStopBackend?()
+    }
+
+    @objc private func restartBackend() {
+        onRestartBackend?()
+    }
+
+    @objc private func checkForUpdates() {
+        onCheckForUpdates?()
+    }
+
     @objc private func quitApp() {
         onQuit?()
     }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    static let visibilityModeChanged = Notification.Name("visibilityModeChanged")
 }
 
 // MARK: - App Visibility Mode

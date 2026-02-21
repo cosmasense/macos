@@ -12,11 +12,13 @@ import ServiceManagement
 
 struct GeneralSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(CosmaManager.self) private var cosmaManager
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
     @State private var connectionTestState: ConnectionTestState = .idle
     @State private var loginItemError: String?
     @State private var currentVisibilityMode: AppVisibilityMode = .dockOnly
+    @State private var showingLogs = false
 
     enum ConnectionTestState: Equatable {
         case idle
@@ -89,29 +91,113 @@ struct GeneralSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Managed Backend
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { cosmaManager.isManaged },
+                    set: { newValue in
+                        cosmaManager.isManaged = newValue
+                        if newValue {
+                            Task { await cosmaManager.startManagedBackend() }
+                        } else {
+                            cosmaManager.stopServer()
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Managed Backend")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Text("Automatically install and run the cosma backend")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if cosmaManager.isManaged {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(cosmaManager.isRunning ? .green : .orange)
+                            .frame(width: 8, height: 8)
+
+                        Text(cosmaManager.stageDescription)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+
+                        if let version = cosmaManager.installedVersion {
+                            Text("v\(version)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    if cosmaManager.isRunning {
+                        HStack(spacing: 8) {
+                            if cosmaManager.ownsProcess {
+                                Button("Restart") {
+                                    Task { await cosmaManager.restartServer() }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button("Stop") {
+                                    cosmaManager.stopServer()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+
+                            Button("Check for Updates") {
+                                Task { await cosmaManager.checkForUpdates() }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    Button {
+                        showingLogs = true
+                    } label: {
+                        Label("View Logs", systemImage: "terminal")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
             // Backend URL
             VStack(alignment: .leading, spacing: 8) {
                 Text("Backend URL")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(cosmaManager.isManaged ? .tertiary : .secondary)
 
                 HStack(spacing: 12) {
                     TextField("http://localhost:8000", text: $backendURL)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 400)
                         .font(.system(size: 13, design: .monospaced))
+                        .disabled(cosmaManager.isManaged)
+                        .opacity(cosmaManager.isManaged ? 0.5 : 1.0)
 
                     Button("Test Connection") {
                         testBackendConnection()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(cosmaManager.isManaged)
 
                     if connectionTestState == .testing {
                         ProgressView()
                             .frame(width: 16, height: 16)
                             .controlSize(.small)
                     }
+                }
+
+                if cosmaManager.isManaged {
+                    Text("URL is managed automatically when Managed Backend is enabled.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
                 }
 
                 switch connectionTestState {
@@ -123,6 +209,9 @@ struct GeneralSection: View {
                     EmptyView()
                 }
             }
+        }
+        .sheet(isPresented: $showingLogs) {
+            BackendLogView(cosmaManager: cosmaManager)
         }
     }
 
@@ -165,16 +254,81 @@ struct GeneralSection: View {
     }
 
     private func syncVisibilityMode() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            currentVisibilityMode = appDelegate.currentVisibilityMode
-        }
+        let rawValue = UserDefaults.standard.string(forKey: "appVisibilityMode") ?? AppVisibilityMode.dockOnly.rawValue
+        currentVisibilityMode = AppVisibilityMode(rawValue: rawValue) ?? .dockOnly
     }
 
     private func setVisibilityMode(_ mode: AppVisibilityMode) {
         currentVisibilityMode = mode
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.currentVisibilityMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "appVisibilityMode")
+        // Notify AppDelegate through notification since direct cast can fail
+        NotificationCenter.default.post(name: .visibilityModeChanged, object: mode.rawValue)
+    }
+}
+
+// MARK: - Backend Log View
+
+struct BackendLogView: View {
+    let cosmaManager: CosmaManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Title bar
+            HStack {
+                Image(systemName: "terminal")
+                Text("Backend Logs")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+
+                Button {
+                    cosmaManager.serverLog = ""
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear logs")
+
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(12)
+
+            Divider()
+
+            // Log content
+            ScrollViewReader { proxy in
+                ScrollView {
+                    if cosmaManager.serverLog.isEmpty {
+                        Text("No log output yet.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.top, 40)
+                    } else {
+                        Text(cosmaManager.serverLog)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .id("logBottom")
+                    }
+                }
+                .onChange(of: cosmaManager.serverLog) {
+                    withAnimation {
+                        proxy.scrollTo("logBottom", anchor: .bottom)
+                    }
+                }
+            }
+            .background(Color(nsColor: .textBackgroundColor))
         }
+        .frame(width: 600, height: 400)
     }
 }
 
