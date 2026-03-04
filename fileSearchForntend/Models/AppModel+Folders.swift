@@ -112,6 +112,17 @@ extension AppModel {
         }
     }
 
+    /// Fetches aggregate file statistics from the backend
+    func refreshFileStats() async {
+        do {
+            fileStats = try await apiClient.fetchFileStats()
+        } catch {
+            #if DEBUG
+            print("Failed to fetch file stats: \(error.localizedDescription)")
+            #endif
+        }
+    }
+
     /// Dismisses the issue banner for a folder
     func dismissFolderIssue(_ folder: WatchedFolder) {
         guard let index = watchedFolders.firstIndex(where: { $0.id == folder.id }) else { return }

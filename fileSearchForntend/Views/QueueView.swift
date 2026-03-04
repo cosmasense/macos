@@ -2,8 +2,9 @@
 //  QueueView.swift
 //  fileSearchForntend
 //
-//  Queue management view: status summary, pause/resume, item list
-//  Three tabs: Current | Recent | Failed
+//  Queue content view: status summary, pause/resume, item list
+//  Embedded inside FoldersView as the "Processing" tab.
+//  Three sub-tabs: Current | Recent | Failed
 //
 
 import SwiftUI
@@ -16,64 +17,24 @@ enum QueueTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct QueueView: View {
+/// Self-contained queue view that manages its own polling lifecycle.
+/// Used as embedded content in FoldersView's "Processing" tab.
+struct QueueContentView: View {
     @Environment(AppModel.self) private var model
     @State private var pollingTask: Task<Void, Never>?
     @State private var selectedTab: QueueTab = .current
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Queue")
-                    .font(.system(size: 22, weight: .semibold))
-
-                Spacer()
-
-                if model.isLoadingQueue {
-                    ProgressView()
-                        .frame(width: 16, height: 16)
-                        .controlSize(.small)
-                        .padding(.horizontal, 6)
-                }
-
-                Button {
-                    Task {
-                        await refreshCurrentTab()
-                    }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Refresh")
-
-                if selectedTab == .current, let status = model.queueStatus {
-                    Button {
-                        Task { await model.toggleQueuePause() }
-                    } label: {
-                        Label(
-                            status.manuallyPaused ? "Resume" : "Pause",
-                            systemImage: status.manuallyPaused ? "play.fill" : "pause.fill"
-                        )
-                        .font(.system(size: 14, weight: .medium))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 20)
-
-            // Tab picker
-            Picker("Tab", selection: $selectedTab) {
+            // Sub-tab picker
+            Picker("Queue Tab", selection: $selectedTab) {
                 ForEach(QueueTab.allCases) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 32)
-            .padding(.bottom, 12)
+            .padding(.vertical, 12)
 
             // Status summary (only on current tab)
             if selectedTab == .current, let status = model.queueStatus {
@@ -94,10 +55,6 @@ struct QueueView: View {
                 failedTabContent
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Queue")
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .background(.ultraThinMaterial)
         .task {
             await model.refreshQueueStatus()
             await model.refreshQueueItems()
@@ -242,18 +199,6 @@ struct QueueView: View {
     }
 
     // MARK: - Helpers
-
-    private func refreshCurrentTab() async {
-        switch selectedTab {
-        case .current:
-            await model.refreshQueueStatus()
-            await model.refreshQueueItems()
-        case .recent:
-            await model.refreshRecentFiles()
-        case .failed:
-            await model.refreshFailedFiles()
-        }
-    }
 
     private func startPolling() {
         pollingTask?.cancel()
@@ -521,7 +466,7 @@ struct FailedFileRow: View {
 }
 
 #Preview {
-    QueueView()
+    QueueContentView()
         .environment(AppModel())
         .frame(width: 1000, height: 700)
 }

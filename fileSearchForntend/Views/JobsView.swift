@@ -3,86 +3,128 @@
 //  fileSearchForntend
 //
 //  Manages watched folders and displays indexing progress
-//  Redesigned for macOS 26 with compact layout
+//  Includes merged Queue (Processing) tab via segmented picker
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct JobsView: View {
+// MARK: - Folders Tab Enum
+
+enum FoldersTab: String, CaseIterable, Identifiable {
+    case folders = "Folders"
+    case processing = "Processing"
+
+    var id: String { rawValue }
+}
+
+struct FoldersView: View {
     @Environment(AppModel.self) private var model
     @State private var showFolderPicker = false
+    @State private var selectedTab: FoldersTab = .folders
 
     var body: some View {
         @Bindable var model = model
-        
+
         VStack(spacing: 0) {
-            // Header with Add Folder button
+            // Header
             HStack {
-                Text("Watched Folders")
+                Text("Folders")
                     .font(.system(size: 22, weight: .semibold))
-                
-                ConnectionStatusView(state: model.backendConnectionState)
-                    .padding(.leading, 12)
 
                 Spacer()
-                
+
                 Button {
                     Task {
-                        await model.refreshWatchedFolders()
+                        if selectedTab == .folders {
+                            await model.refreshWatchedFolders()
+                        } else {
+                            await model.refreshQueueStatus()
+                            await model.refreshQueueItems()
+                        }
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 14, weight: .medium))
                 }
                 .buttonStyle(.plain)
-                .help("Refresh from backend")
-                
-                if model.isLoadingWatchedFolders {
+                .help("Refresh")
+
+                if model.isLoadingWatchedFolders || model.isLoadingQueue {
                     ProgressView()
                         .frame(width: 16, height: 16)
                         .controlSize(.small)
                         .padding(.horizontal, 6)
                 }
 
-                Button(action: {
-                    showFolderPicker = true
-                }) {
-                    Label("Add Folder", systemImage: "plus")
-                        .font(.system(size: 14, weight: .medium))
+                if selectedTab == .folders {
+                    Button(action: {
+                        showFolderPicker = true
+                    }) {
+                        Label("Add Folder", systemImage: "plus")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+
+                if selectedTab == .processing, let status = model.queueStatus {
+                    Button {
+                        Task { await model.toggleQueuePause() }
+                    } label: {
+                        Label(
+                            status.manuallyPaused ? "Resume" : "Pause",
+                            systemImage: status.manuallyPaused ? "play.fill" : "pause.fill"
+                        )
+                        .font(.system(size: 14, weight: .medium))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 20)
-            
-            if model.missingWatchedEndpoint {
-                MissingEndpointBanner()
-                    .padding(.horizontal, 32)
-            }
 
-            Divider()
-
-            // Folder list or empty state
-            if model.isLoadingWatchedFolders {
-                LoadingFoldersView()
-            } else if model.watchedFolders.isEmpty {
-                EmptyFoldersView()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        ForEach(model.watchedFolders) { folder in
-                            FolderRowView(folder: folder)
-                        }
-                    }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
+            // Segmented picker
+            Picker("Tab", selection: $selectedTab) {
+                ForEach(FoldersTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 32)
+            .padding(.bottom, 12)
+
+            if selectedTab == .folders {
+                if model.missingWatchedEndpoint {
+                    MissingEndpointBanner()
+                        .padding(.horizontal, 32)
+                }
+
+                Divider()
+
+                // Folder list or empty state
+                if model.isLoadingWatchedFolders {
+                    LoadingFoldersView()
+                } else if model.watchedFolders.isEmpty {
+                    EmptyFoldersView()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 14) {
+                            ForEach(model.watchedFolders) { folder in
+                                FolderRowView(folder: folder)
+                            }
+                        }
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 24)
+                    }
+                }
+            } else {
+                QueueContentView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Jobs")
+        .navigationTitle("Folders")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
         .fileImporter(
@@ -120,40 +162,6 @@ struct JobsView: View {
             }
         case .failure(let error):
             print("Error selecting folder: \(error.localizedDescription)")
-        }
-    }
-}
-
-// MARK: - Connection Status
-
-struct ConnectionStatusView: View {
-    let state: AppModel.BackendConnectionState
-    
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            
-            Text(state.statusDescription)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.2), in: Capsule())
-    }
-    
-    private var statusColor: Color {
-        switch state {
-        case .connected:
-            return .green
-        case .connecting:
-            return .orange
-        case .error:
-            return .red
-        case .idle:
-            return .gray
         }
     }
 }
@@ -218,7 +226,7 @@ struct EmptyFoldersView: View {
 }
 
 #Preview {
-    JobsView()
+    FoldersView()
         .environment(AppModel())
         .frame(width: 1000, height: 700)
 }

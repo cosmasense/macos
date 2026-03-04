@@ -24,18 +24,21 @@ struct HomeView: View {
             Divider()
                 .padding(.horizontal, 40)
 
-            // Show search results if available, otherwise show recent searches
+            // Show search results if available, otherwise show dashboard + recent searches
             if !model.searchResults.isEmpty || model.isSearching || model.searchError != nil {
                 SearchResultsView()
                     .frame(minWidth: 400, maxWidth: 680)
                     .padding(.horizontal, 40)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
-                // Recent searches
-                RecentSearchesView()
-                    .frame(minWidth: 400, maxWidth: 680)
-                    .padding(.horizontal, 40)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                VStack(spacing: 20) {
+                    DashboardStatsView()
+                    FolderChipsView()
+                    RecentSearchesView()
+                }
+                .frame(minWidth: 400, maxWidth: 680)
+                .padding(.horizontal, 40)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             Spacer()
@@ -560,6 +563,106 @@ struct RecentSearchRowView: View {
                 isHovered = hovering
             }
         }
+    }
+}
+
+// MARK: - Dashboard Stats
+
+private struct DashboardStatsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if !model.watchedFolders.isEmpty {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+
+                Text(statsText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .task {
+                await model.refreshFileStats()
+            }
+        }
+    }
+
+    private var statsText: String {
+        let folderCount = model.watchedFolders.count
+        let folderLabel = folderCount == 1 ? "folder" : "folders"
+
+        if let stats = model.fileStats {
+            let fileCount = stats.totalFiles
+            let fileLabel = fileCount == 1 ? "file" : "files"
+            return "\(folderCount) \(folderLabel) · \(fileCount) \(fileLabel) indexed"
+        } else {
+            return "\(folderCount) \(folderLabel)"
+        }
+    }
+}
+
+// MARK: - Folder Chips
+
+private struct FolderChipsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if !model.watchedFolders.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Search in")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.watchedFolders) { folder in
+                            FolderFilterChip(folder: folder)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct FolderFilterChip: View {
+    @Environment(AppModel.self) private var model
+    let folder: WatchedFolder
+
+    private var isActive: Bool {
+        model.searchTokens.contains { $0.kind == .folder && $0.value == folder.name }
+    }
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if !isActive {
+                    let token = SearchToken(kind: .folder, value: folder.name)
+                    model.searchTokens.append(token)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 11))
+                Text(folder.name)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                isActive
+                    ? Color.blue
+                    : Color.primary.opacity(0.06),
+                in: Capsule()
+            )
+            .foregroundStyle(isActive ? .white : .primary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

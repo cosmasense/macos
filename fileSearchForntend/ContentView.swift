@@ -24,10 +24,8 @@ struct ContentView: View {
                 switch model.selection {
                 case .home, .none:
                     HomeView()
-                case .jobs:
-                    JobsView()
-                case .queue:
-                    QueueView()
+                case .folders:
+                    FoldersView()
                 case .settings:
                     SettingsView()
                 }

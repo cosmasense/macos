@@ -20,8 +20,7 @@ import AppKit
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
-    case jobs = "Jobs"
-    case queue = "Queue"
+    case folders = "Folders"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -76,6 +75,7 @@ class AppModel {
     var isLoadingWatchedFolders: Bool = false
     var missingWatchedEndpoint: Bool = false
     var jobsError: String?
+    var fileStats: FileStatsResponse?
 
     // MARK: - Main Window Search State
 
@@ -235,6 +235,7 @@ class AppModel {
 
         Task { [weak self] in
             await self?.refreshWatchedFolders()
+            await self?.refreshFileStats()
             await self?.refreshFilterConfig()
             await self?.refreshBackendSettings()
         }
