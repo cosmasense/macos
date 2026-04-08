@@ -124,7 +124,7 @@ struct fileSearchForntendApp: App {
                 appDelegate.syncStatusBarWithCosmaManager()
             }
         }
-        .windowStyle(.automatic)
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
             CommandGroup(replacing: .appSettings) {

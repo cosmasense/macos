@@ -29,10 +29,10 @@ struct ContentView: View {
 
             // Floating navigation button (top-left)
             NavigationButton(currentPage: $model.currentPage)
-                .padding(.top, 14)
-                .padding(.leading, 78)
+                .padding(.top, 12)
+                .padding(.leading, 16)
         }
-        .background(.windowBackground)
+        .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.2), value: model.currentPage)
     }
 }

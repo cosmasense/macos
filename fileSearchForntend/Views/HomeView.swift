@@ -13,21 +13,46 @@ struct HomeView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var searchFieldFocused: Bool
 
+    private var isActive: Bool {
+        searchFieldFocused || !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
+    }
+
     private var hasResults: Bool {
         !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if hasResults {
-                // Compact top layout when showing results
-                VStack(spacing: 0) {
-                    SearchFieldView(isFocused: $searchFieldFocused)
-                        .frame(minWidth: 400, maxWidth: 680)
-                        .padding(.horizontal, 40)
-                        .padding(.top, 48)
-                        .padding(.bottom, 16)
+        ZStack(alignment: .topLeading) {
+            // Main content
+            VStack(spacing: 0) {
+                // Big title — visible when idle, slides left when active
+                if !isActive {
+                    VStack(spacing: 6) {
+                        Spacer()
+                            .frame(height: 80)
 
+                        Text("Cosma Sense")
+                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+
+                        DashboardStatsView()
+                            .padding(.bottom, 8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(x: 0, y: -10)),
+                        removal: .opacity.combined(with: .offset(x: -60, y: 0))
+                    ))
+                }
+
+                // Search field
+                SearchFieldView(isFocused: $searchFieldFocused)
+                    .frame(minWidth: 400, maxWidth: isActive ? 680 : 560)
+                    .padding(.horizontal, 40)
+                    .padding(.top, isActive ? 48 : 20)
+                    .padding(.bottom, 16)
+
+                if hasResults {
                     Divider()
                         .padding(.horizontal, 40)
 
@@ -35,43 +60,20 @@ struct HomeView: View {
                         .frame(minWidth: 400, maxWidth: 680)
                         .padding(.horizontal, 40)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-            } else {
-                // Centered welcome layout when idle
-                Spacer()
+                } else {
+                    // Folder chips + recent searches below search bar
+                    VStack(spacing: 16) {
+                        FolderChipsView()
+                            .frame(maxWidth: 560)
+                            .padding(.horizontal, 40)
 
-                VStack(spacing: 24) {
-                    // App branding
-                    VStack(spacing: 8) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(.tertiary)
-
-                        Text("Cosma Sense")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(.primary)
-
-                        DashboardStatsView()
+                        RecentSearchesView()
+                            .frame(maxWidth: 560)
+                            .padding(.horizontal, 40)
                     }
-
-                    // Search field
-                    SearchFieldView(isFocused: $searchFieldFocused)
-                        .frame(minWidth: 400, maxWidth: 560)
-                        .padding(.horizontal, 40)
-
-                    // Folder chips
-                    FolderChipsView()
-                        .frame(maxWidth: 560)
-                        .padding(.horizontal, 40)
-
-                    // Recent searches (compact)
-                    RecentSearchesView()
-                        .frame(maxWidth: 560, maxHeight: 240)
-                        .padding(.horizontal, 40)
+                    .transition(.opacity)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
 
-                Spacer()
                 Spacer()
             }
         }
@@ -80,7 +82,14 @@ struct HomeView: View {
         .onTapGesture {
             searchFieldFocused = false
         }
-        .background(.ultraThinMaterial)
+        .background {
+            if #available(macOS 14.0, *) {
+                Color.clear.glassEffect(in: Rectangle()).ignoresSafeArea()
+            } else {
+                Color.clear.background(.ultraThinMaterial).ignoresSafeArea()
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: isActive)
         .animation(.easeInOut(duration: 0.3), value: hasResults)
     }
     
@@ -595,13 +604,19 @@ private struct DashboardStatsView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Group {
-            Text(statsText)
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-        }
-        .task {
-            await model.refreshFileStats()
+        if !model.watchedFolders.isEmpty {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+
+                Text(statsText)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .task {
+                await model.refreshFileStats()
+            }
         }
     }
 
