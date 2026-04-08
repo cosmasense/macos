@@ -695,33 +695,38 @@ struct CosmaGradientBackground: View {
 
     var body: some View {
         ZStack {
-            // Base: ultra thin material for transparency/glass feel
-            Rectangle().fill(.ultraThinMaterial)
+            // Layer 1: mostly-opaque dark base (not fully solid, slight transparency)
+            if colorScheme == .dark {
+                Color(red: 0.04, green: 0.04, blue: 0.08).opacity(0.85)
+            } else {
+                Color(red: 0.94, green: 0.93, blue: 0.91).opacity(0.85)
+            }
 
-            // Blue blob — bottom-left (matches website hero)
+            // Layer 2: thin material on top for subtle glass depth
+            Rectangle().fill(.ultraThinMaterial).opacity(0.3)
+
+            // Layer 3: blue blob — bottom-left
             RadialGradient(
                 colors: [
-                    Color(red: 0.08, green: 0.12, blue: 0.60).opacity(colorScheme == .dark ? 0.8 : 0.5),
-                    Color(red: 0.05, green: 0.10, blue: 0.45).opacity(colorScheme == .dark ? 0.5 : 0.3),
+                    Color(red: 0.05, green: 0.10, blue: 0.55).opacity(colorScheme == .dark ? 0.7 : 0.35),
+                    Color(red: 0.03, green: 0.06, blue: 0.35).opacity(colorScheme == .dark ? 0.4 : 0.2),
                     Color.clear
                 ],
                 center: .bottomLeading,
-                startRadius: 60,
+                startRadius: 80,
                 endRadius: 500
             )
 
-            // Blue highlight — top-right corner
+            // Layer 4: blue highlight — top-right corner
             RadialGradient(
                 colors: [
-                    Color(red: 0.20, green: 0.35, blue: 0.80).opacity(colorScheme == .dark ? 0.4 : 0.25),
+                    Color(red: 0.15, green: 0.25, blue: 0.70).opacity(colorScheme == .dark ? 0.3 : 0.15),
                     Color.clear
                 ],
                 center: .topTrailing,
                 startRadius: 30,
                 endRadius: 350
             )
-
-            // No extra wash needed — material provides the base transparency
         }
     }
 }
