@@ -111,35 +111,32 @@ class CosmaManager {
             return
         }
 
-        // Try launch strategies in order of preference
+        // Build a shell command that activates the venv and runs the backend.
+        // Using /bin/sh -l -c gives us a login shell with full PATH resolution,
+        // bypassing all sandbox container path issues.
         do {
-            // Strategy 1: Local dev Python with backend source
-            if let pythonPath = findPythonWithBackend() {
-                appendLog("[CosmaManager] Launching local dev backend via \(pythonPath)")
-                try await launchProcess(executablePath: pythonPath, arguments: ["-m", "cosma_backend"])
+            let home = realHomeDirectory()
+
+            // Strategy 1: Local dev repo with venv
+            let repoRoot = "\(home)/Documents/code/SAIL/cosma"
+            let venvActivate = "\(repoRoot)/.venv/bin/activate"
+            let backendInit = "\(repoRoot)/packages/cosma-backend/src/cosma_backend/__init__.py"
+
+            if FileManager.default.fileExists(atPath: venvActivate) &&
+               FileManager.default.fileExists(atPath: backendInit) {
+                let cmd = "source '\(venvActivate)' && PYTHONPATH='\(repoRoot)/packages/cosma-backend/src' TOKENIZERS_PARALLELISM=false python -m cosma_backend"
+                appendLog("[CosmaManager] Launching via shell: \(cmd)")
+                try await launchShellCommand(cmd)
                 scheduleUpdateChecks()
                 return
             }
-            appendLog("[CosmaManager] No local dev backend found")
+            appendLog("[CosmaManager] No local dev backend found at \(repoRoot)")
 
-            // Strategy 2: Installed cosma CLI
-            if let cosmaPath = findExecutable(name: "cosma") {
-                appendLog("[CosmaManager] Launching cosma CLI at \(cosmaPath)")
-                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
-                scheduleUpdateChecks()
-                return
-            }
-            appendLog("[CosmaManager] No cosma CLI found, falling back to install")
-
-            // Strategy 3: Install via uv
-            let uvPath = try await ensureUV()
-            try await ensureCosma(uvPath: uvPath)
-            if let cosmaPath = findExecutable(name: "cosma") {
-                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
-                scheduleUpdateChecks()
-            } else {
-                throw CosmaError.installFailed("cosma not found after installation")
-            }
+            // Strategy 2: cosma serve (installed via uv tool)
+            let cosmaCmd = "cosma serve"
+            appendLog("[CosmaManager] Trying: \(cosmaCmd)")
+            try await launchShellCommand(cosmaCmd)
+            scheduleUpdateChecks()
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
@@ -209,36 +206,25 @@ class CosmaManager {
 
     // MARK: - Server Lifecycle
 
-    private func launchProcess(executablePath: String, arguments: [String]) async throws {
+    /// Launch the backend via a login shell command.
+    /// Using /bin/sh -l -c ensures full PATH, venv activation, and symlink
+    /// resolution — completely bypassing sandbox container path issues.
+    private func launchShellCommand(_ command: String) async throws {
         setupStage = .startingServer
-        lastLaunchExe = executablePath
-        lastLaunchArgs = arguments
+        lastLaunchExe = "/bin/sh"
+        lastLaunchArgs = ["-l", "-c", command]
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-l", "-c", command]
 
-        // Build environment with all necessary paths
-        var env = ProcessInfo.processInfo.environment
+        // Minimal env — the login shell will source .zprofile/.zshrc for PATH
+        var env: [String: String] = [:]
         let home = realHomeDirectory()
-        let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-
-        // If launching Python directly from a venv, set up the full venv environment
-        if executablePath.contains(".venv/bin/python") {
-            let venvBin = (executablePath as NSString).deletingLastPathComponent // .venv/bin
-            let venvDir = (venvBin as NSString).deletingLastPathComponent        // .venv
-            let repoRoot = (venvDir as NSString).deletingLastPathComponent       // repo root
-            let backendSrc = "\(repoRoot)/packages/cosma-backend/src"
-            env["PYTHONPATH"] = backendSrc
-            env["VIRTUAL_ENV"] = venvDir
-            // Prepend venv bin to PATH so subprocess tools find venv packages
-            env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin:/bin")"
-            // Disable tokenizers parallelism warning
-            env["TOKENIZERS_PARALLELISM"] = "false"
-            appendLog("[CosmaManager] Set PYTHONPATH=\(backendSrc)")
-            appendLog("[CosmaManager] Set VIRTUAL_ENV=\(venvDir)")
-        }
+        env["HOME"] = home
+        env["USER"] = ProcessInfo.processInfo.environment["USER"] ?? "ethanpan"
+        env["SHELL"] = "/bin/zsh"
+        env["LANG"] = "en_US.UTF-8"
         process.environment = env
 
         let stdout = Pipe()
@@ -288,10 +274,10 @@ class CosmaManager {
     }
 
     private func relaunchLastProcess() async throws {
-        guard let exe = lastLaunchExe else {
+        guard lastLaunchArgs.count >= 3, lastLaunchArgs[0] == "-l", lastLaunchArgs[1] == "-c" else {
             throw CosmaError.serverStartFailed("No previous launch configuration")
         }
-        try await launchProcess(executablePath: exe, arguments: lastLaunchArgs)
+        try await launchShellCommand(lastLaunchArgs[2])
     }
 
     func stopServer() {
