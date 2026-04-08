@@ -691,43 +691,82 @@ private struct FolderFilterChip: View {
 // MARK: - Brand Gradient Background
 
 struct CosmaGradientBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
+    // Brand palette
+    private let deepNavy    = Color(hex: 0x121221)
+    private let darkIndigo  = Color(hex: 0x110f51)
+    private let mediumBlue  = Color(hex: 0x2f3c88)
+    private let steelBlue   = Color(hex: 0x364597)
+    private let lightSilver = Color(hex: 0xd0d4d7)
 
     var body: some View {
         ZStack {
-            // Layer 1: mostly-opaque dark base (not fully solid, slight transparency)
-            if colorScheme == .dark {
-                Color(red: 0.04, green: 0.04, blue: 0.08).opacity(0.85)
-            } else {
-                Color(red: 0.94, green: 0.93, blue: 0.91).opacity(0.85)
-            }
+            // Base: deep navy fill
+            deepNavy
 
-            // Layer 2: thin material on top for subtle glass depth
-            Rectangle().fill(.ultraThinMaterial).opacity(0.3)
-
-            // Layer 3: blue blob — bottom-left
+            // Ellipse 5 — large soft white/silver glow, top-right area
             RadialGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.10, blue: 0.55).opacity(colorScheme == .dark ? 0.7 : 0.35),
-                    Color(red: 0.03, green: 0.06, blue: 0.35).opacity(colorScheme == .dark ? 0.4 : 0.2),
-                    Color.clear
-                ],
-                center: .bottomLeading,
-                startRadius: 80,
+                colors: [lightSilver.opacity(0.5), Color.clear],
+                center: UnitPoint(x: 0.85, y: 0.15),
+                startRadius: 20,
+                endRadius: 450
+            )
+
+            // Ellipse 6 — large indigo wash, center-left
+            RadialGradient(
+                colors: [darkIndigo.opacity(0.9), Color.clear],
+                center: UnitPoint(x: 0.2, y: 0.6),
+                startRadius: 40,
                 endRadius: 500
             )
 
-            // Layer 4: blue highlight — top-right corner
+            // Ellipse 7 — medium blue, bottom-center
             RadialGradient(
-                colors: [
-                    Color(red: 0.15, green: 0.25, blue: 0.70).opacity(colorScheme == .dark ? 0.3 : 0.15),
-                    Color.clear
-                ],
-                center: .topTrailing,
+                colors: [mediumBlue.opacity(0.7), Color.clear],
+                center: UnitPoint(x: 0.4, y: 0.85),
                 startRadius: 30,
+                endRadius: 400
+            )
+
+            // Ellipse 8 — steel blue highlight, center
+            RadialGradient(
+                colors: [steelBlue.opacity(0.5), Color.clear],
+                center: UnitPoint(x: 0.55, y: 0.45),
+                startRadius: 20,
                 endRadius: 350
             )
+
+            // Ellipse 9 — bright blue accent, top-left edge
+            RadialGradient(
+                colors: [mediumBlue.opacity(0.6), Color.clear],
+                center: UnitPoint(x: 0.1, y: 0.2),
+                startRadius: 10,
+                endRadius: 300
+            )
+
+            // Ellipse 10 — white/silver bloom, top-right for contrast
+            RadialGradient(
+                colors: [lightSilver.opacity(0.35), Color.clear],
+                center: UnitPoint(x: 0.75, y: 0.05),
+                startRadius: 10,
+                endRadius: 250
+            )
+
+            // Subtle material layer for glass depth
+            Rectangle().fill(.ultraThinMaterial).opacity(0.15)
         }
+    }
+}
+
+// MARK: - Hex Color Helper
+
+private extension Color {
+    init(hex: UInt, alpha: Double = 1.0) {
+        self.init(
+            red: Double((hex >> 16) & 0xFF) / 255.0,
+            green: Double((hex >> 8) & 0xFF) / 255.0,
+            blue: Double(hex & 0xFF) / 255.0,
+            opacity: alpha
+        )
     }
 }
 
