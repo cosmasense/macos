@@ -124,7 +124,10 @@ class CosmaManager {
 
             if FileManager.default.fileExists(atPath: venvActivate) &&
                FileManager.default.fileExists(atPath: backendInit) {
-                let cmd = "source '\(venvActivate)' && PYTHONPATH='\(repoRoot)/packages/cosma-backend/src' TOKENIZERS_PARALLELISM=false python -m cosma_backend"
+                // Run the venv python directly — no source/activate needed.
+                // The venv python binary automatically uses venv site-packages.
+                let venvPython = "\(repoRoot)/.venv/bin/python"
+                let cmd = "PYTHONPATH='\(repoRoot)/packages/cosma-backend/src' TOKENIZERS_PARALLELISM=false '\(venvPython)' -m cosma_backend"
                 appendLog("[CosmaManager] Launching via shell: \(cmd)")
                 try await launchShellCommand(cmd)
                 scheduleUpdateChecks()
@@ -216,15 +219,12 @@ class CosmaManager {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-l", "-c", command]
+        process.arguments = ["-c", command]  // No -l: avoid login profile sourcing (sandbox blocks it)
 
-        // Minimal env — the login shell will source .zprofile/.zshrc for PATH
-        var env: [String: String] = [:]
-        let home = realHomeDirectory()
-        env["HOME"] = home
-        env["USER"] = ProcessInfo.processInfo.environment["USER"] ?? "ethanpan"
-        env["SHELL"] = "/bin/zsh"
-        env["LANG"] = "en_US.UTF-8"
+        // Inherit the full process environment so PATH etc. are available
+        // but override HOME to the real home directory
+        var env = ProcessInfo.processInfo.environment
+        env["HOME"] = realHomeDirectory()
         process.environment = env
 
         let stdout = Pipe()
