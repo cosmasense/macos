@@ -27,25 +27,25 @@ struct HomeView: View {
             CosmaGradientBackground()
                 .ignoresSafeArea()
 
-            // Main content
+            // Main content — all elements stay in tree for smooth animation
             VStack(spacing: 0) {
-                // Dynamic top spacer: large when idle (centering), small when active
+                // Top spacer: shrinks when active, pushes content down when idle
                 Spacer()
-                    .frame(maxHeight: isActive ? 36 : .infinity)
+                    .frame(maxHeight: isActive ? 36 : 80)
 
-                // Title block — collapses when active
-                if !isActive {
-                    VStack(spacing: 8) {
-                        Text("COSMA SENSE")
-                            .font(.system(size: 32, weight: .thin))
-                            .tracking(8)
-                            .foregroundStyle(.white)
+                // Title — always present, animated opacity + height
+                VStack(spacing: 8) {
+                    Text("COSMA SENSE")
+                        .font(.system(size: 32, weight: .thin))
+                        .tracking(8)
+                        .foregroundStyle(.white)
 
-                        DashboardStatsView()
-                    }
-                    .padding(.bottom, 20)
-                    .transition(.opacity.combined(with: .offset(y: -20)))
+                    DashboardStatsView()
                 }
+                .opacity(isActive ? 0 : 1)
+                .frame(height: isActive ? 0 : nil)
+                .clipped()
+                .padding(.bottom, isActive ? 0 : 20)
 
                 // Search bar
                 SearchFieldView(isFocused: $searchFieldFocused)
