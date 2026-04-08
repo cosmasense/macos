@@ -22,38 +22,44 @@ struct HomeView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        ZStack {
+            // Brand gradient background
+            CosmaGradientBackground()
+                .ignoresSafeArea()
+
             // Main content
             VStack(spacing: 0) {
                 // Big title — visible when idle, slides left when active
                 if !isActive {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 8) {
                         Spacer()
                             .frame(height: 80)
 
-                        Text("Cosma Sense")
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
-                            .foregroundStyle(.primary)
+                        Text("COSMA SENSE")
+                            .font(.system(size: 32, weight: .thin))
+                            .tracking(8)
+                            .foregroundStyle(.white)
 
                         DashboardStatsView()
                             .padding(.bottom, 8)
                     }
                     .frame(maxWidth: .infinity)
                     .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .offset(x: 0, y: -10)),
-                        removal: .opacity.combined(with: .offset(x: -60, y: 0))
+                        insertion: .opacity.combined(with: .offset(y: -10)),
+                        removal: .opacity.combined(with: .scale(scale: 0.95))
                     ))
                 }
 
                 // Search field
                 SearchFieldView(isFocused: $searchFieldFocused)
-                    .frame(minWidth: 400, maxWidth: isActive ? 680 : 560)
+                    .frame(minWidth: 400, maxWidth: isActive ? 680 : 520)
                     .padding(.horizontal, 40)
-                    .padding(.top, isActive ? 48 : 20)
+                    .padding(.top, isActive ? 48 : 24)
                     .padding(.bottom, 16)
 
                 if hasResults {
                     Divider()
+                        .opacity(0.3)
                         .padding(.horizontal, 40)
 
                     SearchResultsView()
@@ -64,11 +70,11 @@ struct HomeView: View {
                     // Folder chips + recent searches below search bar
                     VStack(spacing: 16) {
                         FolderChipsView()
-                            .frame(maxWidth: 560)
+                            .frame(maxWidth: 520)
                             .padding(.horizontal, 40)
 
                         RecentSearchesView()
-                            .frame(maxWidth: 560)
+                            .frame(maxWidth: 520)
                             .padding(.horizontal, 40)
                     }
                     .transition(.opacity)
@@ -81,13 +87,6 @@ struct HomeView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             searchFieldFocused = false
-        }
-        .background {
-            if #available(macOS 14.0, *) {
-                Color.clear.glassEffect(in: Rectangle()).ignoresSafeArea()
-            } else {
-                Color.clear.background(.ultraThinMaterial).ignoresSafeArea()
-            }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: isActive)
         .animation(.easeInOut(duration: 0.3), value: hasResults)
@@ -605,18 +604,12 @@ private struct DashboardStatsView: View {
 
     var body: some View {
         if !model.watchedFolders.isEmpty {
-            HStack(spacing: 6) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-
-                Text(statsText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .task {
-                await model.refreshFileStats()
-            }
+            Text(statsText)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.white.opacity(0.6))
+                .task {
+                    await model.refreshFileStats()
+                }
         }
     }
 
@@ -693,6 +686,41 @@ private struct FolderFilterChip: View {
             .foregroundStyle(isActive ? .white : .primary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Brand Gradient Background
+
+struct CosmaGradientBackground: View {
+    var body: some View {
+        ZStack {
+            // Base: dark navy
+            Color(red: 0.02, green: 0.02, blue: 0.06)
+
+            // Main blue orb — matches brand gradient from website
+            RadialGradient(
+                colors: [
+                    Color(red: 0.1, green: 0.15, blue: 0.65),
+                    Color(red: 0.05, green: 0.08, blue: 0.4),
+                    Color.clear
+                ],
+                center: .center,
+                startRadius: 40,
+                endRadius: 500
+            )
+            .offset(x: -80, y: 60)
+
+            // Secondary highlight — lighter blue top-right
+            RadialGradient(
+                colors: [
+                    Color(red: 0.3, green: 0.4, blue: 0.85).opacity(0.4),
+                    Color.clear
+                ],
+                center: .topTrailing,
+                startRadius: 20,
+                endRadius: 350
+            )
+        }
     }
 }
 

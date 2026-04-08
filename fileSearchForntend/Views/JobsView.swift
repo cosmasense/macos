@@ -103,7 +103,9 @@ struct FoldersView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .background {
+            CosmaGradientBackground().ignoresSafeArea()
+        }
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],

@@ -28,7 +28,7 @@ struct fileSearchForntendApp: App {
                         .environment(appModel)
                         .environment(cosmaManager)
                         .frame(minWidth: 900, minHeight: 600)
-                        .containerBackground(.ultraThinMaterial, for: .window)
+                        .containerBackground(.clear, for: .window)
                         .environment(\.presentQuickSearchOverlay, {
                             coordinator.showOverlay()
                         })
@@ -124,7 +124,7 @@ struct fileSearchForntendApp: App {
                 appDelegate.syncStatusBarWithCosmaManager()
             }
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.automatic)
         .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
             CommandGroup(replacing: .appSettings) {
