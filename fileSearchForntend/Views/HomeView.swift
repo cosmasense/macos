@@ -31,7 +31,7 @@ struct HomeView: View {
             VStack(spacing: 0) {
                 // Top spacer: shrinks when active, pushes content down when idle
                 Spacer()
-                    .frame(maxHeight: isActive ? 36 : 80)
+                    .frame(maxHeight: isActive ? 36 : 100)
 
                 // Title — always present, animated opacity + height
                 VStack(spacing: 8) {
@@ -82,9 +82,11 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
+            // Force resign first responder on macOS — more reliable than @FocusState alone
+            NSApp.keyWindow?.makeFirstResponder(nil)
             searchFieldFocused = false
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: isActive)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: isActive)
         .animation(.easeInOut(duration: 0.3), value: hasResults)
     }
     
