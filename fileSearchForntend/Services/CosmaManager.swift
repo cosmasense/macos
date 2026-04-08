@@ -147,7 +147,7 @@ class CosmaManager {
 
     /// Find the Python venv that has cosma_backend installed (local dev setup)
     private func findPythonWithBackend() -> String? {
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let home = realHomeDirectory()
         // Check known cosma repo locations
         let repoRoots = [
             "\(home)/Documents/code/SAIL/cosma",
@@ -222,7 +222,7 @@ class CosmaManager {
 
         // Build environment with all necessary paths
         var env = ProcessInfo.processInfo.environment
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let home = realHomeDirectory()
         let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
 
@@ -404,7 +404,7 @@ class CosmaManager {
     // MARK: - Helpers
 
     private func findExecutable(name: String) -> String? {
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let home = realHomeDirectory()
         let commonPaths = [
             "\(home)/.local/bin/\(name)",
             "/opt/homebrew/bin/\(name)",
@@ -459,7 +459,7 @@ class CosmaManager {
             process.arguments = ["-c", script]
 
             var env = ProcessInfo.processInfo.environment
-            let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+            let home = realHomeDirectory()
             let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
             env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
             process.environment = env
@@ -500,7 +500,7 @@ class CosmaManager {
             process.arguments = arguments
 
             var env = ProcessInfo.processInfo.environment
-            let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+            let home = realHomeDirectory()
             let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
             env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
             process.environment = env
@@ -576,6 +576,15 @@ class CosmaManager {
                 self?.appendLog(str)
             }
         }
+    }
+
+    /// Get the real home directory, bypassing sandbox container redirection.
+    /// Uses getpwuid which always returns the actual /Users/username path.
+    private func realHomeDirectory() -> String {
+        if let pw = getpwuid(getuid()), let home = pw.pointee.pw_dir {
+            return String(cString: home)
+        }
+        return NSHomeDirectory() // fallback
     }
 
     private func appendLog(_ text: String) {
