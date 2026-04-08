@@ -41,28 +41,44 @@ struct ContentView: View {
 
 private struct NavigationButton: View {
     @Binding var currentPage: AppPage
+    @State private var isHovered = false
 
     var body: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 currentPage = currentPage == .home ? .folders : .home
             }
         } label: {
-            Image(systemName: currentPage == .home ? "folder.fill" : "chevron.left")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.primary)
-                .frame(width: 32, height: 32)
-                .contentTransition(.symbolEffect(.replace))
+            HStack(spacing: 6) {
+                Image(systemName: currentPage == .home ? "folder.fill" : "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+
+                if currentPage == .folders || isHovered {
+                    Text(currentPage == .home ? "Folders" : "Search")
+                        .font(.system(size: 12, weight: .medium))
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, currentPage == .folders || isHovered ? 14 : 10)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
         .background {
+            let shape = Capsule()
             if #available(macOS 14.0, *) {
-                Color.clear.glassEffect(in: Circle())
+                Color.clear.glassEffect(in: shape)
             } else {
-                Circle().fill(.ultraThinMaterial)
+                shape.fill(.ultraThinMaterial)
             }
         }
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovered = hovering
+            }
+        }
         .help(currentPage == .home ? "Folders" : "Back to Search")
     }
 }

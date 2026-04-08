@@ -13,45 +13,75 @@ struct HomeView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var searchFieldFocused: Bool
 
+    private var hasResults: Bool {
+        !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
+    }
+
     var body: some View {
-        VStack(spacing: 32) {
-            // Search area with generous top padding
-            SearchFieldView(isFocused: $searchFieldFocused)
-                .frame(minWidth: 400, maxWidth: 680)
-                .padding(.horizontal, 40)
-                .padding(.top, 40)
+        VStack(spacing: 0) {
+            if hasResults {
+                // Compact top layout when showing results
+                VStack(spacing: 0) {
+                    SearchFieldView(isFocused: $searchFieldFocused)
+                        .frame(minWidth: 400, maxWidth: 680)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 48)
+                        .padding(.bottom, 16)
 
-            Divider()
-                .padding(.horizontal, 40)
+                    Divider()
+                        .padding(.horizontal, 40)
 
-            // Show search results if available, otherwise show dashboard + recent searches
-            if !model.searchResults.isEmpty || model.isSearching || model.searchError != nil {
-                SearchResultsView()
-                    .frame(minWidth: 400, maxWidth: 680)
-                    .padding(.horizontal, 40)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            } else {
-                VStack(spacing: 20) {
-                    DashboardStatsView()
-                    FolderChipsView()
-                    RecentSearchesView()
+                    SearchResultsView()
+                        .frame(minWidth: 400, maxWidth: 680)
+                        .padding(.horizontal, 40)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                .frame(minWidth: 400, maxWidth: 680)
-                .padding(.horizontal, 40)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            } else {
+                // Centered welcome layout when idle
+                Spacer()
 
-            Spacer()
+                VStack(spacing: 24) {
+                    // App branding
+                    VStack(spacing: 8) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.system(size: 40, weight: .light))
+                            .foregroundStyle(.tertiary)
+
+                        Text("Cosma Sense")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+
+                        DashboardStatsView()
+                    }
+
+                    // Search field
+                    SearchFieldView(isFocused: $searchFieldFocused)
+                        .frame(minWidth: 400, maxWidth: 560)
+                        .padding(.horizontal, 40)
+
+                    // Folder chips
+                    FolderChipsView()
+                        .frame(maxWidth: 560)
+                        .padding(.horizontal, 40)
+
+                    // Recent searches (compact)
+                    RecentSearchesView()
+                        .frame(maxWidth: 560, maxHeight: 240)
+                        .padding(.horizontal, 40)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+
+                Spacer()
+                Spacer()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
             searchFieldFocused = false
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.ultraThinMaterial)
-        .animation(.easeInOut(duration: 0.3), value: model.searchResults.isEmpty)
-        .animation(.easeInOut(duration: 0.3), value: model.isSearching)
+        .animation(.easeInOut(duration: 0.3), value: hasResults)
     }
     
 }
@@ -471,22 +501,17 @@ struct RecentSearchesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if model.recentSearches.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.system(size: 48))
-                                .foregroundStyle(.quaternary)
-
-                            Text("No recent searches")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(.secondary)
-
-                            Text("Try typing @FolderName to scope your search")
-                                .font(.system(size: 13))
+                        VStack(spacing: 6) {
+                            Text("Type to search your files")
+                                .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
+
+                            Text("Use @FolderName to scope results")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.quaternary)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 60)
+                        .padding(.vertical, 16)
                     } else {
                         Text("Recent Searches")
                             .font(.system(size: 18, weight: .semibold))
@@ -570,21 +595,13 @@ private struct DashboardStatsView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if !model.watchedFolders.isEmpty {
-            HStack(spacing: 6) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-
-                Text(statsText)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
-            .task {
-                await model.refreshFileStats()
-            }
+        Group {
+            Text(statsText)
+                .font(.system(size: 13))
+                .foregroundStyle(.tertiary)
+        }
+        .task {
+            await model.refreshFileStats()
         }
     }
 
