@@ -156,14 +156,12 @@ class CosmaManager {
         for repo in repoRoots {
             let python = "\(repo)/.venv/bin/python"
             let backendInit = "\(repo)/packages/cosma-backend/src/cosma_backend/__init__.py"
-            // Resolve symlinks for the Python executable check
-            let resolvedPython = (python as NSString).resolvingSymlinksInPath
-            let pythonExists = FileManager.default.fileExists(atPath: resolvedPython)
+            let pythonExists = FileManager.default.fileExists(atPath: python)
             let backendExists = FileManager.default.fileExists(atPath: backendInit)
             appendLog("[CosmaManager] Checking \(repo): python=\(pythonExists) backend=\(backendExists)")
             if pythonExists && backendExists {
                 appendLog("[CosmaManager] Found local dev backend at \(repo)")
-                return resolvedPython
+                return python  // Don't resolve symlinks — use venv path directly
             }
         }
         return nil
