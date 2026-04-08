@@ -18,7 +18,33 @@ struct FoldersView: View {
         @Bindable var model = model
 
         VStack(spacing: 0) {
-            // Header
+            // Back button row
+            HStack {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        model.currentPage = .home
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Search")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular, in: Capsule())
+
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 46)
+            .padding(.bottom, 8)
+
+            // Header row: title + actions
             HStack(spacing: 12) {
                 Text("Folders")
                     .font(.system(size: 24, weight: .bold))
@@ -74,7 +100,6 @@ struct FoldersView: View {
                 .controlSize(.regular)
             }
             .padding(.horizontal, 32)
-            .padding(.top, 24)
             .padding(.bottom, 16)
 
             if model.missingWatchedEndpoint {

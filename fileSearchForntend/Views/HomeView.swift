@@ -695,12 +695,8 @@ struct CosmaGradientBackground: View {
 
     var body: some View {
         ZStack {
-            // Base layer
-            if colorScheme == .dark {
-                Color(red: 0.06, green: 0.06, blue: 0.10)
-            } else {
-                Color(red: 0.95, green: 0.94, blue: 0.92) // warm cream like website
-            }
+            // Base: ultra thin material for transparency/glass feel
+            Rectangle().fill(.ultraThinMaterial)
 
             // Blue blob — bottom-left (matches website hero)
             RadialGradient(
@@ -725,18 +721,7 @@ struct CosmaGradientBackground: View {
                 endRadius: 350
             )
 
-            // Subtle white wash center (light mode emphasis)
-            if colorScheme == .light {
-                RadialGradient(
-                    colors: [
-                        Color.white.opacity(0.6),
-                        Color.clear
-                    ],
-                    center: .center,
-                    startRadius: 50,
-                    endRadius: 400
-                )
-            }
+            // No extra wash needed — material provides the base transparency
         }
     }
 }

@@ -27,41 +27,43 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Floating navigation button (top-left, clear of traffic lights)
-            NavigationButton(currentPage: $model.currentPage)
+            // Floating folder button — only on home page
+            if model.currentPage == .home {
+                FolderNavButton {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        model.currentPage = .folders
+                    }
+                }
                 .padding(.top, 46)
                 .padding(.leading, 18)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.25), value: model.currentPage)
     }
 }
 
-// MARK: - Floating Navigation Button
+// MARK: - Floating Folder Button (Home page only)
 
-private struct NavigationButton: View {
-    @Binding var currentPage: AppPage
+struct FolderNavButton: View {
+    let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                currentPage = currentPage == .home ? .folders : .home
-            }
-        } label: {
+        Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: currentPage == .home ? "folder.fill" : "chevron.left")
+                Image(systemName: "folder.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .contentTransition(.symbolEffect(.replace))
 
-                if currentPage == .folders || isHovered {
-                    Text(currentPage == .home ? "Folders" : "Search")
+                if isHovered {
+                    Text("Folders")
                         .font(.system(size: 12, weight: .medium))
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, currentPage == .folders || isHovered ? 14 : 10)
+            .padding(.horizontal, isHovered ? 14 : 10)
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
@@ -71,7 +73,7 @@ private struct NavigationButton: View {
                 isHovered = hovering
             }
         }
-        .help(currentPage == .home ? "Folders" : "Back to Search")
+        .help("Folders")
     }
 }
 
