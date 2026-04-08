@@ -45,6 +45,10 @@ class CosmaManager {
     /// Whether this manager spawned the process (vs attaching to an existing one)
     var ownsProcess: Bool = false
 
+    /// Saved launch config for crash-restart
+    private var lastLaunchExe: String?
+    private var lastLaunchArgs: [String] = []
+
     private static let managedKey = "cosmaManagerEnabled"
     private static let managedSetKey = "cosmaManagerEnabledHasBeenSet"
 
@@ -106,15 +110,54 @@ class CosmaManager {
             return
         }
 
-        // Full pipeline: install uv → install cosma → launch server
+        // Try direct launch strategies in order:
+        // 1. cosma CLI (if installed via uv tool)
+        // 2. Python module from local dev source
+        // 3. Full uv install pipeline (fallback)
         do {
-            let uvPath = try await ensureUV()
-            try await ensureCosma(uvPath: uvPath)
-            try await launchCosmaServe()
+            if let cosmaPath = findExecutable(name: "cosma") {
+                appendLog("[CosmaManager] Found cosma at \(cosmaPath), launching...")
+                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
+            } else if let pythonPath = findPythonWithBackend() {
+                appendLog("[CosmaManager] Found local backend, launching via Python...")
+                try await launchProcess(executablePath: pythonPath, arguments: ["-m", "cosma_backend"])
+            } else {
+                // Fallback: install via uv
+                let uvPath = try await ensureUV()
+                try await ensureCosma(uvPath: uvPath)
+                if let cosmaPath = findExecutable(name: "cosma") {
+                    try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
+                } else {
+                    throw CosmaError.installFailed("cosma not found after installation")
+                }
+            }
             scheduleUpdateChecks()
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
+    }
+
+    /// Find the Python venv that has cosma_backend installed (local dev setup)
+    private func findPythonWithBackend() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // Check common locations for the cosma repo venv
+        let candidates = [
+            "\(home)/Documents/code/SAIL/cosma/.venv/bin/python",
+            "\(home)/code/SAIL/cosma/.venv/bin/python",
+        ]
+        for python in candidates {
+            let backendSrc = (python as NSString)
+                .deletingLastPathComponent  // bin
+                .appending("/../..") // repo root
+            let backendPkg = (backendSrc as NSString)
+                .appendingPathComponent("packages/cosma-backend/src/cosma_backend/__init__.py")
+            let resolved = (backendPkg as NSString).standardizingPath
+            if FileManager.default.fileExists(atPath: resolved) &&
+               FileManager.default.isExecutableFile(atPath: python) {
+                return python
+            }
+        }
+        return nil
     }
 
     // MARK: - UV Installation
@@ -159,22 +202,31 @@ class CosmaManager {
 
     // MARK: - Server Lifecycle
 
-    private func launchCosmaServe() async throws {
+    private func launchProcess(executablePath: String, arguments: [String]) async throws {
         setupStage = .startingServer
-
-        guard let cosmaPath = findExecutable(name: "cosma") else {
-            throw CosmaError.installFailed("cosma executable not found")
-        }
+        lastLaunchExe = executablePath
+        lastLaunchArgs = arguments
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: cosmaPath)
-        process.arguments = ["serve"]
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
 
-        // Augment PATH for child process
+        // Build environment with all necessary paths
         var env = ProcessInfo.processInfo.environment
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+
+        // If launching Python directly, set PYTHONPATH for local dev backend
+        if executablePath.contains(".venv/bin/python") {
+            let repoRoot = (executablePath as NSString)
+                .deletingLastPathComponent  // bin
+                .appending("/../..")        // repo root
+            let backendSrc = ((repoRoot as NSString).standardizingPath as NSString)
+                .appendingPathComponent("packages/cosma-backend/src")
+            env["PYTHONPATH"] = backendSrc
+            appendLog("[CosmaManager] Set PYTHONPATH=\(backendSrc)")
+        }
         process.environment = env
 
         let stdout = Pipe()
@@ -197,7 +249,7 @@ class CosmaManager {
                     self.restartCount += 1
                     self.appendLog("[CosmaManager] Process exited with code \(code), restarting (\(self.restartCount)/\(self.maxRestarts))…")
                     try? await Task.sleep(for: .seconds(1))
-                    try? await self.launchCosmaServe()
+                    try? await self.relaunchLastProcess()
                 } else if code != 0 {
                     self.setupStage = .failed("Server crashed \(self.maxRestarts) times")
                 } else {
@@ -223,6 +275,13 @@ class CosmaManager {
         throw CosmaError.serverStartFailed("Server did not become reachable within 10 seconds")
     }
 
+    private func relaunchLastProcess() async throws {
+        guard let exe = lastLaunchExe else {
+            throw CosmaError.serverStartFailed("No previous launch configuration")
+        }
+        try await launchProcess(executablePath: exe, arguments: lastLaunchArgs)
+    }
+
     func stopServer() {
         guard ownsProcess, let process = serverProcess, process.isRunning else { return }
 
@@ -244,7 +303,7 @@ class CosmaManager {
         stopServer()
         try? await Task.sleep(for: .seconds(1))
         do {
-            try await launchCosmaServe()
+            try await relaunchLastProcess()
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
@@ -295,12 +354,12 @@ class CosmaManager {
             dismissedVersion = nil
 
             if wasRunning {
-                try await launchCosmaServe()
+                try await relaunchLastProcess()
             }
         } catch {
             updateStatus = .failed(error.localizedDescription)
             if wasRunning {
-                try? await launchCosmaServe()
+                try? await relaunchLastProcess()
             }
         }
     }
