@@ -140,20 +140,17 @@ class CosmaManager {
     /// Find the Python venv that has cosma_backend installed (local dev setup)
     private func findPythonWithBackend() -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        // Check common locations for the cosma repo venv
-        let candidates = [
-            "\(home)/Documents/code/SAIL/cosma/.venv/bin/python",
-            "\(home)/code/SAIL/cosma/.venv/bin/python",
+        // Check known cosma repo locations
+        let repoRoots = [
+            "\(home)/Documents/code/SAIL/cosma",
+            "\(home)/code/SAIL/cosma",
         ]
-        for python in candidates {
-            let backendSrc = (python as NSString)
-                .deletingLastPathComponent  // bin
-                .appending("/../..") // repo root
-            let backendPkg = (backendSrc as NSString)
-                .appendingPathComponent("packages/cosma-backend/src/cosma_backend/__init__.py")
-            let resolved = (backendPkg as NSString).standardizingPath
-            if FileManager.default.fileExists(atPath: resolved) &&
-               FileManager.default.isExecutableFile(atPath: python) {
+        for repo in repoRoots {
+            let python = "\(repo)/.venv/bin/python"
+            let backendInit = "\(repo)/packages/cosma-backend/src/cosma_backend/__init__.py"
+            if FileManager.default.isExecutableFile(atPath: python) &&
+               FileManager.default.fileExists(atPath: backendInit) {
+                appendLog("[CosmaManager] Found local dev backend at \(repo)")
                 return python
             }
         }
@@ -218,12 +215,12 @@ class CosmaManager {
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
 
         // If launching Python directly, set PYTHONPATH for local dev backend
-        if executablePath.contains(".venv/bin/python") {
-            let repoRoot = (executablePath as NSString)
-                .deletingLastPathComponent  // bin
-                .appending("/../..")        // repo root
-            let backendSrc = ((repoRoot as NSString).standardizingPath as NSString)
-                .appendingPathComponent("packages/cosma-backend/src")
+        if executablePath.hasSuffix(".venv/bin/python") {
+            // .venv/bin/python → go up 2 levels to repo root
+            let venvBin = (executablePath as NSString).deletingLastPathComponent // .venv/bin
+            let venvDir = (venvBin as NSString).deletingLastPathComponent        // .venv
+            let repoRoot = (venvDir as NSString).deletingLastPathComponent       // repo root
+            let backendSrc = "\(repoRoot)/packages/cosma-backend/src"
             env["PYTHONPATH"] = backendSrc
             appendLog("[CosmaManager] Set PYTHONPATH=\(backendSrc)")
         }

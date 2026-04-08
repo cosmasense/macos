@@ -9,9 +9,15 @@
 
 import SwiftUI
 
+enum BackgroundStyle: String, CaseIterable {
+    case glass = "Glass"
+    case cosma = "Cosma Dark"
+}
+
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var searchFieldFocused: Bool
+    @AppStorage("backgroundStyle") private var backgroundStyle: String = BackgroundStyle.glass.rawValue
 
     private var isActive: Bool {
         searchFieldFocused || !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
@@ -23,9 +29,15 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            // Brand gradient background
-            CosmaGradientBackground()
-                .ignoresSafeArea()
+            // Background — switchable
+            Group {
+                if backgroundStyle == BackgroundStyle.cosma.rawValue {
+                    CosmaGradientBackground()
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
+            }
+            .ignoresSafeArea()
 
             // Main content — all elements stay in tree for smooth animation
             VStack(spacing: 0) {
@@ -38,7 +50,7 @@ struct HomeView: View {
                     Text("COSMA SENSE")
                         .font(.system(size: 32, weight: .thin))
                         .tracking(8)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(backgroundStyle == BackgroundStyle.cosma.rawValue ? .white : .primary)
 
                     DashboardStatsView()
                 }

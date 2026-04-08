@@ -13,6 +13,7 @@ struct FoldersView: View {
     @Environment(AppModel.self) private var model
     @State private var showFolderPicker = false
     @State private var showProcessing = false
+    @AppStorage("backgroundStyle") private var backgroundStyle: String = BackgroundStyle.glass.rawValue
 
     var body: some View {
         @Bindable var model = model
@@ -129,7 +130,14 @@ struct FoldersView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            CosmaGradientBackground().ignoresSafeArea()
+            Group {
+                if backgroundStyle == BackgroundStyle.cosma.rawValue {
+                    CosmaGradientBackground()
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
+            }
+            .ignoresSafeArea()
         }
         .fileImporter(
             isPresented: $showFolderPicker,

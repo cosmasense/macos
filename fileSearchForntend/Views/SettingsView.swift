@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(CosmaManager.self) private var cosmaManager
     @AppStorage("launchAtStartup") private var launchAtStartup = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
+    @AppStorage("backgroundStyle") private var backgroundStyle: String = BackgroundStyle.glass.rawValue
     @State private var showAdvanced = false
 
     var body: some View {
@@ -32,6 +33,18 @@ struct SettingsView: View {
                 // Permissions
                 SettingsSectionHeader(title: "Permissions", icon: "lock.shield")
                 HotkeySection(hotkey: $overlayHotkey)
+
+                Divider()
+
+                // Appearance
+                SettingsSectionHeader(title: "Appearance", icon: "paintbrush")
+                Picker("Background", selection: $backgroundStyle) {
+                    ForEach(BackgroundStyle.allCases, id: \.rawValue) { style in
+                        Text(style.rawValue).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 300)
 
                 Divider()
 
