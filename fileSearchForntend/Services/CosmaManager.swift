@@ -224,15 +224,20 @@ class CosmaManager {
         let extraPaths = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin")
 
-        // If launching Python directly, set PYTHONPATH for local dev backend
-        if executablePath.hasSuffix(".venv/bin/python") {
-            // .venv/bin/python → go up 2 levels to repo root
+        // If launching Python directly from a venv, set up the full venv environment
+        if executablePath.contains(".venv/bin/python") {
             let venvBin = (executablePath as NSString).deletingLastPathComponent // .venv/bin
             let venvDir = (venvBin as NSString).deletingLastPathComponent        // .venv
             let repoRoot = (venvDir as NSString).deletingLastPathComponent       // repo root
             let backendSrc = "\(repoRoot)/packages/cosma-backend/src"
             env["PYTHONPATH"] = backendSrc
+            env["VIRTUAL_ENV"] = venvDir
+            // Prepend venv bin to PATH so subprocess tools find venv packages
+            env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin:/bin")"
+            // Disable tokenizers parallelism warning
+            env["TOKENIZERS_PARALLELISM"] = "false"
             appendLog("[CosmaManager] Set PYTHONPATH=\(backendSrc)")
+            appendLog("[CosmaManager] Set VIRTUAL_ENV=\(venvDir)")
         }
         process.environment = env
 
