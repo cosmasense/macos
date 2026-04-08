@@ -65,6 +65,7 @@ struct fileSearchForntendApp: App {
                         }
                 } else {
                     BackendConnectionView(onConnected: {
+                        appModel.connectToBackend()
                         withAnimation(.easeInOut(duration: 0.3)) {
                             isBackendConnected = true
                         }
@@ -90,6 +91,7 @@ struct fileSearchForntendApp: App {
                             let _ = try await APIClient.shared.fetchStatus()
                             // Backend already running — user manages it themselves
                             cosmaManager.isManaged = false
+                            appModel.connectToBackend()
                             withAnimation(.easeInOut(duration: 0.3)) {
                                 isBackendConnected = true
                             }
@@ -108,6 +110,7 @@ struct fileSearchForntendApp: App {
                         do {
                             let _ = try await APIClient.shared.fetchStatus()
                             await MainActor.run {
+                                appModel.connectToBackend()
                                 withAnimation(.easeInOut(duration: 0.3)) {
                                     isBackendConnected = true
                                 }

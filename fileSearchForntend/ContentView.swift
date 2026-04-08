@@ -52,21 +52,23 @@ struct FolderNavButton: View {
 
     var body: some View {
         Button(action: action) {
+            // Fixed-width container so hover expansion doesn't shift click target
             HStack(spacing: 6) {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 13, weight: .semibold))
 
-                if isHovered {
-                    Text("Folders")
-                        .font(.system(size: 12, weight: .medium))
-                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                }
+                Text("Folders")
+                    .font(.system(size: 12, weight: .medium))
+                    .opacity(isHovered ? 1 : 0)
+                    .frame(width: isHovered ? nil : 0)
+                    .clipped()
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, isHovered ? 14 : 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
+        .contentShape(Capsule()) // Fixed hit target
         .glassEffect(.regular, in: Capsule())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {

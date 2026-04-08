@@ -227,9 +227,17 @@ class AppModel {
             ? storedURL!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.apiClient.currentBaseURL().absoluteString
 
-        configureStreams()
+        // Only set up the URL — don't connect until backend is ready
+        if let url = URL(string: backendURL) {
+            apiClient?.updateBaseURL(url) ?? APIClient.shared.updateBaseURL(url)
+        }
         loadSecurityBookmarks()
+    }
 
+    /// Call this AFTER the backend is confirmed reachable.
+    /// Connects SSE stream and fetches initial data.
+    func connectToBackend() {
+        configureStreams()
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFileStats()
