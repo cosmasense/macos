@@ -29,8 +29,8 @@ struct ContentView: View {
 
             // Floating navigation button (top-left, clear of traffic lights)
             NavigationButton(currentPage: $model.currentPage)
-                .padding(.top, 8)
-                .padding(.leading, 80)
+                .padding(.top, 46)
+                .padding(.leading, 18)
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.25), value: model.currentPage)
@@ -60,22 +60,12 @@ private struct NavigationButton: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, currentPage == .folders || isHovered ? 14 : 10)
             .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
-        .background {
-            if #available(macOS 26.0, *) {
-                Capsule()
-                    .fill(.clear)
-                    .glassEffect(.regular.tint(.white.opacity(0.1)), in: Capsule())
-            } else {
-                Capsule()
-                    .fill(Color.white.opacity(0.12))
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5))
-            }
-        }
+        .glassEffect(.regular, in: Capsule())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovered = hovering

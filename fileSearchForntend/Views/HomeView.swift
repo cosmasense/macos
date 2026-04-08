@@ -27,34 +27,31 @@ struct HomeView: View {
             CosmaGradientBackground()
                 .ignoresSafeArea()
 
-            // Main content
+            // Main content — uses spacers to smoothly animate position
             VStack(spacing: 0) {
-                // Big title — visible when idle, slides left when active
-                if !isActive {
-                    VStack(spacing: 8) {
-                        Spacer()
-                            .frame(height: 80)
+                // Top spacer — pushes content to center when idle, shrinks when active
+                Spacer()
+                    .frame(minHeight: isActive ? 20 : 60)
 
-                        Text("COSMA SENSE")
-                            .font(.system(size: 32, weight: .thin))
-                            .tracking(8)
-                            .foregroundStyle(.white)
+                // Title — fades and scales away when search is active
+                VStack(spacing: 8) {
+                    Text("COSMA SENSE")
+                        .font(.system(size: 32, weight: .thin))
+                        .tracking(8)
+                        .foregroundStyle(.primary)
 
-                        DashboardStatsView()
-                            .padding(.bottom, 8)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .offset(y: -10)),
-                        removal: .opacity.combined(with: .scale(scale: 0.95))
-                    ))
+                    DashboardStatsView()
                 }
+                .opacity(isActive ? 0 : 1)
+                .scaleEffect(isActive ? 0.92 : 1.0)
+                .frame(height: isActive ? 0 : nil)
+                .clipped()
+                .padding(.bottom, isActive ? 0 : 12)
 
-                // Search field
+                // Search field — smoothly slides up
                 SearchFieldView(isFocused: $searchFieldFocused)
                     .frame(minWidth: 400, maxWidth: isActive ? 680 : 520)
                     .padding(.horizontal, 40)
-                    .padding(.top, isActive ? 48 : 24)
                     .padding(.bottom, 16)
 
                 if hasResults {
@@ -77,10 +74,12 @@ struct HomeView: View {
                             .frame(maxWidth: 520)
                             .padding(.horizontal, 40)
                     }
-                    .transition(.opacity)
+                    .opacity(isActive && !hasResults ? 0.7 : 1.0)
                 }
 
+                // Bottom spacer — balances the layout
                 Spacer()
+                    .frame(minHeight: isActive ? 0 : 40)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -606,7 +605,7 @@ private struct DashboardStatsView: View {
         if !model.watchedFolders.isEmpty {
             Text(statsText)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.secondary)
                 .task {
                     await model.refreshFileStats()
                 }
@@ -692,34 +691,52 @@ private struct FolderFilterChip: View {
 // MARK: - Brand Gradient Background
 
 struct CosmaGradientBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
-            // Base: dark navy
-            Color(red: 0.02, green: 0.02, blue: 0.06)
+            // Base layer
+            if colorScheme == .dark {
+                Color(red: 0.06, green: 0.06, blue: 0.10)
+            } else {
+                Color(red: 0.95, green: 0.94, blue: 0.92) // warm cream like website
+            }
 
-            // Main blue orb — matches brand gradient from website
+            // Blue blob — bottom-left (matches website hero)
             RadialGradient(
                 colors: [
-                    Color(red: 0.1, green: 0.15, blue: 0.65),
-                    Color(red: 0.05, green: 0.08, blue: 0.4),
+                    Color(red: 0.08, green: 0.12, blue: 0.60).opacity(colorScheme == .dark ? 0.8 : 0.5),
+                    Color(red: 0.05, green: 0.10, blue: 0.45).opacity(colorScheme == .dark ? 0.5 : 0.3),
                     Color.clear
                 ],
-                center: .center,
-                startRadius: 40,
+                center: .bottomLeading,
+                startRadius: 60,
                 endRadius: 500
             )
-            .offset(x: -80, y: 60)
 
-            // Secondary highlight — lighter blue top-right
+            // Blue highlight — top-right corner
             RadialGradient(
                 colors: [
-                    Color(red: 0.3, green: 0.4, blue: 0.85).opacity(0.4),
+                    Color(red: 0.20, green: 0.35, blue: 0.80).opacity(colorScheme == .dark ? 0.4 : 0.25),
                     Color.clear
                 ],
                 center: .topTrailing,
-                startRadius: 20,
+                startRadius: 30,
                 endRadius: 350
             )
+
+            // Subtle white wash center (light mode emphasis)
+            if colorScheme == .light {
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.6),
+                        Color.clear
+                    ],
+                    center: .center,
+                    startRadius: 50,
+                    endRadius: 400
+                )
+            }
         }
     }
 }
