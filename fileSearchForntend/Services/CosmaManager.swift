@@ -98,7 +98,8 @@ class CosmaManager {
     // MARK: - Main Entry Point
 
     func startManagedBackend() async {
-        guard isManaged else { return }
+        print("[CosmaManager] startManagedBackend called, isManaged=\(isManaged)")
+        guard isManaged else { print("[CosmaManager] Not managed, skipping"); return }
 
         // First check if a backend is already reachable
         setupStage = .startingServer
@@ -578,6 +579,7 @@ class CosmaManager {
     }
 
     private func appendLog(_ text: String) {
+        print(text)  // Also output to Xcode console
         serverLog += text
         // Cap log size to prevent unbounded growth
         if serverLog.count > 50_000 {
