@@ -341,18 +341,27 @@ class CosmaManager {
             "\(home)/.local/bin/\(name)",
             "/opt/homebrew/bin/\(name)",
             "/usr/local/bin/\(name)",
+            "\(home)/.cargo/bin/\(name)",
         ]
 
         for path in commonPaths {
+            // Resolve symlinks before checking (isExecutableFile may not follow them)
+            let resolved = (path as NSString).resolvingSymlinksInPath
+            if FileManager.default.isExecutableFile(atPath: resolved) {
+                appendLog("[CosmaManager] Found \(name) at \(path)")
+                return resolved
+            }
+            // Also check original path in case resolution fails
             if FileManager.default.isExecutableFile(atPath: path) {
+                appendLog("[CosmaManager] Found \(name) at \(path) (unresolved)")
                 return path
             }
         }
 
-        // Fallback: use which
+        // Fallback: use /bin/sh -l -c which (login shell to get full PATH)
         let whichProcess = Process()
-        whichProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        whichProcess.arguments = [name]
+        whichProcess.executableURL = URL(fileURLWithPath: "/bin/sh")
+        whichProcess.arguments = ["-l", "-c", "which \(name)"]
         let pipe = Pipe()
         whichProcess.standardOutput = pipe
         whichProcess.standardError = FileHandle.nullDevice
@@ -363,12 +372,14 @@ class CosmaManager {
             if whichProcess.terminationStatus == 0 {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let path, !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) {
+                if let path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+                    appendLog("[CosmaManager] Found \(name) via shell at \(path)")
                     return path
                 }
             }
         } catch {}
 
+        appendLog("[CosmaManager] \(name) not found in any known location")
         return nil
     }
 
