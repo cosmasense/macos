@@ -27,44 +27,57 @@ struct HomeView: View {
             CosmaGradientBackground()
                 .ignoresSafeArea()
 
-            // Main content — uses spacers to smoothly animate position
+            // Main content
             VStack(spacing: 0) {
-                // Top spacer — pushes content to center when idle, shrinks when active
-                Spacer()
-                    .frame(minHeight: isActive ? 20 : 60)
-
-                // Title — fades and scales away when search is active
-                VStack(spacing: 8) {
-                    Text("COSMA SENSE")
-                        .font(.system(size: 32, weight: .thin))
-                        .tracking(8)
-                        .foregroundStyle(.primary)
-
-                    DashboardStatsView()
-                }
-                .opacity(isActive ? 0 : 1)
-                .scaleEffect(isActive ? 0.92 : 1.0)
-                .frame(height: isActive ? 0 : nil)
-                .clipped()
-                .padding(.bottom, isActive ? 0 : 12)
-
-                // Search field — smoothly slides up
-                SearchFieldView(isFocused: $searchFieldFocused)
-                    .frame(minWidth: 400, maxWidth: isActive ? 680 : 520)
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 16)
-
-                if hasResults {
-                    Divider()
-                        .opacity(0.3)
-                        .padding(.horizontal, 40)
-
-                    SearchResultsView()
+                if isActive {
+                    // Active mode: search bar pinned to top
+                    SearchFieldView(isFocused: $searchFieldFocused)
                         .frame(minWidth: 400, maxWidth: 680)
                         .padding(.horizontal, 40)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .padding(.top, 52)
+                        .padding(.bottom, 12)
+
+                    if hasResults {
+                        Divider()
+                            .opacity(0.3)
+                            .padding(.horizontal, 40)
+
+                        SearchResultsView()
+                            .frame(minWidth: 400, maxWidth: 680)
+                            .padding(.horizontal, 40)
+                    } else {
+                        VStack(spacing: 16) {
+                            FolderChipsView()
+                                .frame(maxWidth: 560)
+                                .padding(.horizontal, 40)
+
+                            RecentSearchesView()
+                                .frame(maxWidth: 560)
+                                .padding(.horizontal, 40)
+                        }
+                        .padding(.top, 8)
+                    }
+
+                    Spacer()
                 } else {
-                    // Folder chips + recent searches below search bar
+                    // Idle mode: centered welcome
+                    Spacer()
+
+                    VStack(spacing: 8) {
+                        Text("COSMA SENSE")
+                            .font(.system(size: 32, weight: .thin))
+                            .tracking(8)
+                            .foregroundStyle(.white)
+
+                        DashboardStatsView()
+                    }
+                    .padding(.bottom, 16)
+
+                    SearchFieldView(isFocused: $searchFieldFocused)
+                        .frame(minWidth: 400, maxWidth: 520)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 16)
+
                     VStack(spacing: 16) {
                         FolderChipsView()
                             .frame(maxWidth: 520)
@@ -74,12 +87,10 @@ struct HomeView: View {
                             .frame(maxWidth: 520)
                             .padding(.horizontal, 40)
                     }
-                    .opacity(isActive && !hasResults ? 0.7 : 1.0)
-                }
 
-                // Bottom spacer — balances the layout
-                Spacer()
-                    .frame(minHeight: isActive ? 0 : 40)
+                    Spacer()
+                    Spacer()
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -691,82 +702,118 @@ private struct FolderFilterChip: View {
 // MARK: - Brand Gradient Background
 
 struct CosmaGradientBackground: View {
-    // Brand palette
-    private let deepNavy    = Color(hex: 0x121221)
-    private let darkIndigo  = Color(hex: 0x110f51)
-    private let mediumBlue  = Color(hex: 0x2f3c88)
-    private let steelBlue   = Color(hex: 0x364597)
-    private let lightSilver = Color(hex: 0xd0d4d7)
-
     var body: some View {
         ZStack {
-            // Base: deep navy fill
-            deepNavy
+            // Layer 0: Desaturated glass — slight desktop bleed-through
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .saturation(0.0)
+                .opacity(0.3)
 
-            // Ellipse 5 — large soft white/silver glow, top-right area
-            RadialGradient(
-                colors: [lightSilver.opacity(0.5), Color.clear],
-                center: UnitPoint(x: 0.85, y: 0.15),
-                startRadius: 20,
-                endRadius: 450
-            )
+            // Layer 1: Dark base
+            Color(red: 0.01, green: 0.01, blue: 0.05)
+                .opacity(0.88)
 
-            // Ellipse 6 — large indigo wash, center-left
-            RadialGradient(
-                colors: [darkIndigo.opacity(0.9), Color.clear],
-                center: UnitPoint(x: 0.2, y: 0.6),
-                startRadius: 40,
-                endRadius: 500
-            )
+            // Ellipse 5 — large deep blue, center-left, flowing down
+            // (the dominant blue mass from the Figma)
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.02, green: 0.04, blue: 0.45),
+                            Color(red: 0.01, green: 0.02, blue: 0.20),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 50,
+                        endRadius: 450
+                    )
+                )
+                .frame(width: 900, height: 800)
+                .offset(x: -100, y: 100)
 
-            // Ellipse 7 — medium blue, bottom-center
-            RadialGradient(
-                colors: [mediumBlue.opacity(0.7), Color.clear],
-                center: UnitPoint(x: 0.4, y: 0.85),
-                startRadius: 30,
-                endRadius: 400
-            )
+            // Ellipse 6 — medium blue, shifted right
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.05, green: 0.08, blue: 0.55),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 30,
+                        endRadius: 300
+                    )
+                )
+                .frame(width: 600, height: 500)
+                .offset(x: 50, y: 50)
 
-            // Ellipse 8 — steel blue highlight, center
-            RadialGradient(
-                colors: [steelBlue.opacity(0.5), Color.clear],
-                center: UnitPoint(x: 0.55, y: 0.45),
-                startRadius: 20,
-                endRadius: 350
-            )
+            // Ellipse 7 — bright blue accent, center
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.08, green: 0.15, blue: 0.65).opacity(0.7),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 20,
+                        endRadius: 250
+                    )
+                )
+                .frame(width: 500, height: 400)
+                .offset(x: -50, y: -30)
 
-            // Ellipse 9 — bright blue accent, top-left edge
-            RadialGradient(
-                colors: [mediumBlue.opacity(0.6), Color.clear],
-                center: UnitPoint(x: 0.1, y: 0.2),
-                startRadius: 10,
-                endRadius: 300
-            )
+            // Ellipse 8 — dark purple-blue, bottom-left
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.04, green: 0.02, blue: 0.20),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 40,
+                        endRadius: 350
+                    )
+                )
+                .frame(width: 700, height: 500)
+                .offset(x: -200, y: 200)
 
-            // Ellipse 10 — white/silver bloom, top-right for contrast
-            RadialGradient(
-                colors: [lightSilver.opacity(0.35), Color.clear],
-                center: UnitPoint(x: 0.75, y: 0.05),
-                startRadius: 10,
-                endRadius: 250
-            )
+            // Ellipse 9 — white glow, top-right corner
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.15),
+                            Color.white.opacity(0.05),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 20,
+                        endRadius: 300
+                    )
+                )
+                .frame(width: 500, height: 400)
+                .offset(x: 300, y: -200)
 
-            // Subtle material layer for glass depth
-            Rectangle().fill(.ultraThinMaterial).opacity(0.15)
+            // Ellipse 10 — subtle warm highlight, top-right edge
+            Ellipse()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.08),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 10,
+                        endRadius: 200
+                    )
+                )
+                .frame(width: 350, height: 280)
+                .offset(x: 350, y: -250)
         }
-    }
-}
-
-// MARK: - Hex Color Helper
-
-private extension Color {
-    init(hex: UInt, alpha: Double = 1.0) {
-        self.init(
-            red: Double((hex >> 16) & 0xFF) / 255.0,
-            green: Double((hex >> 8) & 0xFF) / 255.0,
-            blue: Double(hex & 0xFF) / 255.0,
-            opacity: alpha
-        )
+        .clipped()
     }
 }
 
