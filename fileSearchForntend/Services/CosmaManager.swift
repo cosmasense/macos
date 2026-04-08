@@ -110,28 +110,35 @@ class CosmaManager {
             return
         }
 
-        // Try direct launch strategies in order:
-        // 1. cosma CLI (if installed via uv tool)
-        // 2. Python module from local dev source
-        // 3. Full uv install pipeline (fallback)
+        // Try launch strategies in order of preference
         do {
-            if let cosmaPath = findExecutable(name: "cosma") {
-                appendLog("[CosmaManager] Found cosma at \(cosmaPath), launching...")
-                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
-            } else if let pythonPath = findPythonWithBackend() {
-                appendLog("[CosmaManager] Found local backend, launching via Python...")
+            // Strategy 1: Local dev Python with backend source
+            if let pythonPath = findPythonWithBackend() {
+                appendLog("[CosmaManager] Launching local dev backend via \(pythonPath)")
                 try await launchProcess(executablePath: pythonPath, arguments: ["-m", "cosma_backend"])
-            } else {
-                // Fallback: install via uv
-                let uvPath = try await ensureUV()
-                try await ensureCosma(uvPath: uvPath)
-                if let cosmaPath = findExecutable(name: "cosma") {
-                    try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
-                } else {
-                    throw CosmaError.installFailed("cosma not found after installation")
-                }
+                scheduleUpdateChecks()
+                return
             }
-            scheduleUpdateChecks()
+            appendLog("[CosmaManager] No local dev backend found")
+
+            // Strategy 2: Installed cosma CLI
+            if let cosmaPath = findExecutable(name: "cosma") {
+                appendLog("[CosmaManager] Launching cosma CLI at \(cosmaPath)")
+                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
+                scheduleUpdateChecks()
+                return
+            }
+            appendLog("[CosmaManager] No cosma CLI found, falling back to install")
+
+            // Strategy 3: Install via uv
+            let uvPath = try await ensureUV()
+            try await ensureCosma(uvPath: uvPath)
+            if let cosmaPath = findExecutable(name: "cosma") {
+                try await launchProcess(executablePath: cosmaPath, arguments: ["serve"])
+                scheduleUpdateChecks()
+            } else {
+                throw CosmaError.installFailed("cosma not found after installation")
+            }
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
@@ -148,10 +155,14 @@ class CosmaManager {
         for repo in repoRoots {
             let python = "\(repo)/.venv/bin/python"
             let backendInit = "\(repo)/packages/cosma-backend/src/cosma_backend/__init__.py"
-            if FileManager.default.isExecutableFile(atPath: python) &&
-               FileManager.default.fileExists(atPath: backendInit) {
+            // Resolve symlinks for the Python executable check
+            let resolvedPython = (python as NSString).resolvingSymlinksInPath
+            let pythonExists = FileManager.default.fileExists(atPath: resolvedPython)
+            let backendExists = FileManager.default.fileExists(atPath: backendInit)
+            appendLog("[CosmaManager] Checking \(repo): python=\(pythonExists) backend=\(backendExists)")
+            if pythonExists && backendExists {
                 appendLog("[CosmaManager] Found local dev backend at \(repo)")
-                return python
+                return resolvedPython
             }
         }
         return nil
