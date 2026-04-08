@@ -76,7 +76,7 @@ final class StatusBarController: NSObject {
 
         // Show Main Window
         let showWindowItem = NSMenuItem(
-            title: "Show File Search",
+            title: "Show Cosma Sense",
             action: #selector(showMainWindow),
             keyEquivalent: ""
         )
@@ -151,7 +151,7 @@ final class StatusBarController: NSObject {
 
         // Quit
         let quitItem = NSMenuItem(
-            title: "Quit File Search",
+            title: "Quit Cosma Sense",
             action: #selector(quitApp),
             keyEquivalent: "q"
         )

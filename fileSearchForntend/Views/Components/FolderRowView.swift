@@ -241,67 +241,81 @@ private struct FolderDetailView: View {
 struct ProgressIndicatorView: View {
     let folder: WatchedFolder
 
+    private var processedCount: Int {
+        folder.indexedFileCount + folder.skippedFileCount
+    }
+
+    private var hasRatio: Bool {
+        folder.totalFileCount > 0
+    }
+
+    private static let numberFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f
+    }()
+
     var body: some View {
-        ZStack {
-            if folder.status == .complete {
-                // Just show green checkmark when complete
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.green)
-                    .symbolEffect(.bounce, value: folder.status)
-            } else {
-                // Show circular progress indicator (App Store style)
-                ZStack {
+        HStack(spacing: 8) {
+            // Ring
+            ZStack {
+                if folder.status == .complete {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.green)
+                        .symbolEffect(.bounce, value: folder.status)
+                } else {
                     // Background circle
                     Circle()
-                        .stroke(.quaternary.opacity(0.3), lineWidth: 2)
-                        .frame(width: 28, height: 28)
+                        .stroke(.quaternary.opacity(0.3), lineWidth: 2.5)
+                        .frame(width: 30, height: 30)
 
-                    // Progress circle
+                    // Progress arc
                     Circle()
                         .trim(from: 0, to: folder.progress)
-                        .stroke(progressColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                        .frame(width: 28, height: 28)
+                        .stroke(progressColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .frame(width: 30, height: 30)
                         .rotationEffect(.degrees(-90))
                         .animation(.easeInOut(duration: 0.5), value: folder.progress)
 
-                    // Small percentage text or icon
+                    // Center icon or percentage
                     if folder.status == .error {
                         Image(systemName: "exclamationmark")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.red)
-                    } else if folder.lastIssueMessage != nil {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.orange)
                     } else if folder.status == .paused {
                         Image(systemName: "pause.fill")
                             .font(.system(size: 10))
                             .foregroundStyle(.orange)
                     } else {
                         Text("\(Int(folder.progress * 100))")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
             }
+            .frame(width: 30, height: 30)
+
+            // Ratio text (when available)
+            if hasRatio {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(Self.numberFormatter.string(from: NSNumber(value: processedCount)) ?? "0") / \(Self.numberFormatter.string(from: NSNumber(value: folder.totalFileCount)) ?? "0")")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("files")
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
-        .frame(width: 28, height: 28)
     }
 
     private var progressColor: Color {
-        if folder.status == .complete {
-            return .green
-        }
-        if folder.status == .error {
-            return .red
-        }
-        if folder.lastIssueMessage != nil || folder.status == .paused {
-            return .orange
-        }
-        if folder.status == .indexing {
-            return .blue
-        }
+        if folder.status == .complete { return .green }
+        if folder.status == .error { return .red }
+        if folder.lastIssueMessage != nil || folder.status == .paused { return .orange }
+        if folder.status == .indexing { return .blue }
         return .gray
     }
 }

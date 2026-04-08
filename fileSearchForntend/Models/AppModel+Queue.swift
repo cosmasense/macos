@@ -149,6 +149,10 @@ extension AppModel {
         let now = Date()
         expireOldProgressItems(now: now)
         queueProgressItems[filePath] = (addedAt: now, completed: false)
+        // Bump totalFileCount for the owning folder
+        updateFolder(forFilePath: filePath) { folder in
+            folder.totalFileCount += 1
+        }
         updateFolderProgressFromQueue(forFilePath: filePath)
     }
 
@@ -158,6 +162,10 @@ extension AppModel {
         expireOldProgressItems(now: now)
         if queueProgressItems[filePath] != nil {
             queueProgressItems[filePath]?.completed = true
+        }
+        // Bump indexedFileCount for the owning folder
+        updateFolder(forFilePath: filePath) { folder in
+            folder.indexedFileCount += 1
         }
         updateFolderProgressFromQueue(forFilePath: filePath)
     }

@@ -127,6 +127,12 @@ struct fileSearchForntendApp: App {
         .windowStyle(.automatic)
         .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandMenu("Quick Search") {
                 if overlayTriggerMode == "dualCommand" {
                     Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search (Both \u{2318} Keys)") {
@@ -142,6 +148,16 @@ struct fileSearchForntendApp: App {
                         .disabled(true)
                 }
             }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(appModel)
+                .environment(cosmaManager)
+                .environment(\.controlHotkeyMonitoring, { enabled in
+                    setHotkeyMonitoring(enabled: enabled)
+                })
+                .frame(minWidth: 550, minHeight: 500)
         }
     }
 

@@ -18,12 +18,9 @@ import AppKit
 
 // MARK: - Navigation
 
-enum SidebarItem: String, CaseIterable, Identifiable {
-    case home = "Home"
-    case folders = "Folders"
-    case settings = "Settings"
-
-    var id: String { rawValue }
+enum AppPage: Equatable {
+    case home
+    case folders
 }
 
 // MARK: - App Model
@@ -67,7 +64,7 @@ class AppModel {
 
     // MARK: - Navigation State
 
-    var selection: SidebarItem? = .home
+    var currentPage: AppPage = .home
 
     // MARK: - Watched Folders State
 
@@ -335,6 +332,8 @@ class AppModel {
                     folder.lastIssueMessage = nil
                     folder.lastIssueDate = nil
                     folder.skippedFileCount = 0
+                    folder.indexedFileCount = 0
+                    folder.totalFileCount = 0
                 }
             }
 

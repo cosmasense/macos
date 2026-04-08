@@ -189,8 +189,17 @@ extension AppModel {
             if folder.status == .idle {
                 folder.status = .indexing
             }
-            let increment = completed ? 0.15 : 0.05
-            folder.progress = min(1.0, folder.progress + increment)
+            if completed {
+                folder.indexedFileCount += 1
+            }
+            // Recalculate progress from counts if we have total
+            if folder.totalFileCount > 0 {
+                let processed = Double(folder.indexedFileCount + folder.skippedFileCount)
+                folder.progress = min(1.0, processed / Double(folder.totalFileCount))
+            } else {
+                let increment = completed ? 0.15 : 0.05
+                folder.progress = min(1.0, folder.progress + increment)
+            }
             folder.lastModified = Date()
             if folder.progress >= 0.99 && completed {
                 folder.status = .complete

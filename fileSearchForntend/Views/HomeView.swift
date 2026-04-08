@@ -49,8 +49,6 @@ struct HomeView: View {
             searchFieldFocused = false
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .navigationTitle("Search Files")
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
         .animation(.easeInOut(duration: 0.3), value: model.searchResults.isEmpty)
         .animation(.easeInOut(duration: 0.3), value: model.isSearching)

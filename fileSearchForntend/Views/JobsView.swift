@@ -2,130 +2,107 @@
 //  JobsView.swift
 //  fileSearchForntend
 //
-//  Manages watched folders and displays indexing progress
-//  Includes merged Queue (Processing) tab via segmented picker
+//  Manages watched folders and displays indexing progress.
+//  Processing queue accessible via sheet.
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Folders Tab Enum
-
-enum FoldersTab: String, CaseIterable, Identifiable {
-    case folders = "Folders"
-    case processing = "Processing"
-
-    var id: String { rawValue }
-}
-
 struct FoldersView: View {
     @Environment(AppModel.self) private var model
     @State private var showFolderPicker = false
-    @State private var selectedTab: FoldersTab = .folders
+    @State private var showProcessing = false
 
     var body: some View {
         @Bindable var model = model
 
         VStack(spacing: 0) {
             // Header
-            HStack {
+            HStack(spacing: 12) {
                 Text("Folders")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 24, weight: .bold))
 
                 Spacer()
 
+                // Processing pill button
                 Button {
-                    Task {
-                        if selectedTab == .folders {
-                            await model.refreshWatchedFolders()
-                        } else {
-                            await model.refreshQueueStatus()
-                            await model.refreshQueueItems()
+                    showProcessing = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Processing")
+                            .font(.system(size: 12, weight: .medium))
+                        if let status = model.queueStatus, status.totalItems > 0 {
+                            Text("\(status.totalItems)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.2), in: Capsule())
                         }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .background {
+                    Capsule().fill(.quaternary.opacity(0.5))
+                }
+                .help("View processing queue")
+
+                Button {
+                    Task { await model.refreshWatchedFolders() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                 }
                 .buttonStyle(.plain)
                 .help("Refresh")
 
-                if model.isLoadingWatchedFolders || model.isLoadingQueue {
-                    ProgressView()
-                        .frame(width: 16, height: 16)
-                        .controlSize(.small)
-                        .padding(.horizontal, 6)
-                }
-
-                if selectedTab == .folders {
-                    Button(action: {
-                        showFolderPicker = true
-                    }) {
-                        Label("Add Folder", systemImage: "plus")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-
-                if selectedTab == .processing, let status = model.queueStatus {
-                    Button {
-                        Task { await model.toggleQueuePause() }
-                    } label: {
-                        Label(
-                            status.manuallyPaused ? "Resume" : "Pause",
-                            systemImage: status.manuallyPaused ? "play.fill" : "pause.fill"
-                        )
-                        .font(.system(size: 14, weight: .medium))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 20)
-
-            // Segmented picker
-            Picker("Tab", selection: $selectedTab) {
-                ForEach(FoldersTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 32)
-            .padding(.bottom, 12)
-
-            if selectedTab == .folders {
-                if model.missingWatchedEndpoint {
-                    MissingEndpointBanner()
-                        .padding(.horizontal, 32)
-                }
-
-                Divider()
-
-                // Folder list or empty state
                 if model.isLoadingWatchedFolders {
-                    LoadingFoldersView()
-                } else if model.watchedFolders.isEmpty {
-                    EmptyFoldersView()
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 14) {
-                            ForEach(model.watchedFolders) { folder in
-                                FolderRowView(folder: folder)
-                            }
-                        }
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 24)
-                    }
+                    ProgressView()
+                        .frame(width: 14, height: 14)
+                        .controlSize(.small)
                 }
+
+                Button(action: { showFolderPicker = true }) {
+                    Label("Add Folder", systemImage: "plus")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, 24)
+            .padding(.bottom, 16)
+
+            if model.missingWatchedEndpoint {
+                MissingEndpointBanner()
+                    .padding(.horizontal, 32)
+            }
+
+            Divider()
+                .padding(.horizontal, 32)
+
+            // Folder list or empty state
+            if model.isLoadingWatchedFolders {
+                LoadingFoldersView()
+            } else if model.watchedFolders.isEmpty {
+                EmptyFoldersView()
             } else {
-                QueueContentView()
+                ScrollView {
+                    LazyVStack(spacing: 14) {
+                        ForEach(model.watchedFolders) { folder in
+                            FolderRowView(folder: folder)
+                        }
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 24)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Folders")
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .background(.ultraThinMaterial)
         .fileImporter(
             isPresented: $showFolderPicker,
@@ -134,21 +111,22 @@ struct FoldersView: View {
         ) { result in
             handleFolderSelection(result)
         }
+        .sheet(isPresented: $showProcessing) {
+            QueueSheetView()
+                .environment(model)
+                .frame(minWidth: 580, minHeight: 450)
+        }
         .alert(
             "Backend",
             isPresented: Binding(
                 get: { model.jobsError != nil },
                 set: { newValue in
-                    if !newValue {
-                        model.jobsError = nil
-                    }
+                    if !newValue { model.jobsError = nil }
                 }
             ),
             presenting: model.jobsError
         ) { _ in
-            Button("OK", role: .cancel) {
-                model.jobsError = nil
-            }
+            Button("OK", role: .cancel) { model.jobsError = nil }
         } message: { message in
             Text(message)
         }
@@ -166,6 +144,48 @@ struct FoldersView: View {
     }
 }
 
+// MARK: - Queue Sheet Wrapper
+
+struct QueueSheetView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Sheet header
+            HStack {
+                Text("Processing Queue")
+                    .font(.system(size: 18, weight: .semibold))
+
+                Spacer()
+
+                if let status = model.queueStatus {
+                    Button {
+                        Task { await model.toggleQueuePause() }
+                    } label: {
+                        Label(
+                            status.manuallyPaused ? "Resume" : "Pause",
+                            systemImage: status.manuallyPaused ? "play.fill" : "pause.fill"
+                        )
+                        .font(.system(size: 13, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                }
+
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+
+            Divider()
+
+            QueueContentView()
+        }
+    }
+}
+
 // MARK: - Loading View
 
 struct LoadingFoldersView: View {
@@ -175,7 +195,7 @@ struct LoadingFoldersView: View {
                 .frame(maxWidth: 32)
                 .frame(height: 32)
                 .padding(.bottom, 4)
-            Text("Syncing with backend…")
+            Text("Syncing with backend...")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
         }
@@ -190,11 +210,11 @@ struct MissingEndpointBanner: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
-            
+
             Text("Backend needs GET /api/watched-directories to show existing folders.")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.primary)
-            
+
             Spacer()
         }
         .padding(12)
@@ -228,5 +248,5 @@ struct EmptyFoldersView: View {
 #Preview {
     FoldersView()
         .environment(AppModel())
-        .frame(width: 1000, height: 700)
+        .frame(width: 900, height: 700)
 }
