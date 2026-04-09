@@ -49,22 +49,8 @@ class CosmaManager {
     private var lastLaunchExe: String?
     private var lastLaunchArgs: [String] = []
 
-    private static let managedKey = "cosmaManagerEnabled"
-    private static let managedSetKey = "cosmaManagerEnabledHasBeenSet"
-
-    var isManaged: Bool {
-        get {
-            // Default to true if the user has never explicitly set this
-            if !UserDefaults.standard.bool(forKey: Self.managedSetKey) {
-                return true
-            }
-            return UserDefaults.standard.bool(forKey: Self.managedKey)
-        }
-        set {
-            UserDefaults.standard.set(true, forKey: Self.managedSetKey)
-            UserDefaults.standard.set(newValue, forKey: Self.managedKey)
-        }
-    }
+    /// Always managed — backend starts and stops with the frontend app.
+    var isManaged: Bool = true
 
     var isRunning: Bool { setupStage == .running }
 
@@ -98,11 +84,9 @@ class CosmaManager {
     // MARK: - Main Entry Point
 
     func startManagedBackend() async {
-        print("[CosmaManager] startManagedBackend called, isManaged=\(isManaged)")
-        guard isManaged else { print("[CosmaManager] Not managed, skipping"); return }
+        print("[CosmaManager] startManagedBackend called")
 
-        // First check if a backend is already reachable
-        setupStage = .startingServer
+        // Step 1: Quick attach if backend is already running (no setup needed)
         if await isBackendReachable() {
             ownsProcess = false
             setupStage = .running
@@ -110,6 +94,24 @@ class CosmaManager {
             scheduleUpdateChecks()
             return
         }
+
+        // Step 2: Walk through visible setup stages so the user sees real progress.
+        // These checks are cheap (just file existence) but give the UI something to show.
+        setupStage = .checkingUV
+        let uvFound = findExecutable(name: "uv") != nil
+        if !uvFound {
+            // We don't actually install uv in dev mode (the local venv is already there),
+            // but show the stage briefly so the UI step row updates correctly.
+            setupStage = .installingUV
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+
+        setupStage = .checkingCosma
+        try? await Task.sleep(for: .milliseconds(100))
+        // (No installingCosma stage in dev mode — venv is local)
+
+        // Step 3: Launch the server
+        setupStage = .startingServer
 
         // Build a shell command that activates the venv and runs the backend.
         // Using /bin/sh -l -c gives us a login shell with full PATH resolution,
@@ -124,22 +126,39 @@ class CosmaManager {
 
             if FileManager.default.fileExists(atPath: venvActivate) &&
                FileManager.default.fileExists(atPath: backendInit) {
-                // Run the venv python directly — no source/activate needed.
-                // The venv python binary automatically uses venv site-packages.
+                // Run venv python DIRECTLY (no shell wrapper) so the pid we
+                // track is the actual backend process — killing it reliably
+                // terminates the backend (no orphaned children).
                 let venvPython = "\(repoRoot)/.venv/bin/python"
-                let cmd = "PYTHONPATH='\(repoRoot)/packages/cosma-backend/src' TOKENIZERS_PARALLELISM=false '\(venvPython)' -m cosma_backend"
-                appendLog("[CosmaManager] Launching via shell: \(cmd)")
-                try await launchShellCommand(cmd)
+                let pythonPath = "\(repoRoot)/packages/cosma-backend/src"
+                appendLog("[CosmaManager] Launching python directly: \(venvPython) -m cosma_backend")
+                try await launchBackendProcess(
+                    executable: venvPython,
+                    arguments: ["-m", "cosma_backend"],
+                    extraEnv: [
+                        "PYTHONPATH": pythonPath,
+                        "TOKENIZERS_PARALLELISM": "false",
+                    ]
+                )
                 scheduleUpdateChecks()
                 return
             }
             appendLog("[CosmaManager] No local dev backend found at \(repoRoot)")
 
-            // Strategy 2: cosma serve (installed via uv tool)
-            let cosmaCmd = "cosma serve"
-            appendLog("[CosmaManager] Trying: \(cosmaCmd)")
-            try await launchShellCommand(cosmaCmd)
-            scheduleUpdateChecks()
+            // Strategy 2: cosma serve (installed via uv tool) — resolve to a
+            // concrete executable and spawn directly, again avoiding sh.
+            if let cosmaPath = findExecutable(name: "cosma") {
+                appendLog("[CosmaManager] Launching cosma directly: \(cosmaPath) serve")
+                try await launchBackendProcess(
+                    executable: cosmaPath,
+                    arguments: ["serve"],
+                    extraEnv: [:]
+                )
+                scheduleUpdateChecks()
+                return
+            }
+            appendLog("[CosmaManager] cosma executable not found")
+            throw CosmaError.serverStartFailed("No cosma backend available (no local venv, no `cosma` on PATH)")
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
@@ -209,22 +228,34 @@ class CosmaManager {
 
     // MARK: - Server Lifecycle
 
-    /// Launch the backend via a login shell command.
-    /// Using /bin/sh -l -c ensures full PATH, venv activation, and symlink
-    /// resolution — completely bypassing sandbox container path issues.
-    private func launchShellCommand(_ command: String) async throws {
+    /// Launch the backend as a direct child process (no shell wrapper).
+    /// This is important because:
+    ///   1. The pid we track IS the backend — killing it actually kills it,
+    ///      rather than leaving an orphaned Python child behind a dead shell.
+    ///   2. No sandbox profile sourcing issues.
+    @ObservationIgnored private var lastLaunchEnv: [String: String] = [:]
+
+    private func launchBackendProcess(
+        executable: String,
+        arguments: [String],
+        extraEnv: [String: String]
+    ) async throws {
         setupStage = .startingServer
-        lastLaunchExe = "/bin/sh"
-        lastLaunchArgs = ["-l", "-c", command]
+        lastLaunchExe = executable
+        lastLaunchArgs = arguments
+        lastLaunchEnv = extraEnv
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", command]  // No -l: avoid login profile sourcing (sandbox blocks it)
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
 
-        // Inherit the full process environment so PATH etc. are available
-        // but override HOME to the real home directory
+        // Inherit the full process environment so PATH etc. are available,
+        // override HOME to the real home directory, and merge in caller extras.
         var env = ProcessInfo.processInfo.environment
         env["HOME"] = realHomeDirectory()
+        for (k, v) in extraEnv {
+            env[k] = v
+        }
         process.environment = env
 
         let stdout = Pipe()
@@ -260,8 +291,11 @@ class CosmaManager {
         serverProcess = process
         ownsProcess = true
 
-        // Wait a moment then verify the server is reachable
-        for _ in 0..<20 {
+        // Poll for backend reachability. Cold-start can be slow: Python interpreter
+        // + torch imports + Phase 2 model loading can take 15-30s. Poll for up to
+        // 60s so we don't give up too early and leave the UI stuck.
+        let maxAttempts = 120  // 120 x 500ms = 60 seconds
+        for _ in 0..<maxAttempts {
             try await Task.sleep(for: .milliseconds(500))
             if await isBackendReachable() {
                 setupStage = .running
@@ -270,25 +304,57 @@ class CosmaManager {
             }
         }
 
-        throw CosmaError.serverStartFailed("Server did not become reachable within 10 seconds")
+        throw CosmaError.serverStartFailed("Server did not become reachable within 60 seconds")
     }
 
     private func relaunchLastProcess() async throws {
-        guard lastLaunchArgs.count >= 3, lastLaunchArgs[0] == "-l", lastLaunchArgs[1] == "-c" else {
+        guard let exe = lastLaunchExe, !lastLaunchArgs.isEmpty else {
             throw CosmaError.serverStartFailed("No previous launch configuration")
         }
-        try await launchShellCommand(lastLaunchArgs[2])
+        try await launchBackendProcess(executable: exe, arguments: lastLaunchArgs, extraEnv: lastLaunchEnv)
     }
 
+    /// Stop the backend process. Synchronous with bounded waits so it
+    /// reliably completes inside `applicationWillTerminate` before the app
+    /// exits.
+    ///
+    /// Sequence:
+    ///   1. SIGTERM → give Quart's `after_serving` hook up to 6 s to run
+    ///      (needed so Ollama models are unloaded via keep_alive=0 and GPU is
+    ///      released — otherwise Ollama's model stays pinned in GPU after
+    ///      quit, making the machine laggy).
+    ///   2. SIGKILL if still alive → wait up to 0.5 s.
     func stopServer() {
-        guard ownsProcess, let process = serverProcess, process.isRunning else { return }
+        guard ownsProcess, let process = serverProcess else { return }
 
-        process.interrupt() // SIGINT
+        if process.isRunning {
+            let pid = process.processIdentifier
+            appendLog("[CosmaManager] Stopping backend (pid \(pid))…")
 
-        // Fall back to SIGTERM after 3s
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [weak process] in
-            if let p = process, p.isRunning {
-                p.terminate()
+            // Step 1: SIGTERM (graceful) — gives backend time to unload Ollama
+            process.terminate()
+
+            // Busy-wait up to 6s for the backend's after_serving to finish.
+            // This is the window where Ollama models get unloaded.
+            let softDeadline = Date().addingTimeInterval(6.0)
+            while process.isRunning && Date() < softDeadline {
+                usleep(50_000)  // 50 ms
+            }
+
+            // Step 2: SIGKILL (force) if still alive
+            if process.isRunning {
+                appendLog("[CosmaManager] Backend did not exit in 6s, sending SIGKILL")
+                kill(pid, SIGKILL)
+                let hardDeadline = Date().addingTimeInterval(0.5)
+                while process.isRunning && Date() < hardDeadline {
+                    usleep(50_000)
+                }
+            }
+
+            if process.isRunning {
+                appendLog("[CosmaManager] Backend pid \(pid) still running after SIGKILL")
+            } else {
+                appendLog("[CosmaManager] Backend pid \(pid) terminated cleanly")
             }
         }
 

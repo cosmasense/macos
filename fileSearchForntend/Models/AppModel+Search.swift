@@ -47,9 +47,24 @@ extension AppModel {
         let requestID = UUID()
         activeSearchRequestID = requestID
         lastSearchQuery = query
-        isSearching = true
         searchError = nil
-        searchResults = []
+
+        // Check cache for instant results
+        let cacheKey = Self.cacheKey(
+            query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
+            directory: directory,
+            limit: 50
+        )
+        let now = Date()
+        if let entry = searchResultCache[cacheKey],
+           now.timeIntervalSince(entry.cachedAt) < Self.searchCacheTTL {
+            // Serve cached results immediately
+            searchResults = entry.results
+            isSearching = false
+        } else {
+            isSearching = true
+            // Keep old results visible until new ones arrive (avoids UI flicker)
+        }
 
         defer {
             if activeSearchRequestID == requestID {
@@ -68,12 +83,36 @@ extension AppModel {
 
             guard activeSearchRequestID == requestID else { return }
             searchResults = response.results
+            // Update cache (with eviction if needed)
+            cacheSearchResults(key: cacheKey, results: response.results)
         } catch let error as APIError {
             guard activeSearchRequestID == requestID else { return }
-            searchError = error.localizedDescription
+            // Only show error if we don't already have cached results showing
+            if searchResults.isEmpty {
+                searchError = error.localizedDescription
+            }
         } catch {
             guard activeSearchRequestID == requestID else { return }
-            searchError = "An unexpected error occurred: \(error.localizedDescription)"
+            if searchResults.isEmpty {
+                searchError = "An unexpected error occurred: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Builds a stable cache key for a search.
+    nonisolated static func cacheKey(query: String, directory: String?, limit: Int) -> String {
+        "\(query)|\(directory ?? "")|\(limit)"
+    }
+
+    /// Stores results in the cache, evicting the oldest entries if over the cap.
+    @MainActor
+    internal func cacheSearchResults(key: String, results: [SearchResultItem]) {
+        searchResultCache[key] = (results: results, cachedAt: Date())
+        if searchResultCache.count > Self.searchCacheMaxEntries {
+            // Drop the oldest entry
+            if let oldest = searchResultCache.min(by: { $0.value.cachedAt < $1.value.cachedAt }) {
+                searchResultCache.removeValue(forKey: oldest.key)
+            }
         }
     }
 
@@ -183,7 +222,7 @@ extension AppModel {
         activePopupSearchRequestID = requestID
         popupIsSearching = true
         popupSearchError = nil
-        popupSearchResults = []
+        // Keep old results visible until new ones arrive (avoids UI flicker)
 
         defer {
             if activePopupSearchRequestID == requestID {

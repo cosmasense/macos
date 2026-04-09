@@ -66,17 +66,23 @@ struct WatchedFolder: Identifiable, Hashable, Codable {
     
     init(response: JobResponse) {
         let folderName = URL(fileURLWithPath: response.path).lastPathComponent
+        let indexed = response.fileCount ?? 0
         // isActive means the watch job is enabled, not that indexing is complete.
-        // Real status/progress comes from SSE events; default to idle.
+        // For initial API load: if files are already indexed, treat as steady-state
+        // complete with matching counts so the ring shows 100%. If empty, idle.
+        let initialProgress: Double = indexed > 0 ? 1.0 : 0.0
+        let initialStatus: IndexStatus = indexed > 0 ? .complete : .idle
         self.init(
             backendID: response.id,
             name: folderName,
             path: response.path,
-            progress: 0.0,
-            status: .idle,
+            progress: initialProgress,
+            status: initialStatus,
             lastModified: response.updatedAt ?? response.createdAt ?? Date(),
             recursive: response.recursive,
-            filePattern: response.filePattern
+            filePattern: response.filePattern,
+            indexedFileCount: indexed,
+            totalFileCount: indexed  // matches indexed so ring reads 100% in steady state
         )
     }
 }

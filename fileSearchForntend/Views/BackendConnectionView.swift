@@ -17,6 +17,15 @@ struct BackendConnectionView: View {
     @State private var lastError: String?
     @State private var copied = false
 
+    /// Simulated progress that fills over the expected setup window so the user
+    /// has visual feedback even when the backend is bootstrapping silently.
+    @State private var simulatedProgress: Double = 0.0
+    @State private var progressTimer: Timer?
+
+    /// How long the fake progress bar takes to fill (seconds).
+    /// Real backend usually finishes well before this.
+    private let simulatedDuration: Double = 120.0
+
     private let startCommand = "cosma serve"
 
     var body: some View {
@@ -69,6 +78,20 @@ struct BackendConnectionView: View {
             }
             .padding(.horizontal, 40)
 
+            // Simulated progress bar — gives the user visual feedback during silent setup
+            VStack(spacing: 6) {
+                ProgressView(value: simulatedProgress)
+                    .progressViewStyle(.linear)
+                    .tint(.blue)
+                    .frame(maxWidth: 320)
+                Text(simulatedProgressLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.identity)   // Stop SwiftUI from crossfading the text
+                    .animation(nil, value: simulatedProgress)  // Detach text from progress animation
+            }
+            .padding(.horizontal, 40)
+
             if case .failed(let message) = cosmaManager.setupStage {
                 Text(message)
                     .font(.system(size: 12))
@@ -94,6 +117,54 @@ struct BackendConnectionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.ultraThinMaterial)
+        .onAppear { startSimulatedProgress() }
+        .onDisappear { stopSimulatedProgress() }
+        .onChange(of: cosmaManager.setupStage) { _, stage in
+            if case .running = stage {
+                completeSimulatedProgress()
+            }
+        }
+    }
+
+    // MARK: - Simulated Progress
+
+    private var simulatedProgressLabel: String {
+        if simulatedProgress >= 1.0 {
+            return "Almost ready…"
+        }
+        let pct = Int(simulatedProgress * 100)
+        return "Preparing backend… \(pct)%"
+    }
+
+    private func startSimulatedProgress() {
+        stopSimulatedProgress()
+        simulatedProgress = 0.0
+        let stepInterval: TimeInterval = 0.25
+        let totalSteps = simulatedDuration / stepInterval
+        let stepIncrement = 1.0 / totalSteps
+        progressTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak progressTimer] _ in
+            DispatchQueue.main.async {
+                if simulatedProgress < 0.95 {
+                    withAnimation(.linear(duration: stepInterval)) {
+                        simulatedProgress = min(0.95, simulatedProgress + stepIncrement)
+                    }
+                } else {
+                    progressTimer?.invalidate()
+                }
+            }
+        }
+    }
+
+    private func stopSimulatedProgress() {
+        progressTimer?.invalidate()
+        progressTimer = nil
+    }
+
+    private func completeSimulatedProgress() {
+        stopSimulatedProgress()
+        withAnimation(.easeOut(duration: 0.4)) {
+            simulatedProgress = 1.0
+        }
     }
 
     // MARK: - Manual Mode (existing UI)

@@ -65,6 +65,10 @@ extension AppModel {
                     try? await Task.sleep(for: .seconds(2))
                     self.savedSettingPaths.remove(path)
                 }
+                // Re-check model availability after a summarizer change
+                if path.hasPrefix("summarizer.") {
+                    Task { await self.checkModelAvailability() }
+                }
             } catch {
                 savingSettingPaths.remove(path)
                 settingsError = error.localizedDescription
@@ -103,6 +107,36 @@ extension AppModel {
                 settingsError = error.localizedDescription
             }
         }
+    }
+
+    /// Non-blocking background check that the configured summarizer model is
+    /// reachable. Does NOT load the model — just verifies the provider can call
+    /// it (ollama running + model pulled, llamacpp file/repo exists, online API
+    /// key set). Sets `modelAvailabilityWarning` on failure so ContentView can
+    /// surface a banner notification.
+    func checkModelAvailability() async {
+        do {
+            let result = try await apiClient.testSummarizerModel()
+            if result.ok {
+                modelAvailabilityWarning = nil
+            } else {
+                modelAvailabilityWarning = ModelAvailabilityWarning(
+                    provider: result.provider,
+                    model: result.model,
+                    detail: result.detail
+                )
+            }
+        } catch {
+            #if DEBUG
+            print("Model availability check failed: \(error)")
+            #endif
+            // Don't overwrite an existing warning with a transient network error
+        }
+    }
+
+    /// Dismiss the model availability warning banner.
+    func dismissModelAvailabilityWarning() {
+        modelAvailabilityWarning = nil
     }
 
     /// Tests the backend connection and returns status

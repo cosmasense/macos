@@ -97,6 +97,13 @@ struct HomeView: View {
             // Force resign first responder on macOS — more reliable than @FocusState alone
             NSApp.keyWindow?.makeFirstResponder(nil)
             searchFieldFocused = false
+
+            // If search text is empty, reset to idle state
+            if model.searchText.trimmingCharacters(in: .whitespaces).isEmpty && model.searchTokens.isEmpty {
+                model.searchResults = []
+                model.searchError = nil
+                model.isSearching = false
+            }
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: isActive)
         .animation(.easeInOut(duration: 0.3), value: hasResults)
@@ -163,6 +170,9 @@ struct SearchFieldView: View {
                     Button(action: {
                         model.searchText = ""
                         model.searchTokens = []
+                        model.searchResults = []
+                        model.searchError = nil
+                        model.isSearching = false
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 16))

@@ -81,6 +81,8 @@ struct JobResponse: Codable, Identifiable, Hashable {
     let lastScan: Date?
     let createdAt: Date?
     let updatedAt: Date?
+    let fileCount: Int?
+    let totalFiles: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -91,6 +93,8 @@ struct JobResponse: Codable, Identifiable, Hashable {
         case lastScan = "last_scan"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case fileCount = "file_count"
+        case totalFiles = "total_files"
     }
 
     func hash(into hasher: inout Hasher) {
@@ -225,6 +229,15 @@ struct StatusResponse: Codable {
     let status: String?
     let jobs: Int?
     let version: String?
+}
+
+/// Response from POST /api/settings/test_model.
+/// Indicates whether the configured summarizer model is reachable without loading it.
+struct ModelTestResponse: Codable {
+    let ok: Bool
+    let provider: String
+    let model: String
+    let detail: String
 }
 
 // MARK: - Backend Update Events (for SSE)

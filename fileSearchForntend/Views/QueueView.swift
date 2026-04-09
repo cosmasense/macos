@@ -424,6 +424,7 @@ struct RecentFileRow: View {
 struct FailedFileRow: View {
     let file: ProcessedFileItem
     let onReindex: () -> Void
+    @State private var didCopy = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -452,6 +453,19 @@ struct FailedFileRow: View {
 
             Spacer()
 
+            // Share Error — copies a debuggable report to the clipboard
+            Button {
+                copyErrorReport()
+            } label: {
+                Label(didCopy ? "Copied" : "Share Error",
+                      systemImage: didCopy ? "checkmark" : "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(didCopy ? .green : .blue)
+            .help("Copy error details to clipboard for debugging")
+
             Button(action: onReindex) {
                 Label("Reindex", systemImage: "arrow.counterclockwise")
                     .font(.system(size: 12, weight: .medium))
@@ -462,6 +476,61 @@ struct FailedFileRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .contextMenu {
+            Button("Copy Error Report") { copyErrorReport() }
+            Button("Copy File Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.filePath, forType: .string)
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.filePath)])
+            }
+        }
+    }
+
+    private func copyErrorReport() {
+        let report = Self.buildErrorReport(for: file)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        withAnimation(.easeInOut(duration: 0.2)) { didCopy = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(.easeInOut(duration: 0.2)) { didCopy = false }
+        }
+    }
+
+    /// Multi-line error report suitable for pasting into a bug report.
+    static func buildErrorReport(for file: ProcessedFileItem) -> String {
+        let fm = FileManager.default
+        let fileExists = fm.fileExists(atPath: file.filePath)
+        var size: Int64 = 0
+        if let attrs = try? fm.attributesOfItem(atPath: file.filePath),
+           let s = attrs[.size] as? Int64 {
+            size = s
+        }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
+        return """
+        SAIL — Failed File Error Report
+        ================================
+        Timestamp:   \(timestamp)
+        App version: \(appVersion) (build \(appBuild))
+
+        File
+        ----
+        Name:       \(file.filename)
+        Path:       \(file.filePath)
+        Extension:  \(file.fileExtension)
+        Exists:     \(fileExists ? "yes" : "NO (removed?)")
+        Size:       \(size) bytes
+        Status:     \(file.status)
+        Updated At: \(file.updatedAt.map { String($0) } ?? "—")
+
+        Error
+        -----
+        \(file.processingError ?? "(no error message)")
+        """
     }
 }
 

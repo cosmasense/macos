@@ -17,13 +17,19 @@ struct fileSearchForntendApp: App {
     @State private var cosmaManager = CosmaManager()
     @State private var hotkeyMonitoringEnabled = true
     @State private var isBackendConnected = false
+    @State private var hasFullDiskAccess = true // optimistic, checked on appear
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
     @AppStorage("overlayTriggerMode") private var overlayTriggerMode = "hotkey"
 
     var body: some Scene {
         WindowGroup {
             Group {
-                if isBackendConnected {
+                if !hasFullDiskAccess {
+                    FullDiskAccessGateView {
+                        hasFullDiskAccess = true
+                    }
+                    .frame(minWidth: 500, minHeight: 400)
+                } else if isBackendConnected {
                     ContentView()
                         .environment(appModel)
                         .environment(cosmaManager)
@@ -62,6 +68,8 @@ struct fileSearchForntendApp: App {
                         }
                         .onAppear {
                             registerActiveTrigger()
+                            // Animate the window to its larger size while keeping its center point
+                            recenterMainWindowToSize(NSSize(width: 900, height: 600))
                         }
                 } else {
                     BackendConnectionView(onConnected: {
@@ -83,45 +91,32 @@ struct fileSearchForntendApp: App {
                 appDelegate.appModel = appModel
                 appDelegate.cosmaManager = cosmaManager
 
-                // Auto-start managed backend or detect existing one
+                // Check Full Disk Access before proceeding
+                hasFullDiskAccess = checkFullDiskAccessPermission()
+                guard hasFullDiskAccess else { return }
+
+                // Auto-start managed backend (or attach to an already-running one).
+                // The actual transition to ContentView is driven by
+                // `.onChange(of: cosmaManager.setupStage)` below, so this task
+                // just kicks off the startup work.
                 Task {
-                    // On first launch, if a backend is already running, disable managed mode
-                    if cosmaManager.isManaged && !UserDefaults.standard.bool(forKey: "cosmaManagerEnabledHasBeenSet") {
-                        do {
-                            let _ = try await APIClient.shared.fetchStatus()
-                            // Backend already running — user manages it themselves
-                            cosmaManager.isManaged = false
-                            appModel.connectToBackend()
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isBackendConnected = true
-                            }
-                            return
-                        } catch {
-                            // No backend running — keep managed mode on, proceed with install
-                        }
-                    }
-
-                    guard cosmaManager.isManaged else { return }
-
                     await cosmaManager.startManagedBackend()
-                    // Poll for backend readiness
-                    for _ in 0..<30 {
-                        try? await Task.sleep(for: .milliseconds(500))
-                        do {
-                            let _ = try await APIClient.shared.fetchStatus()
-                            await MainActor.run {
-                                appModel.connectToBackend()
-                                withAnimation(.easeInOut(duration: 0.3)) {
-                                    isBackendConnected = true
-                                }
-                            }
-                            return
-                        } catch {}
-                    }
                 }
             }
-            .onChange(of: cosmaManager.setupStage) {
+            .onChange(of: cosmaManager.setupStage) { _, newStage in
                 appDelegate.syncStatusBarWithCosmaManager()
+                // Transition to the main UI the moment the backend becomes ready,
+                // regardless of which code path got us there (cold start, retry,
+                // attach-to-existing-instance, or delayed readiness after the
+                // initial polling window).
+                if case .running = newStage, !isBackendConnected {
+                    appModel.connectToBackend()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isBackendConnected = true
+                    }
+                    // Kick off a non-blocking model availability check.
+                    Task { await appModel.checkModelAvailability() }
+                }
             }
             .onChange(of: cosmaManager.updateStatus) {
                 appDelegate.syncStatusBarWithCosmaManager()
@@ -130,12 +125,6 @@ struct fileSearchForntendApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
             CommandMenu("Quick Search") {
                 if overlayTriggerMode == "dualCommand" {
                     Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search (Both \u{2318} Keys)") {
@@ -236,6 +225,24 @@ struct fileSearchForntendApp: App {
             registerActiveTrigger()
         } else {
             appDelegate.stopHotkey()
+        }
+    }
+
+    /// Animates the main window to a new size while keeping the center point
+    /// constant (so it grows outward instead of jumping anchored to the top-left).
+    private func recenterMainWindowToSize(_ newSize: NSSize) {
+        DispatchQueue.main.async {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
+                return
+            }
+            let oldFrame = window.frame
+            let oldCenter = NSPoint(x: oldFrame.midX, y: oldFrame.midY)
+            let newOrigin = NSPoint(
+                x: oldCenter.x - newSize.width / 2,
+                y: oldCenter.y - newSize.height / 2
+            )
+            let newFrame = NSRect(origin: newOrigin, size: newSize)
+            window.setFrame(newFrame, display: true, animate: true)
         }
     }
 }

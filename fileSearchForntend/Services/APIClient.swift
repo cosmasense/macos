@@ -20,6 +20,14 @@ class APIClient {
         return URLSession(configuration: config)
     }()
 
+    /// Fast session for startup health checks (short timeout avoids blocking startup)
+    private let healthSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 3
+        config.timeoutIntervalForResource = 5
+        return URLSession(configuration: config)
+    }()
+
     private static let iso8601Formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -81,7 +89,12 @@ class APIClient {
 
     func fetchStatus() async throws -> StatusResponse {
         let url = baseURL.appendingPathComponent("/api/status/")
-        return try await get(url: url)
+        // Use fast health session for status checks (startup polling)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await healthSession.data(for: request)
+        return try handleResponse(data: data, response: response)
     }
 
     // MARK: - Watch Jobs (formerly Watched Directories)
@@ -336,6 +349,17 @@ class APIClient {
     func fetchSettingsDefaults() async throws -> BackendSettings {
         let url = baseURL.appendingPathComponent("/api/settings/defaults")
         return try await get(url: url)
+    }
+
+    /// Non-blocking model availability check.
+    /// Backend verifies the configured summarizer model is reachable without loading it.
+    func testSummarizerModel() async throws -> ModelTestResponse {
+        let url = baseURL.appendingPathComponent("/api/settings/test_model")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: request)
+        return try handleResponse(data: data, response: response)
     }
 
     /// Update settings using dotted TOML paths.

@@ -85,6 +85,13 @@ class AppModel {
     @ObservationIgnored var lastSearchQuery: String?
     @ObservationIgnored var activeSearchRequestID: UUID?
 
+    /// In-memory cache of search results keyed on "query|directory|limit".
+    /// Lets repeated identical queries return instantly while still firing a
+    /// background refresh to keep results fresh.
+    @ObservationIgnored var searchResultCache: [String: (results: [SearchResultItem], cachedAt: Date)] = [:]
+    nonisolated static let searchCacheTTL: TimeInterval = 5 * 60  // 5 minutes
+    nonisolated static let searchCacheMaxEntries: Int = 50
+
     // MARK: - Popup Search State (Quick Search Overlay)
 
     var popupSearchText: String = ""
@@ -197,6 +204,18 @@ class AppModel {
     var settingsError: String?
     var savingSettingPaths: Set<String> = []
     var savedSettingPaths: Set<String> = []
+
+    // MARK: - Model Availability Notification
+
+    /// Non-nil when the configured summarizer model has failed its availability check.
+    /// Observed by ContentView to show an in-app banner.
+    var modelAvailabilityWarning: ModelAvailabilityWarning?
+
+    struct ModelAvailabilityWarning: Equatable {
+        let provider: String
+        let model: String
+        let detail: String
+    }
 
     // MARK: - Queue State
 
@@ -354,6 +373,11 @@ class AppModel {
                 if !hasActiveQueueItems {
                     upsertFolder(forDirectory: dirPath) { folder in
                         folder.status = .complete
+                        // Align counts so ring (which reads from counts) matches 100%
+                        if folder.totalFileCount == 0 {
+                            folder.totalFileCount = max(folder.indexedFileCount, 1)
+                        }
+                        folder.indexedFileCount = folder.totalFileCount
                         folder.progress = 1.0
                         folder.lastModified = Date()
                     }

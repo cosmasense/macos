@@ -99,6 +99,15 @@ extension AppModel {
                     updated.backendID = newFolder.backendID
                     updated.recursive = newFolder.recursive
                     updated.filePattern = newFolder.filePattern
+                    // Use API file counts if SSE hasn't provided any yet
+                    if updated.indexedFileCount == 0 && newFolder.indexedFileCount > 0 {
+                        updated.indexedFileCount = newFolder.indexedFileCount
+                        updated.totalFileCount = newFolder.totalFileCount
+                        updated.progress = newFolder.progress
+                        if updated.status == .idle {
+                            updated.status = newFolder.status
+                        }
+                    }
                     merged.append(updated)
                 } else {
                     merged.append(newFolder)
@@ -167,16 +176,17 @@ extension AppModel {
         mutate(&watchedFolders[index])
     }
 
-    /// Increments progress for a file being processed
+    /// Increments progress for a file being processed.
+    /// When queue tracking is active, defers to it (queue events are authoritative).
+    /// Otherwise, updates folder counts directly so the ring shows real progress.
     internal func bumpProgress(forFilePath path: String, completed: Bool) {
         let normalizedFile = (path as NSString).standardizingPath
 
-        // If queue-based progress is active for this folder, use that instead
+        // If queue-based progress is active for this folder, let it handle counts
         if let folderIndex = watchedFolders.firstIndex(where: { normalizedFile.hasPrefix($0.path) }) {
             let folderPath = watchedFolders[folderIndex].path
             let hasQueueItems = queueProgressItems.contains { ($0.key as NSString).standardizingPath.hasPrefix(folderPath) }
             if hasQueueItems {
-                // Queue tracking is more accurate - just ensure status is indexing
                 if watchedFolders[folderIndex].status == .idle {
                     watchedFolders[folderIndex].status = .indexing
                 }
@@ -191,17 +201,18 @@ extension AppModel {
             }
             if completed {
                 folder.indexedFileCount += 1
+                // Without queue tracking, totals are unknown — grow as we discover
+                if folder.totalFileCount < folder.indexedFileCount {
+                    folder.totalFileCount = folder.indexedFileCount
+                }
             }
-            // Recalculate progress from counts if we have total
+            // Compute progress from counts (consistent with ring's source)
             if folder.totalFileCount > 0 {
                 let processed = Double(folder.indexedFileCount + folder.skippedFileCount)
                 folder.progress = min(1.0, processed / Double(folder.totalFileCount))
-            } else {
-                let increment = completed ? 0.15 : 0.05
-                folder.progress = min(1.0, folder.progress + increment)
             }
             folder.lastModified = Date()
-            if folder.progress >= 0.99 && completed {
+            if folder.indexedFileCount >= folder.totalFileCount && completed && folder.totalFileCount > 0 {
                 folder.status = .complete
                 folder.progress = 1.0
             }

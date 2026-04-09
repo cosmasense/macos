@@ -32,7 +32,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: .visibilityModeChanged,
             object: nil
         )
+
+        // Install signal handlers so the backend is killed even on
+        // unexpected termination (SIGTERM from Activity Monitor, Cmd+Q, etc).
+        installSignalHandlers()
     }
+
+    /// Kill the backend on any normal termination signal.
+    /// SIGKILL (-9) cannot be caught — but we handle SIGTERM / SIGINT / SIGHUP
+    /// which cover Cmd+Q, Activity Monitor Quit, and parent-process death.
+    private func installSignalHandlers() {
+        let handler: @convention(c) (Int32) -> Void = { signum in
+            // Synchronous teardown — safe only for async-signal-safe operations.
+            // We'll post a CFRunLoop source to do the actual cleanup on the main loop.
+            AppDelegate.shouldTerminateFromSignal = signum
+            // Wake the run loop so willTerminate fires
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
+        }
+        signal(SIGTERM, handler)
+        signal(SIGINT, handler)
+        signal(SIGHUP, handler)
+    }
+
+    nonisolated(unsafe) static var shouldTerminateFromSignal: Int32 = 0
 
     @objc private func handleVisibilityModeChanged(_ notification: Notification) {
         guard let rawValue = notification.object as? String,
@@ -42,7 +66,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        print("🛑 applicationWillTerminate — shutting down backend")
+        hotkeyMonitor?.stop()
+        dualCmdMonitor?.stop()
+        removeStatusBar()
+        // teardown() calls stopServer() which is now synchronous with bounded
+        // waits — it will block here for up to ~6.5s to give the backend time
+        // to unload Ollama models (via Quart's after_serving hook) before
+        // SIGKILL. This is what releases the GPU.
         cosmaManager?.teardown()
+        print("🛑 Backend shutdown complete")
+    }
+
+    /// Called when the app should quit — ensures the backend is killed.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Do the cleanup eagerly here too, in case applicationWillTerminate
+        // is skipped for some edge case.
+        cosmaManager?.teardown()
+        return .terminateNow
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

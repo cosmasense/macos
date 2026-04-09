@@ -24,6 +24,7 @@ class UpdatesStream: NSObject {
     private var reconnectTimer: Timer?
     private var session: URLSession?
     private var eventBuffer = ""
+    private let maxBufferSize = 1_000_000  // 1MB safety limit
 
     var onEvent: ((BackendUpdateEvent) -> Void)?
     var onStateChange: ((State) -> Void)?
@@ -96,6 +97,13 @@ class UpdatesStream: NSObject {
         guard let text = String(data: data, encoding: .utf8) else { return }
 
         eventBuffer += text
+
+        // Prevent unbounded buffer growth from malformed/incomplete events
+        if eventBuffer.count > maxBufferSize {
+            print("[UpdatesStream] Buffer overflow (\(eventBuffer.count) chars), clearing")
+            eventBuffer = ""
+            return
+        }
 
         // SSE format: "data: {json}\n\n" or "data: {json}\n"
         // Split by double newlines to find complete events

@@ -84,33 +84,41 @@ struct BackendSettingsSection: View {
                         SettingTextField(
                             label: "Model",
                             path: "summarizer.ollama.model",
-                            value: settings.summarizer.ollama.model
+                            value: settings.summarizer.ollama.model,
+                            defaultIfBlank: "qwen3-vl:2b-instruct"
                         )
                         SettingTextField(
                             label: "Host",
                             path: "summarizer.ollama.host",
-                            value: settings.summarizer.ollama.host
+                            value: settings.summarizer.ollama.host,
+                            defaultIfBlank: "http://localhost:11434"
                         )
                     case "online":
                         SettingTextField(
                             label: "Model",
                             path: "summarizer.online.model",
-                            value: settings.summarizer.online.model
+                            value: settings.summarizer.online.model,
+                            defaultIfBlank: "openai/gpt-4.1-nano-2025-04-14"
                         )
                     case "llamacpp":
                         SettingTextField(
                             label: "Repo ID",
                             path: "summarizer.llamacpp.repo_id",
-                            value: settings.summarizer.llamacpp.repoId
+                            value: settings.summarizer.llamacpp.repoId,
+                            defaultIfBlank: "unsloth/Qwen3-VL-2B-Instruct-GGUF"
                         )
                         SettingTextField(
                             label: "Filename",
                             path: "summarizer.llamacpp.filename",
-                            value: settings.summarizer.llamacpp.filename
+                            value: settings.summarizer.llamacpp.filename,
+                            defaultIfBlank: "*Q4_K_M.gguf"
                         )
                     default:
                         EmptyView()
                     }
+
+                    // Model availability test + status
+                    SummarizerModelTestRow()
                 }
 
                 // Whisper card
@@ -294,8 +302,12 @@ private struct SettingTextField: View {
     let label: String
     let path: String
     let value: String
+    /// Fallback value saved when the user clears the field. Leave empty to allow blanks.
+    var defaultIfBlank: String = ""
     @State private var editedValue: String = ""
     @State private var hasAppeared = false
+    @State private var saveTask: Task<Void, Never>?
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -304,13 +316,27 @@ private struct SettingTextField: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 140, alignment: .trailing)
 
-            TextField("", text: $editedValue)
+            TextField(defaultIfBlank.isEmpty ? "" : "default: \(defaultIfBlank)", text: $editedValue)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 13, design: .monospaced))
                 .frame(maxWidth: 250)
-                .onSubmit {
-                    if editedValue != value {
-                        model.updateSetting(path: path, value: editedValue)
+                .focused($isFocused)
+                .onSubmit { commitEdit() }
+                .onChange(of: editedValue) { _, _ in
+                    // Debounced save — wait 700ms after last keystroke before sending
+                    saveTask?.cancel()
+                    saveTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(700))
+                        if !Task.isCancelled {
+                            commitEdit()
+                        }
+                    }
+                }
+                .onChange(of: isFocused) { _, focused in
+                    if !focused {
+                        // Save immediately when the field loses focus
+                        saveTask?.cancel()
+                        commitEdit()
                     }
                 }
 
@@ -323,7 +349,23 @@ private struct SettingTextField: View {
             }
         }
         .onChange(of: value) { _, newValue in
-            editedValue = newValue
+            // Only sync from backend when we're not actively editing, to avoid
+            // clobbering the user's in-progress input.
+            if !isFocused {
+                editedValue = newValue
+            }
+        }
+    }
+
+    private func commitEdit() {
+        let trimmed = editedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Default-if-blank: fall back to the provided default when the user empties the field
+        let effective = trimmed.isEmpty && !defaultIfBlank.isEmpty ? defaultIfBlank : trimmed
+        if effective != value {
+            if effective != editedValue {
+                editedValue = effective  // reflect default back into the UI
+            }
+            model.updateSetting(path: path, value: effective)
         }
     }
 }
@@ -388,6 +430,89 @@ private struct SettingToggle: View {
             .labelsHidden()
 
             SettingSaveIndicator(path: path)
+        }
+    }
+}
+
+// MARK: - Model Test Row
+
+/// Inline model availability indicator inside the Summarizer card.
+/// Runs a non-blocking availability check and shows the result.
+private struct SummarizerModelTestRow: View {
+    @Environment(AppModel.self) private var model
+    @State private var isTesting = false
+    @State private var lastResult: ModelTestResponse?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Availability")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 140, alignment: .trailing)
+
+            Group {
+                if isTesting {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let result = lastResult {
+                    HStack(spacing: 6) {
+                        Image(systemName: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(result.ok ? .green : .orange)
+                        Text(result.detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
+                } else {
+                    Text("Not yet checked")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: 250, alignment: .leading)
+
+            Button {
+                runTest()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .help("Test model availability")
+            .disabled(isTesting)
+        }
+        .task {
+            if lastResult == nil {
+                runTest()
+            }
+        }
+    }
+
+    private func runTest() {
+        guard !isTesting else { return }
+        isTesting = true
+        Task {
+            defer { isTesting = false }
+            do {
+                lastResult = try await APIClient.shared.testSummarizerModel()
+                // Sync with AppModel's global warning state
+                if lastResult?.ok == true {
+                    model.modelAvailabilityWarning = nil
+                } else if let r = lastResult {
+                    model.modelAvailabilityWarning = AppModel.ModelAvailabilityWarning(
+                        provider: r.provider, model: r.model, detail: r.detail
+                    )
+                }
+            } catch {
+                #if DEBUG
+                print("Model test failed: \(error)")
+                #endif
+            }
         }
     }
 }

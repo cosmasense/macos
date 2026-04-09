@@ -10,10 +10,34 @@ import AppKit
 import QuickLookThumbnailing
 import QuickLookUI
 
+enum SearchResultViewMode: String, CaseIterable {
+    case list
+    case grid
+
+    var label: String {
+        switch self {
+        case .list: return "List"
+        case .grid: return "Grid"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .list: return "list.bullet"
+        case .grid: return "square.grid.2x2"
+        }
+    }
+}
+
 struct SearchResultsView: View {
     @Environment(AppModel.self) private var model
     @State private var selectedResultID: String?
     @FocusState private var resultsKeyFocus: Bool
+    @AppStorage("searchResultViewMode") private var viewModeRaw: String = SearchResultViewMode.list.rawValue
+
+    private var viewMode: SearchResultViewMode {
+        get { SearchResultViewMode(rawValue: viewModeRaw) ?? .list }
+    }
 
     /// Filters search results based on file existence and user-configured filter patterns.
     ///
@@ -112,16 +136,49 @@ struct SearchResultsView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 40)
                     } else if !filteredResults.isEmpty {
-                        ResultsListView(
-                            results: filteredResults,
-                            selectedResultID: $selectedResultID,
-                            onSelect: { id in
-                                selectedResultID = id
-                                resultsKeyFocus = true
-                            },
-                            onOpen: { openResult($0) },
-                            onPreview: { previewResult($0) }
-                        )
+                        // Header with result count + view mode toggle
+                        HStack {
+                            Text("\(filteredResults.count) result\(filteredResults.count == 1 ? "" : "s")")
+                                .font(.system(size: 18, weight: .semibold))
+                            Spacer()
+                            Picker("View", selection: Binding(
+                                get: { viewMode },
+                                set: { viewModeRaw = $0.rawValue }
+                            )) {
+                                ForEach(SearchResultViewMode.allCases, id: \.self) { mode in
+                                    Image(systemName: mode.icon)
+                                        .tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 96)
+                            .help("Switch between list and grid view")
+                        }
+                        .padding(.horizontal, 4)
+
+                        if viewMode == .list {
+                            ResultsListView(
+                                results: filteredResults,
+                                selectedResultID: $selectedResultID,
+                                onSelect: { id in
+                                    selectedResultID = id
+                                    resultsKeyFocus = true
+                                },
+                                onOpen: { openResult($0) },
+                                onPreview: { previewResult($0) }
+                            )
+                        } else {
+                            ResultsGridView(
+                                results: filteredResults,
+                                selectedResultID: $selectedResultID,
+                                onSelect: { id in
+                                    selectedResultID = id
+                                    resultsKeyFocus = true
+                                },
+                                onOpen: { openResult($0) },
+                                onPreview: { previewResult($0) }
+                            )
+                        }
                     } else if !model.searchResults.isEmpty {
                         FilteredResultsEmptyView()
                     } else {
@@ -256,28 +313,110 @@ struct ResultsListView: View {
     let onPreview: (SearchResultItem) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("\(results.count) result\(results.count == 1 ? "" : "s")")
-                .font(.system(size: 18, weight: .semibold))
-                .padding(.horizontal, 4)
-
-            VStack(spacing: 8) {
-                ForEach(results) { result in
-                    SearchResultRow(
-                        result: result,
-                        isSelected: selectedResultID == result.id,
-                        onSelect: {
-                            onSelect(result.id)
-                        },
-                        onOpen: {
-                            onOpen(result)
-                        },
-                        onPreview: {
-                            onPreview(result)
-                        }
-                    )
-                }
+        VStack(spacing: 8) {
+            ForEach(results) { result in
+                SearchResultRow(
+                    result: result,
+                    isSelected: selectedResultID == result.id,
+                    onSelect: {
+                        onSelect(result.id)
+                    },
+                    onOpen: {
+                        onOpen(result)
+                    },
+                    onPreview: {
+                        onPreview(result)
+                    }
+                )
             }
+        }
+    }
+}
+
+// MARK: - Results Grid View
+
+struct ResultsGridView: View {
+    let results: [SearchResultItem]
+    @Binding var selectedResultID: String?
+    let onSelect: (String) -> Void
+    let onOpen: (SearchResultItem) -> Void
+    let onPreview: (SearchResultItem) -> Void
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 14, alignment: .top)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            ForEach(results) { result in
+                SearchResultGridCell(
+                    result: result,
+                    isSelected: selectedResultID == result.id,
+                    onSelect: { onSelect(result.id) },
+                    onOpen: { onOpen(result) },
+                    onPreview: { onPreview(result) }
+                )
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
+struct SearchResultGridCell: View {
+    let result: SearchResultItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onOpen: () -> Void
+    let onPreview: () -> Void
+    @State private var isHovered = false
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            FileThumbnailView(
+                url: URL(fileURLWithPath: result.file.filePath),
+                size: CGSize(width: 110, height: 130)
+            )
+
+            Text(result.file.filename)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isSelected ? Color.accentColor.opacity(0.10) : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.08), lineWidth: isSelected ? 1 : 0.8)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+        .onTapGesture {
+            onSelect()
+            onPreview()
+        }
+        .contextMenu {
+            Button("Open") { onOpen() }
+            Button("Quick Look") { onPreview() }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
+            }
+        }
+        .onDrag {
+            let url = URL(fileURLWithPath: result.file.filePath)
+            let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
+            provider.suggestedName = result.file.filename
+            return provider
         }
     }
 }
@@ -291,57 +430,50 @@ struct SearchResultRow: View {
     let onOpen: () -> Void
     let onPreview: () -> Void
     @State private var isHovered = false
-    @State private var showingDetail = false
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                FileThumbnailView(
-                    url: URL(fileURLWithPath: result.file.filePath),
-                    onPreview: onPreview
-                )
+        HStack(spacing: 14) {
+            // Larger file preview — natural aspect ratio
+            FileThumbnailView(
+                url: URL(fileURLWithPath: result.file.filePath),
+                size: CGSize(width: 64, height: 80)
+            )
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text(result.file.filename)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                // Title (filename)
+                Text(result.file.filename)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
 
-                        Spacer()
-
-                        Text(String(format: "%.0f%%", result.relevanceScore * 100))
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.quaternary.opacity(0.3), in: Capsule())
-
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.quaternary)
-                            .opacity(isHovered ? 1 : 0)
-                    }
-
-                    Text(result.file.filePath)
-                        .font(.system(size: 12, design: .monospaced))
+                // Summary below title
+                if let summary = result.file.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    if let summary = result.file.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                            .padding(.top, 4)
-                    }
+                        .lineLimit(2)
                 }
+
+                Spacer(minLength: 2)
+
+                // File path — dark blue hyperlink with strong contrast on transparent bg
+                Text(result.file.filePath)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(red: 0.10, green: 0.30, blue: 0.75))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .onTapGesture {
+                        let url = URL(fileURLWithPath: result.file.filePath)
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
             }
+
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .frame(minHeight: 90)
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(isSelected ? Color.accentColor.opacity(0.08) : (isHovered ? Color.primary.opacity(0.03) : Color.clear))
@@ -356,14 +488,14 @@ struct SearchResultRow: View {
                 isHovered = hovering
             }
         }
-        .simultaneousGesture(TapGesture(count: 1).onEnded {
+        .onTapGesture {
             onSelect()
-            showingDetail = true
-        })
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            onOpen()
-        })
+            onPreview()
+        }
         .contextMenu {
+            Button("Open") {
+                onOpen()
+            }
             Button("Quick Look") {
                 onPreview()
             }
@@ -371,48 +503,32 @@ struct SearchResultRow: View {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
             }
         }
-        .popover(isPresented: $showingDetail) {
-            SearchResultDetailView(result: result) {
-                showingDetail = false
-            }
-            .frame(width: 360)
-            .padding()
-        }
         .onDrag {
             createDragProvider()
         }
     }
-    
+
     private func createDragProvider() -> NSItemProvider {
         let url = URL(fileURLWithPath: result.file.filePath)
-        
-        // Read file data and copy to temp location - this makes it work like Finder
+
         var tempFileURL: URL?
         do {
             try model.withSecurityScopedAccess(for: url.path) {
-                // Copy file to temp directory
                 let tempDir = FileManager.default.temporaryDirectory
                 let tempFile = tempDir.appendingPathComponent(result.file.filename)
-                
-                // Remove if exists
                 try? FileManager.default.removeItem(at: tempFile)
-                
-                // Copy the file
                 try FileManager.default.copyItem(at: url, to: tempFile)
                 tempFileURL = tempFile
             }
         } catch {
             print("Failed to copy file for drag: \(error)")
         }
-        
-        // If we successfully created a temp copy, use that
-        // This makes it behave exactly like dragging from Finder!
+
         if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
             provider.suggestedName = result.file.filename
             return provider
         }
-        
-        // Fallback: just provide the original URL
+
         let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
         provider.suggestedName = result.file.filename
         return provider
@@ -421,9 +537,28 @@ struct SearchResultRow: View {
 
 // MARK: - File Thumbnail & Filter Toggle
 
+/// Process-wide cache so scrolling away/back doesn't regenerate thumbnails.
+/// Keyed on the file URL path.
+private final class ThumbnailCache {
+    static let shared = ThumbnailCache()
+    private let cache = NSCache<NSString, NSImage>()
+
+    private init() {
+        cache.countLimit = 500  // ~500 thumbnails kept in memory
+    }
+
+    func image(for url: URL) -> NSImage? {
+        cache.object(forKey: url.path as NSString)
+    }
+
+    func store(_ image: NSImage, for url: URL) {
+        cache.setObject(image, forKey: url.path as NSString)
+    }
+}
+
 private struct FileThumbnailView: View {
     let url: URL
-    var onPreview: () -> Void
+    var size: CGSize = CGSize(width: 64, height: 80)
     @State private var image: NSImage?
 
     var body: some View {
@@ -432,27 +567,39 @@ private struct FileThumbnailView: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 40, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .frame(width: size.width, height: size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(.quaternary.opacity(0.3), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 1)
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 6)
                         .fill(.quaternary.opacity(0.3))
                     Image(systemName: "doc.fill")
+                        .font(.system(size: 22))
                         .foregroundStyle(.secondary)
                 }
-                .frame(width: 40, height: 40)
+                .frame(width: size.width, height: size.height)
             }
         }
-        .onAppear(perform: generateThumbnail)
-        .onTapGesture(count: 1, perform: onPreview)
+        .onAppear(perform: loadThumbnail)
     }
 
-    private func generateThumbnail() {
+    private func loadThumbnail() {
         guard image == nil else { return }
+
+        // Hit the cache first for instant display
+        if let cached = ThumbnailCache.shared.image(for: url) {
+            image = cached
+            return
+        }
+
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
-            size: CGSize(width: 120, height: 120),
+            size: CGSize(width: size.width * 3, height: size.height * 3),
             scale: NSScreen.main?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
@@ -460,6 +607,7 @@ private struct FileThumbnailView: View {
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
             guard let cgImage = representation?.cgImage else { return }
             let nsImage = NSImage(cgImage: cgImage, size: .zero)
+            ThumbnailCache.shared.store(nsImage, for: url)
             DispatchQueue.main.async {
                 image = nsImage
             }
@@ -488,62 +636,50 @@ private struct FilteredResultsEmptyView: View {
     }
 }
 
-private struct SearchResultDetailView: View {
-    let result: SearchResultItem
-    let onClose: () -> Void
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(result.file.filename)
-                    .font(.title3.bold())
-                Spacer()
-                Button("Close") { onClose() }
-                    .buttonStyle(.borderless)
-            }
-            
-            Text(result.file.filePath)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            
-            if let summary = result.file.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Accessed \(format(date: result.file.accessed))", systemImage: "clock")
-                Label("Created \(format(date: result.file.created))", systemImage: "doc")
-                Label("Modified \(format(date: result.file.modified))", systemImage: "pencil")
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-        }
-    }
-    
-    private func format(date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-}
+// SearchResultDetailView — commented out, replaced by Quick Look preview on click
+//private struct SearchResultDetailView: View {
+//    let result: SearchResultItem
+//    let onClose: () -> Void
+//    ...
+//}
 
 // MARK: - Quick Look Coordinator
 
 private final class QuickLookPreviewCoordinator: NSObject, QLPreviewPanelDataSource {
     static let shared = QuickLookPreviewCoordinator()
     private var urls: [URL] = []
+    private var currentIndex: Int = 0
 
     func present(url: URL) {
         urls = [url]
+        currentIndex = 0
+        showPanel()
+    }
+
+    /// Present Quick Look with multiple URLs (all search results).
+    /// `selectedIndex` is the initially focused item.
+    func present(urls: [URL], selectedIndex: Int) {
+        self.urls = urls
+        self.currentIndex = min(selectedIndex, urls.count - 1)
+        showPanel()
+    }
+
+    /// Update the selected item without reopening the panel.
+    func updateSelection(index: Int) {
+        guard index >= 0, index < urls.count else { return }
+        currentIndex = index
+        QLPreviewPanel.shared()?.reloadData()
+    }
+
+    private func showPanel() {
         guard let panel = QLPreviewPanel.shared() else {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            if let url = urls.first {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
             return
         }
         panel.dataSource = self
+        panel.currentPreviewItemIndex = currentIndex
         panel.makeKeyAndOrderFront(nil)
     }
 

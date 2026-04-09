@@ -15,7 +15,6 @@ struct HotkeySection: View {
     @Binding var hotkey: String
     @AppStorage("overlayTriggerMode") private var triggerMode = "hotkey"
     @State private var isRecording = false
-    @State private var hasAccessibilityPermission = false
     @Environment(\.controlHotkeyMonitoring) private var controlHotkeys
 
     private var displayText: String {
@@ -30,12 +29,19 @@ struct HotkeySection: View {
                 .foregroundStyle(.secondary)
 
             // Trigger mode picker
-            Picker("Trigger Mode", selection: $triggerMode) {
-                Text("Both Command Keys").tag("dualCommand")
-                Text("Custom Shortcut").tag("hotkey")
+            HStack(spacing: 12) {
+                Text("Trigger Mode")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+
+                Picker("Trigger Mode", selection: $triggerMode) {
+                    Text("Both Command Keys").tag("dualCommand")
+                    Text("Custom Shortcut").tag("hotkey")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 300)
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 300)
 
             if triggerMode == "dualCommand" {
                 HStack(spacing: 8) {
@@ -99,30 +105,13 @@ struct HotkeySection: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 8)
 
-                // Input Monitoring Permission (for global hotkey in sandboxed apps)
+                // Full Disk Access — required for indexing all files
                 PermissionRow(
-                    title: "Input Monitoring",
-                    description: hasAccessibilityPermission
-                        ? "Global hotkey works when app is not focused"
-                        : "Grant to use the global hotkey when app is not focused",
-                    isGranted: hasAccessibilityPermission,
-                    action: {
-                        if !hasAccessibilityPermission {
-                            requestInputMonitoringPermission()
-                        } else {
-                            openInputMonitoringPreferences()
-                        }
-                    }
-                )
-
-                // Files and Folders — sandboxed app uses security-scoped bookmarks
-                let bookmarkCount = model.securityBookmarks.count
-                PermissionRow(
-                    title: "Files and Folders",
-                    description: bookmarkCount > 0
-                        ? "Access granted to \(bookmarkCount) folder\(bookmarkCount == 1 ? "" : "s") via bookmarks"
-                        : "Add a folder to watch to grant file access",
-                    isGranted: bookmarkCount > 0,
+                    title: "Full Disk Access",
+                    description: hasFullDiskAccess
+                        ? "Can index files across all folders"
+                        : "Required to index files and run the backend",
+                    isGranted: hasFullDiskAccess,
                     action: { openFullDiskAccessPreferences() }
                 )
             }
@@ -131,15 +120,14 @@ struct HotkeySection: View {
             checkPermissions()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Re-check permissions when app becomes active (user may have granted in System Settings)
             checkPermissions()
         }
     }
 
+    @State private var hasFullDiskAccess = false
+
     private func checkPermissions() {
-        // For sandboxed apps, use CGPreflightListenEventAccess for Input Monitoring
-        // AXIsProcessTrusted always returns false in sandboxed apps
-        hasAccessibilityPermission = checkInputMonitoringPermission()
+        hasFullDiskAccess = checkFullDiskAccessPermission()
     }
 }
 
@@ -265,31 +253,15 @@ private struct HotkeyCaptureView: NSViewRepresentable {
 
 // MARK: - Permission Helpers
 
-/// Check Input Monitoring permission (works in sandboxed apps)
-/// This is the recommended approach for sandboxed apps instead of AXIsProcessTrusted
-private func checkInputMonitoringPermission() -> Bool {
-    // CGPreflightListenEventAccess checks if we have Input Monitoring permission
-    // This works in sandboxed apps, unlike AXIsProcessTrusted
-    return CGPreflightListenEventAccess()
-}
-
-/// Request Input Monitoring permission
-private func requestInputMonitoringPermission() {
-    // CGRequestListenEventAccess shows the system dialog for Input Monitoring
-    CGRequestListenEventAccess()
-}
-
-private func openAccessibilityPreferences() {
-    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-        NSWorkspace.shared.open(url)
+/// Check Full Disk Access by actually opening the TCC database (always exists, always protected).
+/// FileManager.isReadableFile is unreliable for TCC-protected paths — use open() directly.
+func checkFullDiskAccessPermission() -> Bool {
+    let fd = open("/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY)
+    if fd != -1 {
+        close(fd)
+        return true
     }
-}
-
-private func openInputMonitoringPreferences() {
-    // Open Input Monitoring settings (for sandboxed apps)
-    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-        NSWorkspace.shared.open(url)
-    }
+    return false
 }
 
 private func openFullDiskAccessPreferences() {

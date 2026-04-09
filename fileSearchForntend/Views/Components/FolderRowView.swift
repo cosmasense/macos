@@ -82,9 +82,7 @@ struct FolderRowView: View {
                 .help("Remove folder")
             }
 
-            if folder.lastIssueMessage != nil {
-                FolderIssueBanner(folder: folder)
-            }
+            // Error details moved to Processing → Failed Items list
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -240,13 +238,23 @@ private struct FolderDetailView: View {
 
 struct ProgressIndicatorView: View {
     let folder: WatchedFolder
+    @State private var showRatio = false
 
     private var processedCount: Int {
         folder.indexedFileCount + folder.skippedFileCount
     }
 
-    private var hasRatio: Bool {
-        folder.totalFileCount > 0
+    /// Ring progress derived from the same counts shown in the ratio display.
+    /// Falls back to folder.progress only when totals are unknown.
+    private var ringProgress: Double {
+        if folder.totalFileCount > 0 {
+            return min(1.0, Double(processedCount) / Double(folder.totalFileCount))
+        }
+        return folder.progress
+    }
+
+    private var percentage: Int {
+        Int(ringProgress * 100)
     }
 
     private static let numberFormatter: NumberFormatter = {
@@ -256,57 +264,63 @@ struct ProgressIndicatorView: View {
         return f
     }()
 
+    private func formatted(_ n: Int) -> String {
+        Self.numberFormatter.string(from: NSNumber(value: n)) ?? "0"
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
-            // Ring
-            ZStack {
-                if folder.status == .complete {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(.green)
-                        .symbolEffect(.bounce, value: folder.status)
-                } else {
-                    // Background circle
-                    Circle()
-                        .stroke(.quaternary.opacity(0.3), lineWidth: 2.5)
-                        .frame(width: 30, height: 30)
+        ZStack {
+            if folder.status == .complete {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: folder.status)
+            } else {
+                // Background circle
+                Circle()
+                    .stroke(.quaternary.opacity(0.3), lineWidth: 2.5)
 
-                    // Progress arc
-                    Circle()
-                        .trim(from: 0, to: folder.progress)
-                        .stroke(progressColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .frame(width: 30, height: 30)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.5), value: folder.progress)
+                // Progress arc — uses ringProgress derived from real file counts
+                Circle()
+                    .trim(from: 0, to: ringProgress)
+                    .stroke(progressColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.5), value: ringProgress)
 
-                    // Center icon or percentage
-                    if folder.status == .error {
-                        Image(systemName: "exclamationmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.red)
-                    } else if folder.status == .paused {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.orange)
-                    } else {
-                        Text("\(Int(folder.progress * 100))")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                // Center content — flip between % and ratio
+                if folder.status == .error {
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.red)
+                } else if folder.status == .paused {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                } else if showRatio && folder.totalFileCount > 0 {
+                    VStack(spacing: 0) {
+                        Text("\(formatted(processedCount))")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                        Rectangle()
+                            .fill(.secondary.opacity(0.4))
+                            .frame(width: 18, height: 0.5)
+                        Text("\(formatted(folder.totalFileCount))")
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
                     }
+                    .foregroundStyle(.secondary)
+                    .rotation3DEffect(.degrees(0), axis: (x: 0, y: 1, z: 0))
+                } else {
+                    Text("\(percentage)%")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .rotation3DEffect(.degrees(0), axis: (x: 0, y: 1, z: 0))
                 }
             }
-            .frame(width: 30, height: 30)
-
-            // Ratio text (when available)
-            if hasRatio {
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(Self.numberFormatter.string(from: NSNumber(value: processedCount)) ?? "0") / \(Self.numberFormatter.string(from: NSNumber(value: folder.totalFileCount)) ?? "0")")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text("files")
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundStyle(.tertiary)
-                }
+        }
+        .frame(width: 34, height: 34)
+        .contentShape(Circle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                showRatio.toggle()
             }
         }
     }
@@ -335,9 +349,6 @@ struct StatusPill: View {
     }
     
     private var statusLabel: String {
-        if folder.lastIssueMessage != nil {
-            return "Continuing (skipping)"
-        }
         switch status {
         case .idle:
             return "Idle"
@@ -353,9 +364,6 @@ struct StatusPill: View {
     }
     
     private var statusColor: Color {
-        if folder.lastIssueMessage != nil {
-            return .orange
-        }
         switch status {
         case .idle:
             return .gray
@@ -371,10 +379,7 @@ struct StatusPill: View {
     }
     
     private var statusTextColor: Color {
-        if folder.lastIssueMessage != nil {
-            return .orange
-        }
-        return status == .idle ? .secondary : .primary
+        status == .idle ? .secondary : .primary
     }
 }
 
