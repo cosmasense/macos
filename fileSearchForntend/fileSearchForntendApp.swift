@@ -95,27 +95,58 @@ struct fileSearchForntendApp: App {
                 hasFullDiskAccess = checkFullDiskAccessPermission()
                 guard hasFullDiskAccess else { return }
 
-                // Auto-start managed backend (or attach to an already-running one).
-                // The actual transition to ContentView is driven by
-                // `.onChange(of: cosmaManager.setupStage)` below, so this task
-                // just kicks off the startup work.
-                Task {
-                    await cosmaManager.startManagedBackend()
+                // If we think we're connected but the backend isn't running
+                // (e.g., window reopened after backend died), reset to setup view.
+                if isBackendConnected && !cosmaManager.isRunning {
+                    isBackendConnected = false
+                }
+
+                // Handle case where setupStage is already .running before
+                // onChange gets registered (fast quick-attach path).
+                if case .running = cosmaManager.setupStage, !isBackendConnected {
+                    appModel.connectToBackend()
+                    isBackendConnected = true
+                    Task { await appModel.checkModelAvailability() }
+                }
+
+                // Kick off backend startup if not already running.
+                if !cosmaManager.isRunning {
+                    Task {
+                        await cosmaManager.startManagedBackend()
+                    }
+                }
+            }
+            .onChange(of: hasFullDiskAccess) { _, granted in
+                guard granted else { return }
+                // Full Disk Access was just granted — start backend if needed.
+                if !cosmaManager.isRunning {
+                    Task {
+                        await cosmaManager.startManagedBackend()
+                    }
                 }
             }
             .onChange(of: cosmaManager.setupStage) { _, newStage in
                 appDelegate.syncStatusBarWithCosmaManager()
-                // Transition to the main UI the moment the backend becomes ready,
-                // regardless of which code path got us there (cold start, retry,
-                // attach-to-existing-instance, or delayed readiness after the
-                // initial polling window).
+
+                // Backend came up → transition to main UI.
                 if case .running = newStage, !isBackendConnected {
                     appModel.connectToBackend()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         isBackendConnected = true
                     }
-                    // Kick off a non-blocking model availability check.
                     Task { await appModel.checkModelAvailability() }
+                }
+
+                // Backend went down → go back to setup view.
+                if isBackendConnected {
+                    switch newStage {
+                    case .stopped, .failed:
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            isBackendConnected = false
+                        }
+                    default:
+                        break
+                    }
                 }
             }
             .onChange(of: cosmaManager.updateStatus) {

@@ -76,6 +76,7 @@ class CosmaManager {
     @ObservationIgnored private var updateTimer: Timer?
     @ObservationIgnored private var restartCount = 0
     @ObservationIgnored private let maxRestarts = 3
+    @ObservationIgnored private var recoveryPollTask: Task<Void, Never>?
     @ObservationIgnored private var dismissedVersion: String? {
         get { UserDefaults.standard.string(forKey: "cosmaDismissedUpdateVersion") }
         set { UserDefaults.standard.set(newValue, forKey: "cosmaDismissedUpdateVersion") }
@@ -85,6 +86,7 @@ class CosmaManager {
 
     func startManagedBackend() async {
         print("[CosmaManager] startManagedBackend called")
+        stopRecoveryPolling()
 
         // Step 1: Quick attach if backend is already running (no setup needed)
         if await isBackendReachable() {
@@ -95,40 +97,28 @@ class CosmaManager {
             return
         }
 
-        // Step 2: Walk through visible setup stages so the user sees real progress.
-        // These checks are cheap (just file existence) but give the UI something to show.
-        setupStage = .checkingUV
-        let uvFound = findExecutable(name: "uv") != nil
-        if !uvFound {
-            // We don't actually install uv in dev mode (the local venv is already there),
-            // but show the stage briefly so the UI step row updates correctly.
-            setupStage = .installingUV
-            try? await Task.sleep(for: .milliseconds(150))
-        }
-
-        setupStage = .checkingCosma
-        try? await Task.sleep(for: .milliseconds(100))
-        // (No installingCosma stage in dev mode — venv is local)
-
-        // Step 3: Launch the server
-        setupStage = .startingServer
-
-        // Build a shell command that activates the venv and runs the backend.
-        // Using /bin/sh -l -c gives us a login shell with full PATH resolution,
-        // bypassing all sandbox container path issues.
+        // Step 2: Check prerequisites and launch the server.
+        // Three strategies, tried in order:
+        //   1. Local dev venv (for developers working in the repo)
+        //   2. `cosma` already installed via uv tool
+        //   3. Auto-install: ensure uv → ensure cosma → launch
         do {
             let home = realHomeDirectory()
 
-            // Strategy 1: Local dev repo with venv
+            // --- Strategy 1: Local dev repo with venv ---
+            setupStage = .checkingUV
+            await Task.yield()
+
             let repoRoot = "\(home)/Documents/code/SAIL/cosma"
             let venvActivate = "\(repoRoot)/.venv/bin/activate"
             let backendInit = "\(repoRoot)/packages/cosma-backend/src/cosma_backend/__init__.py"
 
             if FileManager.default.fileExists(atPath: venvActivate) &&
                FileManager.default.fileExists(atPath: backendInit) {
-                // Run venv python DIRECTLY (no shell wrapper) so the pid we
-                // track is the actual backend process — killing it reliably
-                // terminates the backend (no orphaned children).
+                setupStage = .checkingCosma
+                await Task.yield()
+                setupStage = .startingServer
+
                 let venvPython = "\(repoRoot)/.venv/bin/python"
                 let pythonPath = "\(repoRoot)/packages/cosma-backend/src"
                 appendLog("[CosmaManager] Launching python directly: \(venvPython) -m cosma_backend")
@@ -145,9 +135,12 @@ class CosmaManager {
             }
             appendLog("[CosmaManager] No local dev backend found at \(repoRoot)")
 
-            // Strategy 2: cosma serve (installed via uv tool) — resolve to a
-            // concrete executable and spawn directly, again avoiding sh.
+            // --- Strategy 2: cosma already on PATH ---
+            setupStage = .checkingCosma
+            await Task.yield()
+
             if let cosmaPath = findExecutable(name: "cosma") {
+                setupStage = .startingServer
                 appendLog("[CosmaManager] Launching cosma directly: \(cosmaPath) serve")
                 try await launchBackendProcess(
                     executable: cosmaPath,
@@ -157,8 +150,23 @@ class CosmaManager {
                 scheduleUpdateChecks()
                 return
             }
-            appendLog("[CosmaManager] cosma executable not found")
-            throw CosmaError.serverStartFailed("No cosma backend available (no local venv, no `cosma` on PATH)")
+            appendLog("[CosmaManager] cosma not found — starting auto-install")
+
+            // --- Strategy 3: Auto-install uv + cosma, then launch ---
+            let uvPath = try await ensureUV()
+            try await ensureCosma(uvPath: uvPath)
+
+            setupStage = .startingServer
+            guard let cosmaPath = findExecutable(name: "cosma") else {
+                throw CosmaError.installFailed("cosma not found after installation")
+            }
+            appendLog("[CosmaManager] Launching freshly installed cosma: \(cosmaPath) serve")
+            try await launchBackendProcess(
+                executable: cosmaPath,
+                arguments: ["serve"],
+                extraEnv: [:]
+            )
+            scheduleUpdateChecks()
         } catch {
             setupStage = .failed(error.localizedDescription)
         }
@@ -281,6 +289,7 @@ class CosmaManager {
                     try? await self.relaunchLastProcess()
                 } else if code != 0 {
                     self.setupStage = .failed("Server crashed \(self.maxRestarts) times")
+                    self.startRecoveryPolling()
                 } else {
                     self.setupStage = .stopped
                 }
@@ -446,9 +455,39 @@ class CosmaManager {
         }
     }
 
+    // MARK: - Recovery Polling
+
+    /// Polls the backend in the background after all restart attempts are
+    /// exhausted. If the backend was started externally (e.g. from the
+    /// terminal) or recovers on its own, we pick it up and transition
+    /// straight to `.running` — no need to close/reopen the window.
+    private func startRecoveryPolling() {
+        recoveryPollTask?.cancel()
+        recoveryPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                if let self, await self.isBackendReachable() {
+                    self.setupStage = .running
+                    self.restartCount = 0
+                    self.ownsProcess = false  // we didn't start it
+                    self.appendLog("[CosmaManager] Backend recovered externally — attached")
+                    self.scheduleUpdateChecks()
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopRecoveryPolling() {
+        recoveryPollTask?.cancel()
+        recoveryPollTask = nil
+    }
+
     // MARK: - Teardown
 
     func teardown() {
+        stopRecoveryPolling()
         updateTimer?.invalidate()
         updateTimer = nil
         if ownsProcess {

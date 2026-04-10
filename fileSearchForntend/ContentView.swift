@@ -39,14 +39,23 @@ struct ContentView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
 
-            // Model availability warning banner (top-right)
+            // Embedder loading indicator (top-right)
+            if !model.isEmbedderReady {
+                EmbedderLoadingBadge(progress: model.embedderLoadProgress)
+                    .padding(.top, 46)
+                    .padding(.trailing, 18)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            // Model availability warning banner (top-right, below embedder badge)
             if let warning = model.modelAvailabilityWarning {
                 ModelWarningBanner(warning: warning) {
                     model.dismissModelAvailabilityWarning()
                 } onRetry: {
                     Task { await model.checkModelAvailability() }
                 }
-                .padding(.top, 46)
+                .padding(.top, model.isEmbedderReady ? 46 : 110)
                 .padding(.trailing, 18)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .transition(.move(edge: .top).combined(with: .opacity))
@@ -54,6 +63,7 @@ struct ContentView: View {
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.25), value: model.currentPage)
+        .animation(.easeInOut(duration: 0.3), value: model.isEmbedderReady)
         .animation(.easeInOut(duration: 0.3), value: model.modelAvailabilityWarning)
     }
 }
@@ -118,6 +128,59 @@ struct ModelWarningBanner: View {
                 .stroke(Color.orange.opacity(0.35), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.1), radius: 6, x: 0, y: 2)
+    }
+}
+
+// MARK: - Embedder Loading Badge
+
+struct EmbedderLoadingBadge: View {
+    var progress: Double
+
+    private var percentage: Int {
+        min(Int(progress * 100), 100)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Loading embedding models...")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(percentage)%")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.quaternary)
+                        .frame(height: 4)
+
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [.yellow.opacity(0.7), .orange.opacity(0.6)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: geo.size.width * max(CGFloat(progress), 0.02), height: 4)
+                        .animation(.easeInOut(duration: 0.3), value: progress)
+                }
+            }
+            .frame(height: 4)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: 200)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.yellow.opacity(0.2), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 2)
     }
 }
 

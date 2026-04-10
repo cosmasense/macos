@@ -229,6 +229,14 @@ struct StatusResponse: Codable {
     let status: String?
     let jobs: Int?
     let version: String?
+    let embedderReady: Bool?
+    let initProgress: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case status, jobs, version
+        case embedderReady = "embedder_ready"
+        case initProgress = "init_progress"
+    }
 }
 
 /// Response from POST /api/settings/test_model.

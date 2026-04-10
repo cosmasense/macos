@@ -19,6 +19,7 @@ struct GeneralSection: View {
     @State private var loginItemError: String?
     @State private var currentVisibilityMode: AppVisibilityMode = .dockOnly
     @State private var showingLogs = false
+    @State private var dialogsReset = false
 
     enum ConnectionTestState: Equatable {
         case idle
@@ -164,6 +165,38 @@ struct GeneralSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
+            }
+
+            // Reset Suppressed Dialogs
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Dialogs")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    Button {
+                        UserDefaults.standard.removeObject(forKey: AppDelegate.suppressQuitConfirmationKey)
+                        dialogsReset = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            dialogsReset = false
+                        }
+                    } label: {
+                        Label("Reset All Dialogs", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    if dialogsReset {
+                        Text("Done")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.green)
+                            .transition(.opacity)
+                    }
+                }
+
+                Text("Re-enable confirmation dialogs that were dismissed with \"Don't ask again\".")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
 
             // Backend URL

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     // Strong reference - stays alive for app lifetime
@@ -18,6 +19,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var cosmaManager: CosmaManager?
 
     private static let visibilityModeKey = "appVisibilityMode"
+    static let suppressQuitConfirmationKey = "suppressQuitConfirmation"
+
+    /// Timestamp of last quit attempt — used for double-Cmd+Q detection.
+    private var lastQuitAttemptTime: Date = .distantPast
+    /// Whether a graceful shutdown is in progress (skip confirmation).
+    private var isShuttingDown = false
+    /// Set after teardown completes — tells applicationShouldTerminate to
+    /// return .terminateNow instead of re-entering the quit dialog.
+    private var readyToTerminate = false
+    /// The shutdown progress window shown during backend teardown.
+    private var shutdownWindow: NSWindow?
+    /// The quit confirmation window (non-modal so Cmd+Q still works).
+    private var quitConfirmationWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 App delegate initialized - hotkey monitor will stay alive")
@@ -66,24 +80,171 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        print("🛑 applicationWillTerminate — shutting down backend")
+        print("[AppDelegate] applicationWillTerminate")
         hotkeyMonitor?.stop()
         dualCmdMonitor?.stop()
         removeStatusBar()
-        // teardown() calls stopServer() which is now synchronous with bounded
-        // waits — it will block here for up to ~6.5s to give the backend time
-        // to unload Ollama models (via Quart's after_serving hook) before
-        // SIGKILL. This is what releases the GPU.
+        // Final safety net — teardown() is idempotent so calling it again
+        // after performGracefulShutdown is harmless.
         cosmaManager?.teardown()
-        print("🛑 Backend shutdown complete")
     }
 
-    /// Called when the app should quit — ensures the backend is killed.
+    /// Central quit gate.  Decides whether to quit immediately, show a
+    /// confirmation dialog, or skip because a shutdown is already in progress.
+    ///
+    /// Double-pressing Cmd+Q within 0.8 s always quits immediately,
+    /// including while the confirmation dialog is showing.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Do the cleanup eagerly here too, in case applicationWillTerminate
-        // is skipped for some edge case.
-        cosmaManager?.teardown()
-        return .terminateNow
+        // Teardown finished — let the app exit for real.
+        if readyToTerminate { return .terminateNow }
+
+        // Teardown in progress — ignore further quit requests.
+        if isShuttingDown { return .terminateCancel }
+
+        // Signal-triggered quit (Activity Monitor, kill, etc.) — skip dialog.
+        if Self.shouldTerminateFromSignal != 0 {
+            dismissQuitConfirmation()
+            beginGracefulShutdown()
+            return .terminateCancel
+        }
+
+        // Double Cmd+Q (< 0.8 s apart) — skip confirmation, even if
+        // the confirmation window is already showing.
+        let now = Date()
+        let interval = now.timeIntervalSince(lastQuitAttemptTime)
+        lastQuitAttemptTime = now
+
+        let suppressed = UserDefaults.standard.bool(forKey: Self.suppressQuitConfirmationKey)
+        if suppressed || interval < 0.8 {
+            dismissQuitConfirmation()
+            beginGracefulShutdown()
+            return .terminateCancel
+        }
+
+        // If the confirmation window is already showing, treat this
+        // second Cmd+Q as the "double press" — quit immediately.
+        if quitConfirmationWindow != nil {
+            dismissQuitConfirmation()
+            beginGracefulShutdown()
+            return .terminateCancel
+        }
+
+        // Show non-modal confirmation dialog.
+        showQuitConfirmation()
+        return .terminateCancel
+    }
+
+    // MARK: - Quit Confirmation (Non-Modal Window)
+
+    private func showQuitConfirmation() {
+        let width: CGFloat = 370
+        let height: CGFloat = 190
+
+        let view = QuitConfirmationView(
+            onQuit: { [weak self] suppress in
+                if suppress {
+                    UserDefaults.standard.set(true, forKey: Self.suppressQuitConfirmationKey)
+                }
+                self?.dismissQuitConfirmation()
+                self?.beginGracefulShutdown()
+            },
+            onCancel: { [weak self] in
+                self?.dismissQuitConfirmation()
+            }
+        )
+
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.title = ""
+        window.contentView = hostingView
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        quitConfirmationWindow = window
+    }
+
+    private func dismissQuitConfirmation() {
+        quitConfirmationWindow?.close()
+        quitConfirmationWindow = nil
+    }
+
+    // MARK: - Graceful Shutdown
+
+    /// Close the main window, show a small shutdown window, tear down the
+    /// backend, then terminate for real once the process is confirmed dead.
+    private func beginGracefulShutdown() {
+        guard !isShuttingDown else { return }
+        isShuttingDown = true
+
+        // Close all app windows (main window, settings, quit dialog, etc.)
+        for window in NSApp.windows where window !== shutdownWindow {
+            window.close()
+        }
+        quitConfirmationWindow = nil
+
+        // If backend wasn't started by us, terminate immediately.
+        guard let cm = cosmaManager, cm.ownsProcess else {
+            cosmaManager?.teardown()
+            readyToTerminate = true
+            NSApp.terminate(nil)
+            return
+        }
+
+        // Show shutdown progress window
+        showShutdownWindow()
+
+        // Run teardown off the main actor so the shutdown spinner animates.
+        Task.detached(priority: .userInitiated) {
+            await MainActor.run {
+                cm.teardown()
+            }
+            await MainActor.run { [weak self] in
+                self?.shutdownWindow?.close()
+                self?.shutdownWindow = nil
+                self?.readyToTerminate = true
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    private func showShutdownWindow() {
+        let width: CGFloat = 300
+        let height: CGFloat = 120
+
+        let hostingView = NSHostingView(rootView: ShutdownView())
+        hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.title = ""
+        window.contentView = hostingView
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        shutdownWindow = window
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

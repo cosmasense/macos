@@ -58,7 +58,7 @@ struct QueueContentView: View {
         .task {
             await model.refreshQueueStatus()
             await model.refreshQueueItems()
-            startPolling()
+            startPolling(for: .current)
         }
         .onChange(of: selectedTab) { _, newTab in
             pollingTask?.cancel()
@@ -67,12 +67,12 @@ struct QueueContentView: View {
                 case .current:
                     await model.refreshQueueStatus()
                     await model.refreshQueueItems()
-                    startPolling()
                 case .recent:
                     await model.refreshRecentFiles()
                 case .failed:
                     await model.refreshFailedFiles()
                 }
+                startPolling(for: newTab)
             }
         }
         .onDisappear {
@@ -116,7 +116,7 @@ struct QueueContentView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    ForEach(model.queueItems) { item in
+                    ForEach(sortedQueueItems) { item in
                         QueueItemRow(item: item) {
                             Task { await model.removeQueueItem(itemId: item.id) }
                         }
@@ -125,6 +125,26 @@ struct QueueContentView: View {
                 .padding(.horizontal, 32)
                 .padding(.vertical, 24)
             }
+        }
+    }
+
+    /// Current queue ordered for visibility: things that are actively running
+    /// bubble to the top, cooling_down (debounce window after a file change)
+    /// sinks to the bottom.
+    private var sortedQueueItems: [QueueItemResponse] {
+        func rank(_ status: String) -> Int {
+            switch status {
+            case "processing":   return 0
+            case "waiting":      return 1
+            case "cooling_down": return 2
+            default:             return 3
+            }
+        }
+        return model.queueItems.sorted { a, b in
+            let ra = rank(a.status), rb = rank(b.status)
+            if ra != rb { return ra < rb }
+            // Stable tiebreaker by filename so the order doesn't jump around
+            return a.filePath < b.filePath
         }
     }
 
@@ -184,30 +204,48 @@ struct QueueContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(model.failedFiles) { file in
-                        FailedFileRow(file: file) {
-                            Task { await model.reindexFile(filePath: file.filePath) }
+            VStack(spacing: 0) {
+                FailedTabHeader(files: model.failedFiles)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 18)
+                    .padding(.bottom, 8)
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(model.failedFiles) { file in
+                            FailedFileRow(file: file) {
+                                Task { await model.reindexFile(filePath: file.filePath) }
+                            }
                         }
                     }
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 24)
+                    .padding(.top, 6)
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 24)
             }
         }
     }
 
     // MARK: - Helpers
 
-    private func startPolling() {
+    private func startPolling(for tab: QueueTab) {
         pollingTask?.cancel()
         pollingTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                // Recent/Failed can poll slower — they only change on file
+                // completion, not on per-stage progress ticks.
+                let delay: Duration = tab == .current ? .seconds(2) : .seconds(5)
+                try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { break }
-                await model.refreshQueueStatus()
-                await model.refreshQueueItems()
+                switch tab {
+                case .current:
+                    await model.refreshQueueStatus()
+                    await model.refreshQueueItems()
+                case .recent:
+                    await model.refreshRecentFiles()
+                case .failed:
+                    await model.refreshFailedFiles()
+                }
             }
         }
     }
@@ -531,6 +569,80 @@ struct FailedFileRow: View {
         -----
         \(file.processingError ?? "(no error message)")
         """
+    }
+}
+
+// MARK: - Failed Tab Header
+
+/// Header row for the Failed tab: file count + a single "Copy All Errors"
+/// button that bundles every failed file into one clipboard payload.
+struct FailedTabHeader: View {
+    let files: [ProcessedFileItem]
+    @State private var didCopy = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(files.count) failed \(files.count == 1 ? "file" : "files")")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button {
+                copyAllErrors()
+            } label: {
+                Label(didCopy ? "Copied all" : "Copy All Errors",
+                      systemImage: didCopy ? "checkmark" : "square.and.arrow.up.on.square")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(didCopy ? .green : .blue)
+            .help("Copy a combined error report for every failed file to the clipboard")
+        }
+    }
+
+    private func copyAllErrors() {
+        let combined = Self.buildCombinedReport(for: files)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(combined, forType: .string)
+        withAnimation(.easeInOut(duration: 0.2)) { didCopy = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(.easeInOut(duration: 0.2)) { didCopy = false }
+        }
+    }
+
+    /// Stitch every failed file into one multi-section clipboard payload.
+    /// Header is shown once; individual file sections follow, separated by
+    /// a visible divider so it stays readable when pasted into an email.
+    static func buildCombinedReport(for files: [ProcessedFileItem]) -> String {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
+        var lines: [String] = []
+        lines.append("SAIL — Combined Failed Files Report")
+        lines.append(String(repeating: "=", count: 40))
+        lines.append("Timestamp:   \(timestamp)")
+        lines.append("App version: \(appVersion) (build \(appBuild))")
+        lines.append("Total failed: \(files.count)")
+        lines.append("")
+
+        for (index, file) in files.enumerated() {
+            lines.append("── [\(index + 1)/\(files.count)] ──────────────────────")
+            lines.append("Name:       \(file.filename)")
+            lines.append("Path:       \(file.filePath)")
+            lines.append("Extension:  \(file.fileExtension)")
+            lines.append("Status:     \(file.status)")
+            if let ts = file.updatedAt {
+                let date = Date(timeIntervalSince1970: TimeInterval(ts))
+                lines.append("Updated:    \(ISO8601DateFormatter().string(from: date))")
+            }
+            lines.append("Error:      \(file.processingError ?? "(no error message)")")
+            lines.append("")
+        }
+
+        return lines.joined(separator: "\n")
     }
 }
 

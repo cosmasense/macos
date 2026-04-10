@@ -23,8 +23,7 @@ struct BackendConnectionView: View {
     @State private var progressTimer: Timer?
 
     /// How long the fake progress bar takes to fill (seconds).
-    /// Real backend usually finishes well before this.
-    private let simulatedDuration: Double = 120.0
+    private let simulatedDuration: Double = 15.0
 
     private let startCommand = "cosma serve"
 
@@ -122,6 +121,18 @@ struct BackendConnectionView: View {
         .onChange(of: cosmaManager.setupStage) { _, stage in
             if case .running = stage {
                 completeSimulatedProgress()
+                onConnected()
+            }
+        }
+        .task {
+            // Fallback: poll the state variable (not the backend) in case
+            // onChange misses the .idle → .running transition on fast paths.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                if case .running = cosmaManager.setupStage {
+                    onConnected()
+                    return
+                }
             }
         }
     }
