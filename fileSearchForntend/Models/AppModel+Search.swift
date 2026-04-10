@@ -186,7 +186,7 @@ extension AppModel {
         guard let token = searchTokens.first(where: { $0.kind == .folder }) else {
             return nil
         }
-        if let folder = watchedFolders.first(where: { $0.name == token.value }) {
+        if let folder = watchedFolders.first(where: { $0.name.caseInsensitiveCompare(token.value) == .orderedSame }) {
             return folder.path
         }
         return token.value
