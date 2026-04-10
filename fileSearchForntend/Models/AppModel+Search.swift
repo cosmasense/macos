@@ -44,14 +44,6 @@ extension AppModel {
         // Allow search with empty query if directory filter is set
         guard !normalizedQuery.isEmpty || directory != nil else { return }
 
-        // Wait for embedding model to be ready before sending search
-        if !isEmbedderReady {
-            isSearching = true
-            while !isEmbedderReady {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-        }
-
         let requestID = UUID()
         activeSearchRequestID = requestID
         lastSearchQuery = query
@@ -225,14 +217,6 @@ extension AppModel {
         let directory = popupDirectoryFromTokens()
 
         guard !normalizedQuery.isEmpty || directory != nil else { return }
-
-        // Wait for embedding model to be ready before sending search
-        if !isEmbedderReady {
-            popupIsSearching = true
-            while !isEmbedderReady {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-        }
 
         let requestID = UUID()
         activePopupSearchRequestID = requestID

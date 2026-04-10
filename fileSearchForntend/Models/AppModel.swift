@@ -205,15 +205,6 @@ class AppModel {
     var savingSettingPaths: Set<String> = []
     var savedSettingPaths: Set<String> = []
 
-    // MARK: - Embedder Readiness
-
-    /// Whether the backend's embedding model has finished loading.
-    /// While false, search requests are held and a loading indicator is shown.
-    var isEmbedderReady: Bool = false
-    /// Backend Phase 2 initialization progress (0.0 → 1.0).
-    var embedderLoadProgress: Double = 0
-    @ObservationIgnored private var embedderPollTask: Task<Void, Never>?
-
     // MARK: - Model Availability Notification
 
     /// Non-nil when the configured summarizer model has failed its availability check.
@@ -271,36 +262,6 @@ class AppModel {
             await self?.refreshFileStats()
             await self?.refreshFilterConfig()
             await self?.refreshBackendSettings()
-        }
-        startEmbedderReadinessPolling()
-    }
-
-    /// Polls `/api/status/` until `embedder_ready` is true,
-    /// then waits 1 second before marking the embedder as ready.
-    private func startEmbedderReadinessPolling() {
-        embedderPollTask?.cancel()
-        embedderPollTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                do {
-                    let status = try await apiClient.fetchStatus()
-                    if let progress = status.initProgress {
-                        self.embedderLoadProgress = progress
-                    }
-                    if status.embedderReady == true {
-                        self.embedderLoadProgress = 1.0
-                        // Wait 1s after model load before enabling search
-                        try await Task.sleep(for: .seconds(1))
-                        if !Task.isCancelled {
-                            self.isEmbedderReady = true
-                        }
-                        return
-                    }
-                } catch {
-                    // Backend may not be fully up yet, keep polling
-                }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
         }
     }
 
