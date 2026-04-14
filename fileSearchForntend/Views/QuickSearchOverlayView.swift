@@ -780,7 +780,7 @@ private struct PopupTokenChipView: View {
         .padding(.vertical, 5)
         .background(
             LinearGradient(
-                colors: [Color.blue.opacity(0.9), Color.blue],
+                colors: [Color.brandBlue.opacity(0.9), Color.brandBlue],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -790,7 +790,7 @@ private struct PopupTokenChipView: View {
             Capsule()
                 .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
         )
-        .shadow(color: .blue.opacity(0.3), radius: 2, x: 0, y: 1)
+        .shadow(color: .brandBlue.opacity(0.3), radius: 2, x: 0, y: 1)
     }
 }
 
@@ -812,7 +812,7 @@ private struct PopupFolderSuggestionsView: View {
                         HStack(spacing: 10) {
                             Image(systemName: "folder.fill")
                                 .font(.system(size: 14))
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(Color.brandBlue)
 
                             Text("@\(folder.name)")
                                 .font(.system(size: 14))

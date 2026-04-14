@@ -81,7 +81,7 @@ struct BackendConnectionView: View {
             VStack(spacing: 6) {
                 ProgressView(value: simulatedProgress)
                     .progressViewStyle(.linear)
-                    .tint(.blue)
+                    .tint(Color.brandBlue)
                     .frame(maxWidth: 320)
                 Text(simulatedProgressLabel)
                     .font(.system(size: 11))
@@ -316,8 +316,11 @@ struct BackendConnectionView: View {
         case .installingUV: return 2
         case .checkingCosma: return 3
         case .installingCosma: return 4
-        case .startingServer: return 5
-        case .running: return 6
+        case .checkingOllama: return 5
+        case .installingOllama: return 6
+        case .pullingOllamaModel: return 7
+        case .startingServer: return 8
+        case .running: return 9
         case .stopped: return -1
         case .failed: return -1
         }

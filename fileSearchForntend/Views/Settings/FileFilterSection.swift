@@ -453,7 +453,7 @@ private struct PatternHelpRow: View {
             HStack {
                 Text(pattern)
                     .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.brandBlue)
 
                 Text("-")
                     .foregroundStyle(.secondary)

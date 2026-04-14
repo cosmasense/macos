@@ -22,7 +22,7 @@ struct FolderRowView: View {
                 // Folder icon
                 Image(systemName: "folder.fill")
                     .font(.system(size: 34))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.brandBlue)
                     .frame(width: 38)
 
                 // Folder name + path stacked for better readability
@@ -329,7 +329,7 @@ struct ProgressIndicatorView: View {
         if folder.status == .complete { return .green }
         if folder.status == .error { return .red }
         if folder.lastIssueMessage != nil || folder.status == .paused { return .orange }
-        if folder.status == .indexing { return .blue }
+        if folder.status == .indexing { return .brandBlue }
         return .gray
     }
 }
@@ -368,7 +368,7 @@ struct StatusPill: View {
         case .idle:
             return .gray
         case .indexing:
-            return .blue
+            return .brandBlue
         case .paused:
             return .orange
         case .error:

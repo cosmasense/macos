@@ -351,7 +351,11 @@ struct SchedulerSettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .background {
+            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                .overlay(Color.white.opacity(0.3))
+                .ignoresSafeArea()
+        }
         .task {
             guard !hasLoaded else { return }
             await model.refreshSchedulerConfig()

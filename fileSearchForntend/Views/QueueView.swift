@@ -26,21 +26,27 @@ struct QueueContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Sub-tab picker
-            Picker("Queue Tab", selection: $selectedTab) {
-                ForEach(QueueTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+            // Top bar: tabs + pause button
+            HStack(spacing: 10) {
+                Picker("Queue Tab", selection: $selectedTab) {
+                    ForEach(QueueTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                QueuePauseButton()
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
             // Status summary (only on current tab)
             if selectedTab == .current, let status = model.queueStatus {
                 QueueStatusSummaryView(status: status)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 10)
             }
 
             Divider()
@@ -115,15 +121,15 @@ struct QueueContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: 6) {
                     ForEach(sortedQueueItems) { item in
                         QueueItemRow(item: item) {
                             Task { await model.removeQueueItem(itemId: item.id) }
                         }
                     }
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
             }
         }
     }
@@ -171,13 +177,13 @@ struct QueueContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: 6) {
                     ForEach(model.recentFiles) { file in
                         RecentFileRow(file: file)
                     }
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
             }
         }
     }
@@ -206,21 +212,21 @@ struct QueueContentView: View {
         } else {
             VStack(spacing: 0) {
                 FailedTabHeader(files: model.failedFiles)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 18)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 12)
+                    .padding(.bottom, 6)
 
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: 6) {
                         ForEach(model.failedFiles) { file in
                             FailedFileRow(file: file) {
                                 Task { await model.reindexFile(filePath: file.filePath) }
                             }
                         }
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 24)
-                    .padding(.top, 6)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+                    .padding(.top, 4)
                 }
             }
         }
@@ -261,7 +267,7 @@ struct QueueStatusSummaryView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 16) {
                 QueueCountPill(label: "Total", count: status.totalItems, color: .primary)
-                QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .blue)
+                QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .brandBlue)
                 QueueCountPill(label: "Waiting", count: status.waiting, color: .green)
                 QueueCountPill(label: "Processing", count: status.processing, color: .orange)
                 Spacer()
@@ -405,7 +411,7 @@ struct QueueItemRow: View {
 
     private var statusColor: Color {
         switch item.status {
-        case "cooling_down": return .blue
+        case "cooling_down": return .brandBlue
         case "waiting": return .green
         case "processing": return .orange
         default: return .secondary
@@ -501,7 +507,7 @@ struct FailedFileRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .tint(didCopy ? .green : .blue)
+            .tint(didCopy ? .green : .brandBlue)
             .help("Copy error details to clipboard for debugging")
 
             Button(action: onReindex) {
@@ -597,7 +603,7 @@ struct FailedTabHeader: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .tint(didCopy ? .green : .blue)
+            .tint(didCopy ? .green : .brandBlue)
             .help("Copy a combined error report for every failed file to the clipboard")
         }
     }
@@ -643,6 +649,33 @@ struct FailedTabHeader: View {
         }
 
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Pause Button
+
+struct QueuePauseButton: View {
+    @Environment(AppModel.self) private var model
+    @State private var isHovering = false
+
+    private var isPaused: Bool { model.queueStatus?.manuallyPaused == true }
+
+    var body: some View {
+        Button {
+            Task { await model.toggleQueuePause() }
+        } label: {
+            Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isPaused ? Color.brandBlue : .primary)
+                .frame(width: 26, height: 26)
+                .background(.quaternary.opacity(isHovering ? 0.45 : 0.25), in: Circle())
+                .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(isPaused ? "Resume queue" : "Pause queue")
+        .animation(.easeOut(duration: 0.15), value: isHovering)
     }
 }
 

@@ -81,6 +81,7 @@ class AppModel {
     var searchResults: [SearchResultItem] = []
     var isSearching: Bool = false
     var searchError: String?
+    var isSearchFieldFocused: Bool = false
     var recentSearches: [RecentSearch] = []
     @ObservationIgnored var lastSearchQuery: String?
     @ObservationIgnored var activeSearchRequestID: UUID?

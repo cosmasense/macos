@@ -2,97 +2,86 @@
 //  SettingsView.swift
 //  fileSearchForntend
 //
-//  Settings window with two layers:
-//  Layer 1 (Main): Non-technical settings (permissions, hotkey, general, filters)
-//  Layer 2 (Advanced): Technical/AI settings (models, queue, scheduler, metrics)
-//
+//  Settings window with Finder-style toolbar tabs.
 //  Opened via Cmd+, (macOS standard Settings scene)
 //
 
 import SwiftUI
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case permissions = "Permissions"
+    case general = "General"
+    case fileFilters = "File Filters"
+    case feedback = "Feedback"
+    case advanced = "Advanced"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .permissions: return "lock.shield"
+        case .general: return "gearshape"
+        case .fileFilters: return "line.3.horizontal.decrease.circle"
+        case .feedback: return "bubble.left.and.bubble.right"
+        case .advanced: return "slider.horizontal.3"
+        }
+    }
+}
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(CosmaManager.self) private var cosmaManager
     @AppStorage("launchAtStartup") private var launchAtStartup = false
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
-    @AppStorage("backgroundStyle") private var backgroundStyle: String = BackgroundStyle.glass.rawValue
-    @State private var showAdvanced = false
 
     var body: some View {
         @Bindable var model = model
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                // Update banner
-                if case .available(let installed, let latest) = cosmaManager.updateStatus {
-                    UpdateBanner(installed: installed, latest: latest, cosmaManager: cosmaManager)
-                }
 
-                // --- Layer 1: Basic Settings ---
-
-                // Permissions
-                SettingsSectionHeader(title: "Permissions", icon: "lock.shield")
+        TabView {
+            settingsPage {
                 HotkeySection(hotkey: $overlayHotkey)
+            }
+            .tabItem { Label(SettingsSection.permissions.rawValue, systemImage: SettingsSection.permissions.icon) }
 
-                Divider()
-
-                // Appearance
-                SettingsSectionHeader(title: "Appearance", icon: "paintbrush")
-                Picker("Background", selection: $backgroundStyle) {
-                    ForEach(BackgroundStyle.allCases, id: \.rawValue) { style in
-                        Text(style.rawValue).tag(style.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 300)
-
-                Divider()
-
-                // General
-                SettingsSectionHeader(title: "General", icon: "gearshape")
+            settingsPage {
                 GeneralSection(
                     launchAtStartup: $launchAtStartup,
                     backendURL: $model.backendURL
                 )
-
-                Divider()
-
-                // File Filters
-                SettingsSectionHeader(title: "File Filters", icon: "line.3.horizontal.decrease.circle")
-                FileFilterSection()
-
-                Divider()
-
-                // Feedback
-                FeedbackSection()
-
-                Divider()
-
-                // Advanced Settings button
-                Button {
-                    showAdvanced = true
-                } label: {
-                    HStack {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 14))
-                        Text("Advanced Settings...")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-
-                Spacer()
             }
-            .padding(28)
+            .tabItem { Label(SettingsSection.general.rawValue, systemImage: SettingsSection.general.icon) }
+
+            settingsPage {
+                FileFilterSection()
+            }
+            .tabItem { Label(SettingsSection.fileFilters.rawValue, systemImage: SettingsSection.fileFilters.icon) }
+
+            settingsPage {
+                FeedbackSection()
+            }
+            .tabItem { Label(SettingsSection.feedback.rawValue, systemImage: SettingsSection.feedback.icon) }
+
+            settingsPage {
+                AdvancedSettingsView()
+            }
+            .tabItem { Label(SettingsSection.advanced.rawValue, systemImage: SettingsSection.advanced.icon) }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.ultraThinMaterial)
-        .sheet(isPresented: $showAdvanced) {
-            AdvancedSettingsView()
-                .environment(model)
-                .environment(cosmaManager)
-                .frame(minWidth: 550, minHeight: 500)
+        .frame(width: 520)
+        .frame(minHeight: 420)
+    }
+
+    @ViewBuilder
+    private func settingsPage<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if case .available(let installed, let latest) = cosmaManager.updateStatus {
+                    UpdateBanner(installed: installed, latest: latest, cosmaManager: cosmaManager)
+                }
+                content()
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -149,7 +138,7 @@ private struct UpdateBanner: View {
             .controlSize(.small)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.blue))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.brandBlue))
     }
 }
 
@@ -157,5 +146,4 @@ private struct UpdateBanner: View {
     SettingsView()
         .environment(AppModel())
         .environment(CosmaManager())
-        .frame(width: 600, height: 700)
 }
