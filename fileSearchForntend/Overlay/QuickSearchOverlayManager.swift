@@ -83,7 +83,8 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             let newPanel = NonActivatingPanel(contentRect: defaultFrame())
             newPanel.contentViewController = host
             newPanel.delegate = self
-            newPanel.isMovable = false
+            newPanel.isMovable = true
+            newPanel.isMovableByWindowBackground = true
 
             hostingController = host
             self.panel = newPanel

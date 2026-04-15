@@ -14,39 +14,15 @@ struct AdvancedSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Advanced Settings")
-                    .font(.system(size: 18, weight: .bold))
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+        VStack(alignment: .leading, spacing: 28) {
+            SettingsSectionHeader(title: "Processing Models", icon: "cpu")
+            BackendSettingsSection()
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-
-                    // Processing Models
-                    SettingsSectionHeader(title: "Processing Models", icon: "cpu")
-                    BackendSettingsSection()
-
-                    Divider()
-
-                    // Queue & Scheduler
-                    SettingsSectionHeader(title: "Queue & Scheduler", icon: "clock.arrow.2.circlepath")
-                    IndexingSettingsSection()
-
-                    Spacer()
-                }
-                .padding(24)
-            }
+            SettingsSectionHeader(title: "Queue & Scheduler", icon: "clock.arrow.2.circlepath")
+            IndexingSettingsSection()
         }
-        .background(.ultraThinMaterial)
     }
 }
 

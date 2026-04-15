@@ -19,6 +19,9 @@ class CosmaManager {
         case installingUV
         case checkingCosma
         case installingCosma
+        case checkingOllama
+        case installingOllama
+        case pullingOllamaModel
         case startingServer
         case running
         case stopped
@@ -61,6 +64,9 @@ class CosmaManager {
         case .installingUV: return "Installing uv…"
         case .checkingCosma: return "Checking for cosma…"
         case .installingCosma: return "Installing cosma…"
+        case .checkingOllama: return "Checking for Ollama…"
+        case .installingOllama: return "Installing Ollama…"
+        case .pullingOllamaModel: return "Downloading AI model…"
         case .startingServer: return "Starting server…"
         case .running: return "Running"
         case .stopped: return "Stopped"
@@ -91,6 +97,10 @@ class CosmaManager {
         // Step 1: Quick attach if backend is already running (no setup needed)
         if await isBackendReachable() {
             ownsProcess = false
+            // Still ensure Ollama + summarizer model are ready, even when
+            // attaching to an existing backend — otherwise the summarizer
+            // endpoint fails and the "model unavailable" banner shows.
+            await ensureOllamaAndModel()
             setupStage = .running
             installedVersion = await getInstalledVersion()
             scheduleUpdateChecks()
@@ -117,6 +127,7 @@ class CosmaManager {
                FileManager.default.fileExists(atPath: backendInit) {
                 setupStage = .checkingCosma
                 await Task.yield()
+                await ensureOllamaAndModel()
                 setupStage = .startingServer
 
                 let venvPython = "\(repoRoot)/.venv/bin/python"
@@ -140,6 +151,7 @@ class CosmaManager {
             await Task.yield()
 
             if let cosmaPath = findExecutable(name: "cosma") {
+                await ensureOllamaAndModel()
                 setupStage = .startingServer
                 appendLog("[CosmaManager] Launching cosma directly: \(cosmaPath) serve")
                 try await launchBackendProcess(
@@ -155,6 +167,10 @@ class CosmaManager {
             // --- Strategy 3: Auto-install uv + cosma, then launch ---
             let uvPath = try await ensureUV()
             try await ensureCosma(uvPath: uvPath)
+
+            // Ensure Ollama + summarizer model are ready. Non-fatal if it fails:
+            // the backend can still run for search, and the banner is suppressed.
+            await ensureOllamaAndModel()
 
             setupStage = .startingServer
             guard let cosmaPath = findExecutable(name: "cosma") else {
@@ -232,6 +248,112 @@ class CosmaManager {
         }
 
         installedVersion = await getInstalledVersion()
+    }
+
+    // MARK: - Ollama + Summarizer Model
+
+    /// Default summarizer model (matches backend default in ModelsSection).
+    private let defaultOllamaModel = "qwen3-vl:2b-instruct"
+
+    /// Ensures Ollama is installed and the summarizer model is pulled.
+    /// Best-effort: logs and returns on failure rather than aborting backend launch.
+    private func ensureOllamaAndModel() async {
+        do {
+            setupStage = .checkingOllama
+            let ollamaPath: String
+            if let existing = findExecutable(name: "ollama") {
+                ollamaPath = existing
+                appendLog("[CosmaManager] ollama found at \(existing)")
+            } else {
+                setupStage = .installingOllama
+                appendLog("[CosmaManager] ollama not found — attempting install")
+                try await installOllama()
+                guard let installed = findExecutable(name: "ollama") else {
+                    appendLog("[CosmaManager] ollama still not found after install — skipping model pull")
+                    return
+                }
+                ollamaPath = installed
+            }
+
+            // Make sure `ollama serve` is running so `ollama pull` can reach the daemon.
+            await startOllamaServeIfNeeded(ollamaPath: ollamaPath)
+
+            // Pull the summarizer model if it's not already present.
+            if try await ollamaHasModel(ollamaPath: ollamaPath, model: defaultOllamaModel) {
+                appendLog("[CosmaManager] ollama model \(defaultOllamaModel) already present")
+                return
+            }
+
+            setupStage = .pullingOllamaModel
+            appendLog("[CosmaManager] pulling ollama model \(defaultOllamaModel)")
+            _ = try await runProcess(executablePath: ollamaPath, arguments: ["pull", defaultOllamaModel])
+            appendLog("[CosmaManager] ollama model ready")
+        } catch {
+            appendLog("[CosmaManager] ollama setup failed: \(error.localizedDescription) — continuing without summarizer")
+        }
+    }
+
+    /// Install Ollama via Homebrew cask if available; otherwise throw.
+    private func installOllama() async throws {
+        if let brew = findExecutable(name: "brew") {
+            _ = try await runProcess(executablePath: brew, arguments: ["install", "--cask", "ollama"])
+            return
+        }
+        // No brew → install Homebrew first, then Ollama.
+        appendLog("[CosmaManager] brew not found — installing Homebrew")
+        try await runShellScript(
+            "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        )
+        guard let brew = findExecutable(name: "brew") else {
+            throw CosmaError.installFailed("Homebrew not found after installation")
+        }
+        _ = try await runProcess(executablePath: brew, arguments: ["install", "--cask", "ollama"])
+    }
+
+    /// Probe the Ollama HTTP API; if not reachable, spawn `ollama serve` in the background.
+    private func startOllamaServeIfNeeded(ollamaPath: String) async {
+        if await isOllamaReachable() { return }
+        appendLog("[CosmaManager] starting ollama serve")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ollamaPath)
+        process.arguments = ["serve"]
+        var env = ProcessInfo.processInfo.environment
+        env["HOME"] = realHomeDirectory()
+        process.environment = env
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            appendLog("[CosmaManager] failed to start ollama serve: \(error.localizedDescription)")
+            return
+        }
+        // Wait briefly for the daemon to come up.
+        for _ in 0..<20 {
+            if await isOllamaReachable() { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    private func isOllamaReachable() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:11434/api/tags") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    /// Returns true if the given model tag is already present in the local Ollama store.
+    private func ollamaHasModel(ollamaPath: String, model: String) async throws -> Bool {
+        let output = try await runProcess(executablePath: ollamaPath, arguments: ["list"])
+        // `ollama list` prints rows like "qwen3-vl:2b-instruct  abc123  1.5 GB  2 days ago"
+        return output.split(separator: "\n").contains { line in
+            line.split(separator: " ").first.map(String.init) == model
+        }
     }
 
     // MARK: - Server Lifecycle

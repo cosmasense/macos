@@ -118,7 +118,7 @@ struct CompactSearchResultCard: View {
         case "pdf":
             return .red
         case "txt", "md":
-            return .blue
+            return .brandBlue
         case "jpg", "jpeg", "png", "gif", "heic":
             return .orange
         case "mov", "mp4", "avi":

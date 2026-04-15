@@ -14,6 +14,7 @@ import CoreGraphics
 final class DualCommandKeyMonitor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var retainedSelfPtr: UnsafeMutableRawPointer?
     private var localMonitor: Any?
     private var action: (() -> Void)?
 
@@ -64,6 +65,7 @@ final class DualCommandKeyMonitor {
             userInfo: selfPtr
         ) {
             eventTap = tap
+            retainedSelfPtr = selfPtr
             let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             runLoopSource = source
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -87,14 +89,13 @@ final class DualCommandKeyMonitor {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
                 runLoopSource = nil
             }
-            // Release the retained self from start()
-            var context = CFMachPortContext()
-            CFMachPortGetContext(tap, &context)
-            if let info = context.info {
-                Unmanaged<DualCommandKeyMonitor>.fromOpaque(info).release()
-            }
             CFMachPortInvalidate(tap)
             eventTap = nil
+            // Release the retained self from start()
+            if let ptr = retainedSelfPtr {
+                Unmanaged<DualCommandKeyMonitor>.fromOpaque(ptr).release()
+                retainedSelfPtr = nil
+            }
         }
 
         if let monitor = localMonitor {

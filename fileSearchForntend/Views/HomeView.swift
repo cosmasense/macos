@@ -9,15 +9,9 @@
 
 import SwiftUI
 
-enum BackgroundStyle: String, CaseIterable {
-    case glass = "Glass"
-    case cosma = "Cosma Dark"
-}
-
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @FocusState private var searchFieldFocused: Bool
-    @AppStorage("backgroundStyle") private var backgroundStyle: String = BackgroundStyle.glass.rawValue
 
     private var isActive: Bool {
         searchFieldFocused || !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
@@ -29,28 +23,23 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            // Background — switchable
-            Group {
-                if backgroundStyle == BackgroundStyle.cosma.rawValue {
-                    CosmaGradientBackground()
-                } else {
-                    Rectangle().fill(.ultraThinMaterial)
-                }
-            }
-            .ignoresSafeArea()
+            // Background
+            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                .overlay(Color.white.opacity(0.3))
+                .ignoresSafeArea()
 
             // Main content — all elements stay in tree for smooth animation
             VStack(spacing: 0) {
                 // Top spacer: shrinks when active, pushes content down when idle
                 Spacer()
-                    .frame(maxHeight: isActive ? 36 : 100)
+                    .frame(maxHeight: isActive ? 36 : 140)
 
                 // Title — always present, animated opacity + height
                 VStack(spacing: 8) {
                     Text("COSMA SENSE")
                         .font(.system(size: 32, weight: .thin))
                         .tracking(8)
-                        .foregroundStyle(backgroundStyle == BackgroundStyle.cosma.rawValue ? .white : .primary)
+                        .foregroundStyle(.primary)
 
                     DashboardStatsView()
                 }
@@ -107,6 +96,9 @@ struct HomeView: View {
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: isActive)
         .animation(.easeInOut(duration: 0.3), value: hasResults)
+        .onChange(of: searchFieldFocused) { _, newValue in
+            model.isSearchFieldFocused = newValue
+        }
     }
     
 }
@@ -418,7 +410,7 @@ struct TokenChipView: View {
         .padding(.vertical, 5)
         .background(
             LinearGradient(
-                colors: [Color.blue.opacity(0.9), Color.blue],
+                colors: [Color.brandBlue.opacity(0.9), Color.brandBlue],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -428,7 +420,7 @@ struct TokenChipView: View {
             Capsule()
                 .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
         )
-        .shadow(color: .blue.opacity(0.3), radius: 2, x: 0, y: 1)
+        .shadow(color: .brandBlue.opacity(0.3), radius: 2, x: 0, y: 1)
     }
 }
 
@@ -450,7 +442,7 @@ struct FolderSuggestionsView: View {
                         HStack(spacing: 10) {
                             Image(systemName: "folder.fill")
                                 .font(.system(size: 14))
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(Color.brandBlue)
 
                             Text("@\(folder.name)")
                                 .font(.system(size: 14))
@@ -529,17 +521,14 @@ struct RecentSearchesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if model.recentSearches.isEmpty {
-                        VStack(spacing: 6) {
-                            Text("Type to search your files")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.tertiary)
-
-                            Text("Use @FolderName to scope results")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.quaternary)
+                        VStack(spacing: 8) {
+                            Text("Drag and drop to add folders")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.top, 56)
+                        .padding(.bottom, 16)
                     } else {
                         Text("Recent Searches")
                             .font(.system(size: 18, weight: .semibold))
@@ -656,8 +645,8 @@ private struct FolderChipsView: View {
         if !model.watchedFolders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Search in")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 4)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -689,56 +678,23 @@ private struct FolderFilterChip: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: "folder.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                 Text(folder.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
             .background(
                 isActive
-                    ? Color.blue
+                    ? Color.brandBlue
                     : Color.primary.opacity(0.06),
                 in: Capsule()
             )
             .foregroundStyle(isActive ? .white : .primary)
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Brand Gradient Background
-
-struct CosmaGradientBackground: View {
-    var body: some View {
-        ZStack {
-            // Solid dark base — no transparency, no desktop bleed
-            Color(red: 0.04, green: 0.04, blue: 0.09)
-
-            // Subtle blue glow — bottom-left
-            RadialGradient(
-                colors: [
-                    Color(red: 0.06, green: 0.08, blue: 0.35).opacity(0.6),
-                    Color.clear
-                ],
-                center: UnitPoint(x: 0.2, y: 0.7),
-                startRadius: 80,
-                endRadius: 400
-            )
-
-            // Faint white — top-right corner
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.06),
-                    Color.clear
-                ],
-                center: .topTrailing,
-                startRadius: 30,
-                endRadius: 300
-            )
-        }
     }
 }
 

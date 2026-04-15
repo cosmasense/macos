@@ -20,20 +20,23 @@ struct fileSearchForntendApp: App {
     @State private var hasFullDiskAccess = true // optimistic, checked on appear
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
     @AppStorage("overlayTriggerMode") private var overlayTriggerMode = "hotkey"
+    @AppStorage("setupCompleted") private var setupCompleted = false
 
     var body: some Scene {
         WindowGroup {
             Group {
-                if !hasFullDiskAccess {
-                    FullDiskAccessGateView {
+                if !setupCompleted || !hasFullDiskAccess {
+                    SetupWizardView {
+                        setupCompleted = true
                         hasFullDiskAccess = true
                     }
-                    .frame(minWidth: 500, minHeight: 400)
+                    .environment(cosmaManager)
+                    .frame(width: 620, height: 560)
                 } else if isBackendConnected {
                     ContentView()
                         .environment(appModel)
                         .environment(cosmaManager)
-                        .frame(minWidth: 900, minHeight: 600)
+                        .frame(width: 720, height: 560)
                         .containerBackground(.clear, for: .window)
                         .environment(\.presentQuickSearchOverlay, {
                             coordinator.showOverlay()
@@ -80,7 +83,7 @@ struct fileSearchForntendApp: App {
                     })
                     .environment(appModel)
                     .environment(cosmaManager)
-                    .frame(minWidth: 500, minHeight: 400)
+                    .frame(width: 720, height: 560)
                 }
             }
             .onAppear {
@@ -110,7 +113,9 @@ struct fileSearchForntendApp: App {
                 }
 
                 // Kick off backend startup if not already running.
-                if !cosmaManager.isRunning {
+                // During first-run setup the wizard will trigger this itself
+                // at step 3, so skip here to let the user click through.
+                if setupCompleted && !cosmaManager.isRunning {
                     Task {
                         await cosmaManager.startManagedBackend()
                     }
@@ -154,7 +159,8 @@ struct fileSearchForntendApp: App {
             }
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: isBackendConnected ? 900 : 500, height: isBackendConnected ? 600 : 400)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 560)
         .commands {
             CommandMenu("Quick Search") {
                 if overlayTriggerMode == "dualCommand" {
@@ -180,7 +186,7 @@ struct fileSearchForntendApp: App {
                 .environment(\.controlHotkeyMonitoring, { enabled in
                     setHotkeyMonitoring(enabled: enabled)
                 })
-                .frame(minWidth: 550, minHeight: 500)
+                .frame(width: 544, height: 400)
         }
     }
 
