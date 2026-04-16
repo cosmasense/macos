@@ -314,9 +314,10 @@ struct ResultsListView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            ForEach(results) { result in
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                 SearchResultRow(
                     result: result,
+                    index: index,
                     isSelected: selectedResultID == result.id,
                     onSelect: {
                         onSelect(result.id)
@@ -348,9 +349,10 @@ struct ResultsGridView: View {
 
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-            ForEach(results) { result in
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                 SearchResultGridCell(
                     result: result,
+                    index: index,
                     isSelected: selectedResultID == result.id,
                     onSelect: { onSelect(result.id) },
                     onOpen: { onOpen(result) },
@@ -364,6 +366,7 @@ struct ResultsGridView: View {
 
 struct SearchResultGridCell: View {
     let result: SearchResultItem
+    var index: Int = 100
     let isSelected: Bool
     let onSelect: () -> Void
     let onOpen: () -> Void
@@ -375,7 +378,8 @@ struct SearchResultGridCell: View {
         VStack(alignment: .center, spacing: 8) {
             FileThumbnailView(
                 url: URL(fileURLWithPath: result.file.filePath),
-                size: CGSize(width: 110, height: 130)
+                size: CGSize(width: 110, height: 130),
+                priority: index
             )
 
             Text(result.file.filename)
@@ -425,6 +429,7 @@ struct SearchResultGridCell: View {
 
 struct SearchResultRow: View {
     let result: SearchResultItem
+    var index: Int = 100
     let isSelected: Bool
     let onSelect: () -> Void
     let onOpen: () -> Void
@@ -437,7 +442,8 @@ struct SearchResultRow: View {
             // Larger file preview — natural aspect ratio
             FileThumbnailView(
                 url: URL(fileURLWithPath: result.file.filePath),
-                size: CGSize(width: 64, height: 80)
+                size: CGSize(width: 64, height: 80),
+                priority: index
             )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -556,10 +562,88 @@ private final class ThumbnailCache {
     }
 }
 
+/// Bounded, priority-aware loader for QLThumbnailGenerator requests.
+///
+/// Why this exists: firing 20+ `generateBestRepresentation` calls at once
+/// doesn't give you 20-way parallelism — QuickLook's XPC services
+/// serialize requests per file-type handler internally, so flooding it
+/// actually hurts. Throttling to 4 in-flight requests + prioritizing
+/// visible rows trades a negligible amount of headroom for a much
+/// smoother pop-in.
+private final class ThumbnailLoader {
+    static let shared = ThumbnailLoader()
+
+    private let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 4
+        q.qualityOfService = .userInitiated
+        return q
+    }()
+
+    /// `priority`: lower = earlier in the results list = load sooner.
+    /// OperationQueue doesn't guarantee strict FIFO-by-priority, but it
+    /// strongly biases picks toward higher QueuePriority values.
+    func load(url: URL,
+              pixelSize: CGSize,
+              scale: CGFloat,
+              priority: Int,
+              completion: @escaping (NSImage?) -> Void) {
+        let op = BlockOperation {
+            let request = QLThumbnailGenerator.Request(
+                fileAt: url,
+                size: pixelSize,
+                scale: scale,
+                representationTypes: .thumbnail
+            )
+            let sema = DispatchSemaphore(value: 0)
+            var result: NSImage?
+            QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
+                if let cg = rep?.cgImage {
+                    result = NSImage(cgImage: cg, size: .zero)
+                }
+                sema.signal()
+            }
+            // Block this operation's slot until QL is done so the
+            // concurrency cap is meaningful; without the wait all 20 ops
+            // finish in microseconds and fan out to QL anyway.
+            _ = sema.wait(timeout: .now() + 10)
+            if let img = result {
+                ThumbnailCache.shared.store(img, for: url)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+        // 0→first rows → .veryHigh, later rows step down so the queue
+        // drains in roughly visible-first order.
+        switch priority {
+        case ..<4:  op.queuePriority = .veryHigh
+        case 4..<8: op.queuePriority = .high
+        case 8..<16: op.queuePriority = .normal
+        default:    op.queuePriority = .low
+        }
+        queue.addOperation(op)
+    }
+
+    /// Fast synchronous-ish icon lookup: returns the Finder icon for the
+    /// file so the slot isn't blank while we wait for the real thumbnail.
+    /// NSWorkspace.icon is cheap (cached per file type) and stays on the
+    /// calling queue — safe to call from the main thread.
+    func quickIcon(for url: URL, size: CGSize) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = size
+        return icon
+    }
+}
+
 private struct FileThumbnailView: View {
     let url: URL
     var size: CGSize = CGSize(width: 64, height: 80)
+    /// Ordering hint — index of this row in the result list. Lower values
+    /// load first so the top of the page fills in before rows the user
+    /// hasn't scrolled to yet. Default 100 = low-priority so call sites
+    /// that don't know their index don't starve prioritized ones.
+    var priority: Int = 100
     @State private var image: NSImage?
+    @State private var isFullThumbnail: Bool = false
 
     var body: some View {
         Group {
@@ -574,6 +658,8 @@ private struct FileThumbnailView: View {
                             .strokeBorder(.quaternary.opacity(0.3), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 1)
+                    // Subtle crossfade when upgrading from icon → thumbnail
+                    .animation(.easeInOut(duration: 0.18), value: isFullThumbnail)
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6)
@@ -589,28 +675,34 @@ private struct FileThumbnailView: View {
     }
 
     private func loadThumbnail() {
-        guard image == nil else { return }
+        guard !isFullThumbnail else { return }
 
-        // Hit the cache first for instant display
+        // 1. Cache hit — instant, skip the whole pipeline.
         if let cached = ThumbnailCache.shared.image(for: url) {
             image = cached
+            isFullThumbnail = true
             return
         }
 
-        let request = QLThumbnailGenerator.Request(
-            fileAt: url,
-            size: CGSize(width: size.width * 3, height: size.height * 3),
-            scale: NSScreen.main?.backingScaleFactor ?? 2,
-            representationTypes: .thumbnail
-        )
+        // 2. Show Finder icon immediately so the slot isn't blank while
+        // QuickLook churns. NSWorkspace.icon is in-process and cheap.
+        if image == nil {
+            image = ThumbnailLoader.shared.quickIcon(for: url, size: size)
+        }
 
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
-            guard let cgImage = representation?.cgImage else { return }
-            let nsImage = NSImage(cgImage: cgImage, size: .zero)
-            ThumbnailCache.shared.store(nsImage, for: url)
-            DispatchQueue.main.async {
-                image = nsImage
-            }
+        // 3. Queue the real thumbnail with visible-row priority. When it
+        // arrives, swap in place (the `image` binding handles the transition).
+        let pixelSize = CGSize(width: size.width * 3, height: size.height * 3)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        ThumbnailLoader.shared.load(
+            url: url,
+            pixelSize: pixelSize,
+            scale: scale,
+            priority: priority
+        ) { ns in
+            guard let ns else { return }
+            image = ns
+            isFullThumbnail = true
         }
     }
 }

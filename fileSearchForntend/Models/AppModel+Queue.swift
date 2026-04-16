@@ -7,6 +7,30 @@
 
 import Foundation
 
+/// Treat URLSession cancellations as non-errors. They happen on purpose
+/// when a new request replaces an in-flight one (e.g. the queue view
+/// swapping tabs) and surfacing them as a "Queue Error: cancelled"
+/// dialog scared users into thinking the backend was broken.
+private func queueErrorMessage(from error: Error) -> String? {
+    let ns = error as NSError
+    if ns.domain == NSURLErrorDomain {
+        switch ns.code {
+        // Cancelled: happens when a new request supersedes an in-flight one.
+        // TimedOut / CannotConnect: backend is busy or restarting; the next
+        // poll tick will recover, so don't alarm the user.
+        case NSURLErrorCancelled,
+             NSURLErrorTimedOut,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorNetworkConnectionLost,
+             NSURLErrorNotConnectedToInternet:
+            return nil
+        default: break
+        }
+    }
+    if error is CancellationError { return nil }
+    return error.localizedDescription
+}
+
 // MARK: - Queue Status & Items
 
 extension AppModel {
@@ -16,7 +40,7 @@ extension AppModel {
         do {
             queueStatus = try await apiClient.fetchQueueStatus()
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -31,7 +55,7 @@ extension AppModel {
             queueTotalCount = response.totalCount
             queueError = nil
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -46,7 +70,7 @@ extension AppModel {
             }
             await refreshQueueStatus()
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -56,7 +80,7 @@ extension AppModel {
             _ = try await apiClient.removeQueueItem(itemId: itemId)
             await refreshQueueItems()
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 }
@@ -71,7 +95,7 @@ extension AppModel {
             let response = try await apiClient.fetchFailedFiles()
             failedFiles = response.files
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -81,7 +105,7 @@ extension AppModel {
             let response = try await apiClient.fetchRecentFiles()
             recentFiles = response.files
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -94,7 +118,7 @@ extension AppModel {
             _ = try await apiClient.reindexFile(filePath: filePath)
             await refreshQueueItems()
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
             // Revert optimistic update
             await refreshFailedFiles()
         }
@@ -110,7 +134,7 @@ extension AppModel {
         do {
             schedulerConfig = try await apiClient.fetchScheduler()
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 
@@ -135,7 +159,7 @@ extension AppModel {
                 rules: rules
             )
         } catch {
-            queueError = error.localizedDescription
+            queueError = queueErrorMessage(from: error)
         }
     }
 }

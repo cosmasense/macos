@@ -18,6 +18,13 @@ extension AppModel {
 
         guard !query.isEmpty else { return }
 
+        // Belt-and-suspenders: even if a code path bypasses the UI gate
+        // (menu command, scripted test, etc.), we refuse to search while
+        // AI setup is still running. Queries launched against a partial
+        // index return confusing results and are a common source of
+        // "why doesn't search work" bugs.
+        if !aiReadyForSearch { return }
+
         // Add to recent searches
         let newSearch = RecentSearch(
             date: Date(),

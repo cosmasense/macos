@@ -17,13 +17,28 @@ struct BackendConnectionView: View {
     @State private var lastError: String?
     @State private var copied = false
 
-    /// Simulated progress that fills over the expected setup window so the user
-    /// has visual feedback even when the backend is bootstrapping silently.
+    /// Simulated progress bar that *feels* real even though the backend
+    /// can't stream true percentages during cold start.
+    ///
+    /// How it works:
+    ///   - Each SetupStage maps to a target range [min, max] of the bar.
+    ///   - A timer creeps the bar upward within the current stage's range
+    ///     toward `max - 0.02`, so it keeps moving during long steps.
+    ///   - When the real SetupStage advances, the bar snaps forward (with
+    ///     animation) to the new stage's floor, giving the user a visible
+    ///     "something just happened" cue even when the underlying work
+    ///     is silent (e.g. pip install).
+    ///
+    /// The percentage is therefore honest about *which stage we're in*
+    /// while being fake about *how far through that stage*. That's the
+    /// best we can do without per-stage progress streaming from the
+    /// backend/installer.
     @State private var simulatedProgress: Double = 0.0
     @State private var progressTimer: Timer?
 
-    /// How long the fake progress bar takes to fill (seconds).
-    private let simulatedDuration: Double = 15.0
+    /// How long the fake fill-within-a-stage takes (seconds) before it caps.
+    /// Kept short so a stage that finishes quickly doesn't hold the bar back.
+    private let withinStageFillDuration: Double = 6.0
 
     private let startCommand = "cosma serve"
 
@@ -119,6 +134,8 @@ struct BackendConnectionView: View {
         .onAppear { startSimulatedProgress() }
         .onDisappear { stopSimulatedProgress() }
         .onChange(of: cosmaManager.setupStage) { _, stage in
+            // Snap the bar to the new stage's floor so the jump is visible.
+            handleStageChange(stage)
             if case .running = stage {
                 completeSimulatedProgress()
                 onConnected()
@@ -139,29 +156,70 @@ struct BackendConnectionView: View {
 
     // MARK: - Simulated Progress
 
+    /// The bar's target range for each real stage. Values were picked to
+    /// roughly reflect wall-clock cost on a cold first install:
+    /// pip-installing `cosma` + its deps is the slow middle hump,
+    /// pulling the Ollama model is the long tail, server start is fast.
+    /// These don't need to be precise — they just need to feel monotonic.
+    private func stageRange(_ stage: CosmaManager.SetupStage) -> (min: Double, max: Double) {
+        switch stage {
+        case .idle:              return (0.00, 0.05)
+        case .checkingUV:        return (0.05, 0.10)
+        case .installingUV:      return (0.10, 0.20)
+        case .checkingCosma:     return (0.20, 0.25)
+        case .installingCosma:   return (0.25, 0.50)  // slow: pip compile
+        case .checkingOllama:    return (0.50, 0.55)
+        case .installingOllama:  return (0.55, 0.65)
+        case .pullingOllamaModel:return (0.65, 0.88)  // slow: GB download
+        case .startingServer:    return (0.88, 0.97)
+        case .running:           return (1.00, 1.00)
+        case .stopped, .failed:  return (simulatedProgress, simulatedProgress)
+        }
+    }
+
+    /// Text under the bar — always reflects the real current stage so the
+    /// user can see *what* is actually happening, even though the numeric
+    /// progress within that stage is interpolated.
     private var simulatedProgressLabel: String {
         if simulatedProgress >= 1.0 {
             return "Almost ready…"
         }
         let pct = Int(simulatedProgress * 100)
-        return "Preparing backend… \(pct)%"
+        return "\(cosmaManager.stageDescription) \(pct)%"
     }
 
+    /// Nudge the bar upward within the current stage's range. Capped just
+    /// below the stage ceiling so the next real stage transition still has
+    /// room to produce a visible jump.
     private func startSimulatedProgress() {
         stopSimulatedProgress()
         simulatedProgress = 0.0
         let stepInterval: TimeInterval = 0.25
-        let totalSteps = simulatedDuration / stepInterval
-        let stepIncrement = 1.0 / totalSteps
-        progressTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak progressTimer] _ in
+        progressTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { _ in
             DispatchQueue.main.async {
-                if simulatedProgress < 0.95 {
-                    withAnimation(.linear(duration: stepInterval)) {
-                        simulatedProgress = min(0.95, simulatedProgress + stepIncrement)
-                    }
-                } else {
-                    progressTimer?.invalidate()
+                let range = stageRange(cosmaManager.setupStage)
+                let ceiling = max(range.min, range.max - 0.02)
+                if simulatedProgress >= ceiling { return }
+                // Fill the span in `withinStageFillDuration` seconds regardless
+                // of how long the real stage lasts — longer real stages just
+                // mean the bar sits at ~ceiling until the next transition.
+                let span = range.max - range.min
+                let increment = (span / withinStageFillDuration) * stepInterval
+                withAnimation(.linear(duration: stepInterval)) {
+                    simulatedProgress = min(ceiling, simulatedProgress + increment)
                 }
+            }
+        }
+    }
+
+    /// Called from onChange(of: setupStage) — jumps the bar forward (with
+    /// a short ease) to the new stage's floor so the user sees a clear
+    /// "step done" cue.
+    private func handleStageChange(_ stage: CosmaManager.SetupStage) {
+        let range = stageRange(stage)
+        if simulatedProgress < range.min {
+            withAnimation(.easeOut(duration: 0.35)) {
+                simulatedProgress = range.min
             }
         }
     }

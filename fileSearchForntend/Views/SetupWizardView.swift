@@ -163,31 +163,37 @@ private struct StepShell<Content: View, Footer: View>: View {
     @ViewBuilder let footer: () -> Footer
 
     var body: some View {
-        VStack(spacing: 18) {
-            Image(systemName: icon)
-                .font(.system(size: 52))
-                .foregroundStyle(Color.brandBlue)
-                .padding(.top, 32)
+        // Header (icon + title + subtitle) and footer (action button) are
+        // pinned; middle content scrolls if it overflows. Without this
+        // the AI Model step's provider picker pushed the Confirm button
+        // off the bottom of the 620×560 wizard window.
+        VStack(spacing: 14) {
+            VStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 44))
+                    .foregroundStyle(Color.brandBlue)
+                    .padding(.top, 20)
+                Text(title)
+                    .font(.system(size: 22, weight: .semibold))
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 32)
+            }
 
-            Text(title)
-                .font(.system(size: 22, weight: .semibold))
-
-            Text(subtitle)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 32)
-
-            content()
-                .padding(.horizontal, 40)
-
-            Spacer(minLength: 8)
+            ScrollView {
+                content()
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 4)
+            }
+            .frame(maxHeight: .infinity)
 
             footer()
-                .padding(.bottom, 28)
+                .padding(.bottom, 20)
         }
-        .padding(.horizontal, 56)
+        .padding(.horizontal, 40)
     }
 }
 
@@ -388,10 +394,17 @@ private struct ShortcutKeyCapsView: View {
 private struct KeyCap: View {
     let text: String
     var body: some View {
+        // lineLimit(1) + fixedSize keeps the cap one line wide regardless
+        // of parent width. Without this, multi-char labels like "Space"
+        // hit the HStack's width budget and wrap mid-word ("Spa/ce").
         Text(text)
-            .font(.system(size: 14, weight: .semibold))
-            .frame(minWidth: 28, minHeight: 26)
-            .padding(.horizontal, 6)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            // Wider caps so "Space" and two-char labels breathe without
+            // looking cramped next to the "+" separators.
+            .frame(minWidth: 44, minHeight: 22)
+            .padding(.horizontal, 10)
             .background(.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
     }
@@ -481,54 +494,248 @@ private struct InlineHotkeyCapture: NSViewRepresentable {
 
 // MARK: - Step 3: AI Model
 
+/// Two-phase AI setup step:
+///   Phase A — Choose provider (radio group, default llama.cpp). User
+///     sees what they're agreeing to (model name + approximate size) and
+///     must explicitly confirm before any multi-GB download kicks off.
+///   Phase B — Download progress (driven by /api/bootstrap SSE).
+/// The old "auto-fallback" behavior was removed to make failures
+/// diagnosable: if the user picked llama.cpp, Ollama absence should not
+/// silently mask a real llama.cpp problem.
 private struct AIModelStep: View {
+    @Environment(CosmaManager.self) private var cosmaManager
     let stage: CosmaManager.SetupStage
     let onContinue: () -> Void
     let onAppearAction: () -> Void
 
-    private var status: (icon: String, text: String, done: Bool) {
-        switch stage {
-        case .pullingOllamaModel:
-            return ("arrow.down.circle", "Downloading AI model…", false)
-        case .installingOllama:
-            return ("square.and.arrow.down", "Installing Ollama…", false)
-        case .checkingOllama:
-            return ("magnifyingglass", "Checking for Ollama…", false)
-        case .startingServer, .running:
-            return ("checkmark.circle.fill", "AI model ready", true)
-        default:
-            return ("hourglass", "Preparing…", false)
+    // Persisted across launches so re-running the wizard (after models got
+    // nuked) remembers the user's prior choice.
+    @AppStorage("aiProvider") private var provider: String = "llamacpp"
+    @AppStorage("aiConfirmed") private var confirmed: Bool = false
+
+    private var bootstrapDone: Bool {
+        cosmaManager.bootstrapReady
+    }
+
+    // Provider → (model name, rough download size). These strings are
+    // shown to the user at confirmation time so they know what's about
+    // to hit their disk.
+    private var providerInfo: (model: String, size: String) {
+        switch provider {
+        case "llamacpp": return ("Qwen3-VL-2B-Instruct (Q4_K_M) + mmproj + Whisper base.en", "~2.1 GB")
+        case "ollama":   return ("qwen3-vl:2b-instruct via Ollama + Whisper base.en", "~1.6 GB")
+        case "online":   return ("OpenAI (gpt-4.1-nano + whisper-1)", "0 GB — requires OPENAI_API_KEY")
+        default:         return ("Unknown", "")
         }
     }
 
     var body: some View {
         StepShell(
             icon: "brain.head.profile",
-            title: "Download AI Model",
-            subtitle: "Cosma Sense uses a local AI model for smart file summaries. This downloads automatically — about 2 GB."
+            title: confirmed ? "Downloading AI Models" : "Choose AI Backend",
+            subtitle: confirmed
+                ? "Components for your selected backend are downloading. This can take a few minutes on the first run."
+                : "Pick how Cosma Sense will run its AI. You can change this later in Settings."
         ) {
-            VStack(spacing: 14) {
-                HStack(spacing: 10) {
-                    Image(systemName: status.icon)
-                        .font(.system(size: 18))
-                        .foregroundStyle(status.done ? .green : Color.brandBlue)
-                    Text(status.text)
-                        .font(.system(size: 14, weight: .medium))
-                    Spacer()
-                    if !status.done { ProgressView().controlSize(.small) }
+            if !confirmed {
+                providerPicker
+            } else {
+                progressList
+            }
+        } footer: {
+            if !confirmed {
+                Button {
+                    confirmed = true
+                    Task {
+                        await cosmaManager.setProviderAndBootstrap(
+                            summarizer: provider,
+                            whisper: provider == "online" ? "online" : "local",
+                        )
+                    }
+                } label: {
+                    Text("Confirm & Download").frame(minWidth: 180)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.brandBlue)
+                .controlSize(.large)
+            } else {
+                Button(action: onContinue) {
+                    Text(bootstrapDone ? "Continue" : "Please wait…")
+                        .frame(minWidth: 160)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.brandBlue)
+                .controlSize(.large)
+                .disabled(!bootstrapDone)
+            }
+        }
+        .onAppear {
+            onAppearAction()
+            // Wait for backend readiness, then decide what to do:
+            //   1. Fast path: everything already installed → auto-advance.
+            //   2. Previously confirmed but install incomplete (crash,
+            //      interrupted download, models deleted) → auto-resume
+            //      the install so the user doesn't sit staring at stale
+            //      bar state. Without this, they'd see bars at their last
+            //      known percentage and no events flowing.
+            //   3. Fresh: show picker so the user can choose a provider.
+            Task {
+                for _ in 0..<60 {
+                    if cosmaManager.isRunning { break }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                await cosmaManager.refreshBootstrapStatus()
+                if cosmaManager.bootstrapReady {
+                    confirmed = true
+                } else if confirmed {
+                    // Resume install — fire the same flow the Confirm button
+                    // would trigger. Idempotent on the backend side, so
+                    // repeated calls are safe.
+                    await cosmaManager.setProviderAndBootstrap(
+                        summarizer: provider,
+                        whisper: provider == "online" ? "online" : "local",
+                    )
+                }
+            }
+        }
+        .onChange(of: confirmed) { _, nowConfirmed in
+            guard nowConfirmed else { return }
+            Task { await cosmaManager.refreshBootstrapStatus() }
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var providerPicker: some View {
+        VStack(spacing: 10) {
+            ProviderRow(
+                key: "llamacpp",
+                title: "Built-in (llama.cpp)",
+                description: "Fully local. Self-contained. Recommended.",
+                selected: provider == "llamacpp",
+                onSelect: { provider = "llamacpp" }
+            )
+            ProviderRow(
+                key: "ollama",
+                title: "Ollama",
+                description: "Local, uses the external Ollama daemon. Requires Ollama installed.",
+                selected: provider == "ollama",
+                onSelect: { provider = "ollama" }
+            )
+            ProviderRow(
+                key: "online",
+                title: "Online (OpenAI)",
+                description: "Fastest setup — but requires an OpenAI API key and sends file content to the cloud.",
+                selected: provider == "online",
+                onSelect: { provider = "online" }
+            )
+
+            // Model + size confirmation card
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You're about to set up:")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(providerInfo.model).font(.system(size: 13, weight: .medium))
+                Text("Download size: \(providerInfo.size)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var progressList: some View {
+        VStack(spacing: 12) {
+            if !cosmaManager.bootstrapComponents.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(cosmaManager.bootstrapComponents) { c in
+                        BootstrapRow(component: c)
+                    }
                 }
                 .padding(12)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
             }
-        } footer: {
-            Button(action: onContinue) {
-                Text(status.done ? "Continue" : "Continue Anyway").frame(minWidth: 160)
+            if let err = cosmaManager.bootstrapError {
+                Text("Download error: \(err)")
+                    .font(.footnote).foregroundStyle(.red)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brandBlue)
-            .controlSize(.large)
         }
-        .onAppear(perform: onAppearAction)
+    }
+}
+
+/// Radio-style row for the provider picker.
+private struct ProviderRow: View {
+    let key: String
+    let title: String
+    let description: String
+    let selected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selected ? Color.brandBlue : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 14, weight: .medium))
+                    Text(description).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(selected ? Color.brandBlue.opacity(0.08) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(selected ? Color.brandBlue : Color.secondary.opacity(0.2))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One row in the bootstrap list.
+///
+/// Layout: fixed-width label on the left, then a VStack(bar, percent text)
+/// taking the remaining width. Earlier versions put the percent text in a
+/// ZStack overlay with a negative y-offset; that pushed it out of the
+/// row's clipping bounds on macOS so the text was invisible even though
+/// it was rendered. A plain VStack is reliable across SwiftUI versions.
+private struct BootstrapRow: View {
+    let component: BootstrapComponent
+
+    private var done: Bool { component.present || component.done }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: done ? "checkmark.circle.fill" : "arrow.down.circle")
+                .font(.system(size: 14))
+                .foregroundStyle(done ? .green : Color.brandBlue)
+
+            Text(component.displayLabel)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .frame(width: 130, alignment: .leading)
+
+            if done {
+                Spacer()
+                Text("Ready").font(.caption2).foregroundStyle(.green)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressView(value: component.fraction)
+                        .progressViewStyle(.linear)
+                    Text(component.inlineProgressText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(minHeight: done ? 22 : 34)
     }
 }
 

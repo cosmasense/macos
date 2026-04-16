@@ -66,6 +66,14 @@ class AppModel {
 
     var currentPage: AppPage = .home
 
+    /// Mirror of CosmaManager.bootstrapReady, updated from the app root
+    /// whenever bootstrap status changes. We duplicate this onto AppModel
+    /// so non-View code (search funcs, indexing triggers) can gate without
+    /// pulling CosmaManager into the model layer. Defaults to true so
+    /// pre-setup code paths (before the mirror is first set) don't block
+    /// unrelated operations.
+    var aiReadyForSearch: Bool = true
+
     // MARK: - Watched Folders State
 
     var watchedFolders: [WatchedFolder] = []

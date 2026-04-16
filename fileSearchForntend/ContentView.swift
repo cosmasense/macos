@@ -110,6 +110,23 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleFolderDrop(providers: providers)
         }
+        .task {
+            // Two-tier polling: status (counts) is tiny JSON and drives the
+            // badge, so poll fast. Failed/recent lists can be huge (10k+
+            // failures with error strings), so poll much less often — a
+            // 4 s cadence there was stacking 60 s requests and DDoS'ing
+            // the backend.
+            var tick = 0
+            while !Task.isCancelled {
+                await model.refreshQueueStatus()
+                if tick % 8 == 0 {  // ~every 32s
+                    await model.refreshFailedFiles()
+                    await model.refreshRecentFiles()
+                }
+                tick &+= 1
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],

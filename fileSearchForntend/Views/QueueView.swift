@@ -211,7 +211,15 @@ struct QueueContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
-                FailedTabHeader(files: model.failedFiles)
+                FailedTabHeader(files: model.failedFiles) {
+                    // Fire reindex for each failed file. Keep them as
+                    // separate tasks so one slow file doesn't serialize
+                    // the rest; the backend queue handles concurrency.
+                    let paths = model.failedFiles.map { $0.filePath }
+                    for path in paths {
+                        Task { await model.reindexFile(filePath: path) }
+                    }
+                }
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
                     .padding(.bottom, 6)
@@ -266,9 +274,12 @@ struct QueueStatusSummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 16) {
+                // Cooldown is a backend-only debounce after a file changes.
+                // We intentionally don't surface it in the UI — it confused
+                // users into thinking indexing was stuck. Cooling-down files
+                // are folded into "Waiting" from the user's perspective.
                 QueueCountPill(label: "Total", count: status.totalItems, color: .primary)
-                QueueCountPill(label: "Cooling Down", count: status.coolingDown, color: .brandBlue)
-                QueueCountPill(label: "Waiting", count: status.waiting, color: .green)
+                QueueCountPill(label: "Waiting", count: status.waiting + status.coolingDown, color: .green)
                 QueueCountPill(label: "Processing", count: status.processing, color: .orange)
                 Spacer()
             }
@@ -376,8 +387,10 @@ struct QueueItemRow: View {
 
             Spacer()
 
-            // Status pill
-            Text(item.status.replacingOccurrences(of: "_", with: " ").capitalized)
+            // Status pill. cooling_down is an internal debounce state that
+            // confuses users (they see "Cooling Down" and think indexing
+            // is stuck), so we display it as "Waiting" instead.
+            Text(displayStatus)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(statusColor)
                 .padding(.horizontal, 8)
@@ -411,11 +424,16 @@ struct QueueItemRow: View {
 
     private var statusColor: Color {
         switch item.status {
-        case "cooling_down": return .brandBlue
-        case "waiting": return .green
+        case "cooling_down", "waiting": return .green
         case "processing": return .orange
         default: return .secondary
         }
+    }
+
+    private var displayStatus: String {
+        item.status == "cooling_down"
+            ? "Waiting"
+            : item.status.replacingOccurrences(of: "_", with: " ").capitalized
     }
 }
 
@@ -468,7 +486,6 @@ struct RecentFileRow: View {
 struct FailedFileRow: View {
     let file: ProcessedFileItem
     let onReindex: () -> Void
-    @State private var didCopy = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -497,18 +514,10 @@ struct FailedFileRow: View {
 
             Spacer()
 
-            // Share Error — copies a debuggable report to the clipboard
-            Button {
-                copyErrorReport()
-            } label: {
-                Label(didCopy ? "Copied" : "Share Error",
-                      systemImage: didCopy ? "checkmark" : "square.and.arrow.up")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .tint(didCopy ? .green : .brandBlue)
-            .help("Copy error details to clipboard for debugging")
+            // Per-row "Share Error" was removed — the header's "Copy All
+            // Errors" covers the reporting case, and most users just want
+            // Reindex here. Context menu still offers per-file copy for the
+            // rare case where someone wants a single file's report.
 
             Button(action: onReindex) {
                 Label("Reindex", systemImage: "arrow.counterclockwise")
@@ -536,10 +545,6 @@ struct FailedFileRow: View {
         let report = Self.buildErrorReport(for: file)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(report, forType: .string)
-        withAnimation(.easeInOut(duration: 0.2)) { didCopy = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation(.easeInOut(duration: 0.2)) { didCopy = false }
-        }
     }
 
     /// Multi-line error report suitable for pasting into a bug report.
@@ -584,15 +589,38 @@ struct FailedFileRow: View {
 /// button that bundles every failed file into one clipboard payload.
 struct FailedTabHeader: View {
     let files: [ProcessedFileItem]
+    let onRetryAll: () -> Void
     @State private var didCopy = false
+    @State private var didRetry = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text("\(files.count) failed \(files.count == 1 ? "file" : "files")")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
 
             Spacer()
+
+            // Retry all — fires one reindex per failed file. Users asked
+            // for this because the per-row Reindex button is tedious when
+            // the failure was a one-off (backend down, transient I/O error)
+            // and all 50+ files can be kicked at once.
+            Button {
+                onRetryAll()
+                withAnimation(.easeInOut(duration: 0.2)) { didRetry = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation(.easeInOut(duration: 0.2)) { didRetry = false }
+                }
+            } label: {
+                Label(didRetry ? "Retrying…" : "Retry All Failed",
+                      systemImage: didRetry ? "checkmark" : "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(didRetry ? .green : .brandBlue)
+            .help("Queue every failed file for reindexing")
+            .disabled(files.isEmpty)
 
             Button {
                 copyAllErrors()

@@ -45,6 +45,17 @@ class CosmaManager {
     var latestVersion: String?
     var serverLog: String = ""
 
+    // Bootstrap (llama.cpp + whisper.cpp model download) state.
+    // Populated by CosmaManager+Bootstrap once the backend is reachable. Split
+    // from `setupStage` because bootstrap runs *after* the server is up —
+    // the server starts serving the API immediately, then streams install
+    // progress back so the wizard can show per-component bars without
+    // blocking server startup behind ~2 GB of downloads.
+    var bootstrapComponents: [BootstrapComponent] = []
+    var bootstrapRunning: Bool = false
+    var bootstrapReady: Bool = false
+    var bootstrapError: String?
+
     /// Whether this manager spawned the process (vs attaching to an existing one)
     var ownsProcess: Bool = false
 
@@ -78,6 +89,7 @@ class CosmaManager {
 
     @ObservationIgnored private var serverProcess: Process?
     @ObservationIgnored private var stdoutPipe: Pipe?
+    @ObservationIgnored var shutdownCompleteSeen: Bool = false
     @ObservationIgnored private var stderrPipe: Pipe?
     @ObservationIgnored private var updateTimer: Timer?
     @ObservationIgnored private var restartCount = 0
@@ -94,13 +106,18 @@ class CosmaManager {
         print("[CosmaManager] startManagedBackend called")
         stopRecoveryPolling()
 
-        // Step 1: Quick attach if backend is already running (no setup needed)
+        // Step 1: Quick attach if backend is already running (no setup needed).
+        //
+        // Warm-attach fast path: we intentionally skip ensureOllamaAndModel()
+        // here. If the backend is reachable, it has already run its own
+        // probe against Ollama at startup and will reconcile the summarizer
+        // state on first use. Having the frontend *also* shell out to
+        // `ollama list` + ping :11434 adds ~500ms to every launch for zero
+        // new information. The model-availability banner (if something is
+        // actually missing) is driven by AppModel.checkModelAvailability(),
+        // which runs after the UI shows — so the launch feels instant.
         if await isBackendReachable() {
             ownsProcess = false
-            // Still ensure Ollama + summarizer model are ready, even when
-            // attaching to an existing backend — otherwise the summarizer
-            // endpoint fails and the "model unavailable" banner shows.
-            await ensureOllamaAndModel()
             setupStage = .running
             installedVersion = await getInstalledVersion()
             scheduleUpdateChecks()
@@ -257,7 +274,17 @@ class CosmaManager {
 
     /// Ensures Ollama is installed and the summarizer model is pulled.
     /// Best-effort: logs and returns on failure rather than aborting backend launch.
+    ///
+    /// Provider-gated: does nothing unless the user actually picked Ollama
+    /// as their summarizer backend. Previously this ran on every launch
+    /// regardless of provider, costing ~1–2 s shelling out to `ollama list`
+    /// for users who will never use Ollama (llama.cpp or online).
     private func ensureOllamaAndModel() async {
+        let provider = UserDefaults.standard.string(forKey: "aiProvider") ?? "llamacpp"
+        guard provider == "ollama" else {
+            appendLog("[CosmaManager] skipping Ollama check (provider=\(provider))")
+            return
+        }
         do {
             setupStage = .checkingOllama
             let ollamaPath: String
@@ -462,19 +489,30 @@ class CosmaManager {
             let pid = process.processIdentifier
             appendLog("[CosmaManager] Stopping backend (pid \(pid))…")
 
-            // Step 1: SIGTERM (graceful) — gives backend time to unload Ollama
+            // Step 1: SIGTERM (graceful) — gives backend time to unload
+            // Ollama and tear down SSE streams + loky workers.
+            shutdownCompleteSeen = false
             process.terminate()
 
-            // Busy-wait up to 6s for the backend's after_serving to finish.
-            // This is the window where Ollama models get unloaded.
-            let softDeadline = Date().addingTimeInterval(6.0)
+            // Window is 12 s (> uvicorn's 10 s graceful-shutdown budget) so
+            // the backend gets a full chance to exit cleanly. We short-
+            // circuit as soon as we see "Shutdown complete" on stdout —
+            // that's the backend's final log line, so anything after it
+            // is wasted wall-clock time.
+            let softDeadline = Date().addingTimeInterval(12.0)
             while process.isRunning && Date() < softDeadline {
+                if shutdownCompleteSeen {
+                    // Give the process one more tick to actually exit after
+                    // it printed the line, then stop waiting.
+                    usleep(100_000)
+                    break
+                }
                 usleep(50_000)  // 50 ms
             }
 
             // Step 2: SIGKILL (force) if still alive
             if process.isRunning {
-                appendLog("[CosmaManager] Backend did not exit in 6s, sending SIGKILL")
+                appendLog("[CosmaManager] Backend did not exit in 12s, sending SIGKILL")
                 kill(pid, SIGKILL)
                 let hardDeadline = Date().addingTimeInterval(0.5)
                 while process.isRunning && Date() < hardDeadline {
@@ -788,8 +826,14 @@ class CosmaManager {
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
+            // Watch for the backend's final log line so stopServer() can
+            // exit its SIGTERM wait immediately instead of always burning
+            // the full timeout. The backend prints this from after_serving
+            // once every teardown step has completed.
+            let seenShutdown = str.contains("Shutdown complete")
             Task { @MainActor [weak self] in
                 self?.appendLog(str)
+                if seenShutdown { self?.shutdownCompleteSeen = true }
             }
         }
     }
