@@ -143,8 +143,13 @@ struct fileSearchForntendApp: App {
             .onChange(of: cosmaManager.setupStage) { _, newStage in
                 appDelegate.syncStatusBarWithCosmaManager()
 
-                // Backend came up → transition to main UI.
-                if case .running = newStage, !isBackendConnected {
+                // Backend came up → transition to main UI, but only if
+                // bootstrap (model downloads) is actually finished. Otherwise
+                // the main UI flashes up while Qwen3-VL is still downloading
+                // and any search/index immediately fails. The wizard will
+                // flip us into the main UI itself once bootstrapReady goes
+                // true (see the bootstrapReady onChange below).
+                if case .running = newStage, !isBackendConnected, cosmaManager.bootstrapReady {
                     appModel.connectToBackend()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         isBackendConnected = true
@@ -171,6 +176,18 @@ struct fileSearchForntendApp: App {
             // (search/index) can gate without pulling CosmaManager in.
             .onChange(of: cosmaManager.bootstrapReady) { _, ready in
                 appModel.aiReadyForSearch = ready
+                // Bootstrap just finished while the backend is already
+                // running — transition into the main UI now. Paired with
+                // the gate in the setupStage onChange above, this ensures
+                // we enter the main UI exactly once and only after models
+                // are on disk.
+                if ready, case .running = cosmaManager.setupStage, !isBackendConnected {
+                    appModel.connectToBackend()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isBackendConnected = true
+                    }
+                    Task { await appModel.checkModelAvailability() }
+                }
             }
         }
         .windowStyle(.hiddenTitleBar)
