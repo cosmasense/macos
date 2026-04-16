@@ -55,11 +55,11 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         dismissalCallback = onDismiss
         self.appModel = appModel
 
-        // Clear previous popup search state so the overlay starts fresh & collapsed
-        appModel.popupSearchText = ""
-        appModel.popupSearchResults = []
-        appModel.popupSearchTokens = []
-        appModel.popupSearchError = nil
+        // NOTE: We deliberately do NOT clear popupSearchText / results here.
+        // Users expect the hotkey to act like a spotlight toggle — hide on
+        // one press, reveal the same query + results on the next. State is
+        // only wiped when the user hits Esc inside the overlay (see
+        // QuickSearchOverlayView's Esc handler).
         appModel.popupOpenCount += 1
 
         if panel == nil {
@@ -94,12 +94,14 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
         panel?.setFrame(defaultFrame(), display: false)
         panel?.orderFrontRegardless()
         panel?.makeKey()
-        installClickOutsideMonitor()
+        // Click-outside dismissal was intentionally removed: users want the
+        // overlay to stay pinned above other windows while they interact
+        // with Finder / other apps, and only toggle it via the hotkey (or
+        // dismiss with Esc).
     }
 
     func dismiss() {
         guard let panel else { return }
-        removeClickOutsideMonitor()
         dragEndTimer?.invalidate()
         dragEndTimer = nil
         panel.alphaValue = 1.0

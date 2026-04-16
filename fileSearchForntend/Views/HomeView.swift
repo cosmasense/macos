@@ -11,7 +11,15 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(CosmaManager.self) private var cosmaManager
     @FocusState private var searchFieldFocused: Bool
+
+    // Search + index are disabled while AI models are still being set up.
+    // Rationale: searching with an unready index returns stale/no-AI
+    // results, and triggering a new index when the summarizer isn't ready
+    // just queues thousands of files to fail. Better to show a clear
+    // "still setting up" state than to let the user kick off no-ops.
+    private var aiReady: Bool { cosmaManager.bootstrapReady }
 
     private var isActive: Bool {
         searchFieldFocused || !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
@@ -48,11 +56,27 @@ struct HomeView: View {
                 .clipped()
                 .padding(.bottom, isActive ? 0 : 20)
 
-                // Search bar
+                // Search bar — disabled until AI models are ready so the
+                // user can't kick off useless queries against an unready
+                // pipeline. Overlay shows why.
                 SearchFieldView(isFocused: $searchFieldFocused)
                     .frame(minWidth: 400, maxWidth: isActive ? 680 : 520)
                     .padding(.horizontal, 40)
                     .padding(.bottom, 14)
+                    .disabled(!aiReady)
+                    .opacity(aiReady ? 1 : 0.55)
+                    .overlay(alignment: .center) {
+                        if !aiReady {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Setting up AI models — search paused")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(.thinMaterial, in: Capsule())
+                        }
+                    }
 
                 // Below search: results or chips/recent
                 if hasResults {
@@ -99,8 +123,126 @@ struct HomeView: View {
         .onChange(of: searchFieldFocused) { _, newValue in
             model.isSearchFieldFocused = newValue
         }
+        .background(
+            // Invisible monitor that routes loose keystrokes to the search
+            // field. Lets the user just start typing anywhere on Home to
+            // begin a search, and hit Esc to bail out — matching how
+            // Spotlight and most launcher UIs feel. Placed in .background
+            // so it doesn't affect layout or hit-testing.
+            HomeKeyCaptureView(
+                isSearchFocused: searchFieldFocused,
+                aiReady: aiReady,
+                onType: { chars in
+                    // Focus first, then append on the next runloop tick.
+                    // When SwiftUI focuses an NSTextField it auto-selects
+                    // the existing text; appending *before* focus meant the
+                    // next user keystroke replaced what they just typed.
+                    // Deferring the append puts the insertion point at the
+                    // end after focus settles, so typing continues normally.
+                    searchFieldFocused = true
+                    DispatchQueue.main.async {
+                        model.searchText.append(chars)
+                        // Move the field editor's caret to the end so the
+                        // newly-appended chars aren't left selected.
+                        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                            let end = editor.string.count
+                            editor.setSelectedRange(NSRange(location: end, length: 0))
+                        }
+                    }
+                },
+                onEscape: {
+                    model.searchText = ""
+                    model.searchTokens = []
+                    model.searchResults = []
+                    model.searchError = nil
+                    model.isSearching = false
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    searchFieldFocused = false
+                }
+            )
+            .allowsHitTesting(false)
+        )
     }
-    
+
+}
+
+/// NSViewRepresentable that installs a local NSEvent monitor while the
+/// HomeView is on-screen. We use NSEvent rather than SwiftUI's .onKeyPress
+/// because we need to capture keystrokes *without* a focused control —
+/// SwiftUI's modifiers only fire when the attached view already has focus.
+private struct HomeKeyCaptureView: NSViewRepresentable {
+    let isSearchFocused: Bool
+    let aiReady: Bool
+    let onType: (String) -> Void
+    let onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.install(parent: self)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // Rebind the latest closures so the monitor always sees current
+        // focus/aiReady state without re-installing the monitor each update.
+        context.coordinator.parent = self
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        var parent: HomeKeyCaptureView?
+        private var monitor: Any?
+
+        func install(parent: HomeKeyCaptureView) {
+            self.parent = parent
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let p = self.parent else { return event }
+
+                // Esc (keyCode 53): always clear + blur, even while focused.
+                if event.keyCode == 53 {
+                    p.onEscape()
+                    return nil
+                }
+
+                // Only auto-capture typing when the field isn't already
+                // focused (otherwise the TextField handles it) and when AI
+                // is ready (no point starting a search we can't run).
+                guard !p.isSearchFocused, p.aiReady else { return event }
+
+                // Skip modified key combos (Cmd-Q, Cmd-W, etc.) — those
+                // belong to menus/system shortcuts, not to the search field.
+                let blockingFlags: NSEvent.ModifierFlags = [.command, .control, .function]
+                if !event.modifierFlags.isDisjoint(with: blockingFlags) {
+                    return event
+                }
+
+                // Printable characters only. charactersIgnoringModifiers
+                // filters out arrow keys / fn keys (which return empty or
+                // private-use-area strings).
+                guard let chars = event.charactersIgnoringModifiers,
+                      !chars.isEmpty,
+                      chars.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value < 0x7F })
+                else { return event }
+
+                p.onType(chars)
+                return nil
+            }
+        }
+
+        func uninstall() {
+            if let m = monitor {
+                NSEvent.removeMonitor(m)
+                monitor = nil
+            }
+        }
+
+        deinit { uninstall() }
+    }
 }
 
 // MARK: - Search Field Component

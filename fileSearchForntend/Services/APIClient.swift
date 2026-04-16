@@ -257,7 +257,12 @@ class APIClient {
         return try await delete(url: url)
     }
 
-    func fetchFailedFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+    // limit=2000: big enough to cover almost any realistic failure set
+    // without stalling the UI. Past ~2k, serializing every File row into
+    // JSON on the backend starts taking tens of seconds, which blocked
+    // the whole event loop and timed out other polls. If there are more
+    // than 2k failures, the user has bigger problems than the list.
+    func fetchFailedFiles(offset: Int = 0, limit: Int = 2000) async throws -> ProcessedFilesResponse {
         guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/failed"), resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }
@@ -271,7 +276,7 @@ class APIClient {
         return try await get(url: url)
     }
 
-    func fetchRecentFiles(offset: Int = 0, limit: Int = 50) async throws -> ProcessedFilesResponse {
+    func fetchRecentFiles(offset: Int = 0, limit: Int = 500) async throws -> ProcessedFilesResponse {
         guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/recent"), resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }

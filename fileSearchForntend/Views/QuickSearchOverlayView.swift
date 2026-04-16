@@ -47,7 +47,11 @@ struct QuickSearchOverlayView: View {
             }
         }
         .overlay {
-            Button(action: onClose) { EmptyView() }
+            // Esc is the only thing that clears popup search state. The
+            // hotkey just toggles visibility and preserves the previous
+            // query + results, so users can re-open and resume where they
+            // left off.
+            Button(action: clearAndClose) { EmptyView() }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
                 .frame(width: 0, height: 0)
@@ -107,16 +111,20 @@ struct QuickSearchOverlayView: View {
         .shadow(color: .black.opacity(0.08), radius: 18, y: 12)
         .shadow(color: Color.accentColor.opacity(0.06), radius: 14, y: 6)
         .onAppear {
-            updateLayout(false)  // Start collapsed
-            // Delay focus to ensure window is fully ready
+            // Preserve prior state across hide/show: if the user had results
+            // from a previous session, re-open expanded so they see them
+            // immediately; otherwise start collapsed.
+            let hasPrior = !model.popupSearchResults.isEmpty || !model.popupSearchText.isEmpty
+            setExpanded(hasPrior)
+            updateLayout(hasPrior)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isSearchFocused = true
             }
         }
-        .onExitCommand { onClose() }
+        .onExitCommand { clearAndClose() }
         .onChange(of: model.popupOpenCount) { _, _ in
-            // Fresh open — collapse to search-bar-only state
-            setExpanded(false)
+            let hasPrior = !model.popupSearchResults.isEmpty || !model.popupSearchText.isEmpty
+            setExpanded(hasPrior)
         }
         .onChange(of: model.popupSearchText) {
             debounceTask?.cancel()
@@ -138,6 +146,16 @@ struct QuickSearchOverlayView: View {
                 setExpanded(true)
             }
         }
+    }
+
+    /// Called by Esc: wipe the popup search state and dismiss. The hotkey
+    /// path (hide → show) preserves state by skipping this.
+    private func clearAndClose() {
+        model.popupSearchText = ""
+        model.popupSearchResults = []
+        model.popupSearchTokens = []
+        model.popupSearchError = nil
+        onClose()
     }
 
     private func setExpanded(_ expanded: Bool) {

@@ -36,8 +36,11 @@ struct fileSearchForntendApp: App {
                     ContentView()
                         .environment(appModel)
                         .environment(cosmaManager)
-                        .frame(width: 720, height: 560)
-                        .containerBackground(.clear, for: .window)
+                        // Match the size recenterMainWindowToSize animates to.
+                        // Previously the frame (720x560) was smaller than the
+                        // window (900x600), which let .containerBackground(.clear)
+                        // leak through as a transparent strip around the content.
+                        .frame(width: 900, height: 600)
                         .environment(\.presentQuickSearchOverlay, {
                             coordinator.showOverlay()
                         })
@@ -110,6 +113,11 @@ struct fileSearchForntendApp: App {
                     appModel.connectToBackend()
                     isBackendConnected = true
                     Task { await appModel.checkModelAvailability() }
+                    // Safety net also fires on this branch — the fast-attach
+                    // path previously skipped the bootstrap probe, which meant
+                    // a user whose models got deleted stayed stuck on the
+                    // main UI with search failing silently.
+                    Task { await verifyBootstrapOrReopenWizard() }
                 }
 
                 // Kick off backend startup if not already running.
@@ -118,6 +126,7 @@ struct fileSearchForntendApp: App {
                 if setupCompleted && !cosmaManager.isRunning {
                     Task {
                         await cosmaManager.startManagedBackend()
+                        await verifyBootstrapOrReopenWizard()
                     }
                 }
             }
@@ -127,6 +136,7 @@ struct fileSearchForntendApp: App {
                 if !cosmaManager.isRunning {
                     Task {
                         await cosmaManager.startManagedBackend()
+                        await verifyBootstrapOrReopenWizard()
                     }
                 }
             }
@@ -156,6 +166,11 @@ struct fileSearchForntendApp: App {
             }
             .onChange(of: cosmaManager.updateStatus) {
                 appDelegate.syncStatusBarWithCosmaManager()
+            }
+            // Mirror bootstrap readiness onto AppModel so non-View code
+            // (search/index) can gate without pulling CosmaManager in.
+            .onChange(of: cosmaManager.bootstrapReady) { _, ready in
+                appModel.aiReadyForSearch = ready
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -187,6 +202,18 @@ struct fileSearchForntendApp: App {
                     setHotkeyMonitoring(enabled: enabled)
                 })
                 .frame(width: 544, height: 400)
+        }
+    }
+
+    /// If the backend reports any required AI component missing, flip
+    /// setupCompleted back to false so the wizard reappears. Runs on every
+    /// launch path (fresh start, fast attach, FDA-just-granted) because a
+    /// user can delete model files out-of-band and we need to catch that
+    /// *before* they try to index and hit silent parser failures.
+    private func verifyBootstrapOrReopenWizard() async {
+        await cosmaManager.refreshBootstrapStatus()
+        if !cosmaManager.bootstrapReady {
+            setupCompleted = false
         }
     }
 
