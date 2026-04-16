@@ -168,6 +168,14 @@ class CosmaManager {
             await Task.yield()
 
             if let cosmaPath = findExecutable(name: "cosma") {
+                // Before launching, bring the installed `cosma` tool up to
+                // the latest PyPI release. Without this step, a user who
+                // installed the app a week ago keeps running an old backend
+                // that may be missing newer endpoints (e.g. /api/bootstrap/*),
+                // leading to silent 404s in the UI. `uv tool upgrade` is a
+                // no-op when already current, and 3s-bounded so a slow
+                // network can't stall app launch.
+                await upgradeCosmaIfNeeded()
                 await ensureOllamaAndModel()
                 setupStage = .startingServer
                 appendLog("[CosmaManager] Launching cosma directly: \(cosmaPath) serve")
@@ -543,6 +551,60 @@ class CosmaManager {
     }
 
     // MARK: - Update Checks
+
+    /// On every app launch, make sure the installed `cosma` tool matches
+    /// the latest published version on PyPI. Non-fatal: if PyPI is slow or
+    /// the upgrade itself errors, we log and continue with what's installed.
+    /// Bounded to ~8s so a flaky network can't block startup.
+    private func upgradeCosmaIfNeeded() async {
+        guard let uvPath = findExecutable(name: "uv") else { return }
+        let installed = await getInstalledVersion()
+        installedVersion = installed
+
+        let latest: String?
+        do {
+            latest = try await withTimeout(seconds: 3) { try await self.fetchLatestPyPIVersion() }
+        } catch {
+            appendLog("[CosmaManager] PyPI version check failed — skipping auto-upgrade: \(error.localizedDescription)")
+            return
+        }
+        guard let latest else { return }
+        latestVersion = latest
+
+        if let installed, installed == latest {
+            appendLog("[CosmaManager] cosma is up to date (v\(installed))")
+            return
+        }
+
+        appendLog("[CosmaManager] Upgrading cosma: \(installed ?? "?") → \(latest)")
+        do {
+            try await withTimeout(seconds: 120) {
+                try await self.runProcess(
+                    executablePath: uvPath,
+                    arguments: ["tool", "upgrade", "cosma", "--no-cache"]
+                )
+            }
+            installedVersion = await getInstalledVersion()
+            appendLog("[CosmaManager] Upgrade complete (now v\(installedVersion ?? "?"))")
+        } catch {
+            appendLog("[CosmaManager] Auto-upgrade failed — continuing with old version: \(error.localizedDescription)")
+        }
+    }
+
+    /// Generic async timeout wrapper. `operation` is cancelled if it doesn't
+    /// finish within `seconds`.
+    private func withTimeout<T: Sendable>(seconds: Double, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw CosmaError.updateCheckFailed("timeout after \(seconds)s")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
 
     func checkForUpdates() async {
         updateStatus = .checking

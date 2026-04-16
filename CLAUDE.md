@@ -52,11 +52,31 @@ fileSearchForntendApp.onAppear
 
 `CosmaManager` is an `@Observable` class managing the backend process:
 - **Auto-install:** Checks for `uv` and `cosma`, installs via `uv tool install` if missing
+- **Auto-upgrade on launch:** If `cosma` is already installed (strategy 2),
+  `upgradeCosmaIfNeeded()` runs `uv tool upgrade cosma` before starting the
+  server whenever the installed version is older than the PyPI latest.
+  Bounded by 3 s for the PyPI check and 120 s for the upgrade itself so a
+  slow network can't stall launch. This is how friends/teammates stay in
+  sync with backend releases without ever touching a terminal.
 - **Launch strategies:** Local dev checkout → installed `cosma` binary → fresh install
 - **Health polling:** Retries `/api/status/` until backend responds
 - **Crash recovery:** Detects process death, auto-restarts
-- **Graceful shutdown:** SIGTERM with 6s window before SIGKILL
+- **Graceful shutdown:** SIGTERM with 12s window before SIGKILL
 - **Update detection:** Checks PyPI for new versions every 6 hours
+
+### Backend Release Flow (PyPI)
+
+The backend ships to PyPI via `.github/workflows/release.yml` in the cosma
+repo; any tag matching `v*` triggers a build + publish. To ship a new
+backend:
+
+1. In the cosma repo, bump `version` in the root `pyproject.toml` and in
+   every changed `packages/*/pyproject.toml`.
+2. `git commit -m "v0.8.0" && git tag v0.8.0 && git push && git push --tags`.
+3. GitHub Actions publishes to PyPI automatically.
+
+Users pick up the new backend on their next app launch because this app
+calls `uv tool upgrade cosma` before starting the server.
 
 Setup stages: `.idle` → `.checkingUV` → `.installingUV` → `.checkingCosma` → `.installingCosma` → `.startingServer` → `.running`
 
