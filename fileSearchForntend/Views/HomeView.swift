@@ -31,16 +31,27 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            // Background
+            // Background — glass with a Light-only tint. The app pins
+            // NSApp.appearance to .aqua in AppDelegate, so the material
+            // renders its Light variant even when the system is Dark.
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .overlay(Color.white.opacity(0.3))
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.42),
+                            Color.white.opacity(0.26)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .ignoresSafeArea()
 
             // Main content — all elements stay in tree for smooth animation
             VStack(spacing: 0) {
                 // Top spacer: shrinks when active, pushes content down when idle
                 Spacer()
-                    .frame(maxHeight: isActive ? 36 : 140)
+                    .frame(maxHeight: isActive ? 60 : 84)
 
                 // Title — always present, animated opacity + height
                 VStack(spacing: 8) {
@@ -89,7 +100,7 @@ struct HomeView: View {
                         .padding(.horizontal, 40)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 } else {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 8) {
                         FolderChipsView()
                             .frame(maxWidth: isActive ? 680 : 520)
                             .padding(.horizontal, 40)
@@ -98,7 +109,7 @@ struct HomeView: View {
                             .frame(maxWidth: isActive ? 680 : 520)
                             .padding(.horizontal, 40)
                     }
-                    .padding(.top, 4)
+                    .padding(.top, 20)
                 }
 
                 Spacer()
@@ -122,6 +133,17 @@ struct HomeView: View {
         .animation(.easeInOut(duration: 0.3), value: hasResults)
         .onChange(of: searchFieldFocused) { _, newValue in
             model.isSearchFieldFocused = newValue
+        }
+        .onAppear {
+            // Don't auto-focus the search field when the window opens.
+            // SwiftUI's TextField would otherwise grab first responder as
+            // the only focusable control, so the user sees a blinking
+            // caret without having asked for it. Wait a tick for the
+            // window to settle, then clear focus.
+            DispatchQueue.main.async {
+                searchFieldFocused = false
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
         }
         .background(
             // Invisible monitor that routes loose keystrokes to the search
@@ -180,7 +202,7 @@ private struct HomeKeyCaptureView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        context.coordinator.install(parent: self)
+        context.coordinator.install(parent: self, view: view)
         return view
     }
 
@@ -196,12 +218,23 @@ private struct HomeKeyCaptureView: NSViewRepresentable {
 
     final class Coordinator {
         var parent: HomeKeyCaptureView?
+        weak var hostView: NSView?
         private var monitor: Any?
 
-        func install(parent: HomeKeyCaptureView) {
+        func install(parent: HomeKeyCaptureView, view: NSView) {
             self.parent = parent
+            self.hostView = view
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let p = self.parent else { return event }
+
+                // Only capture keystrokes when HomeView's window is the key
+                // window. Otherwise the Quick Search overlay panel (and any
+                // other secondary window) would have its input swallowed
+                // here before reaching its own text field.
+                if let host = self.hostView?.window,
+                   NSApp.keyWindow !== host {
+                    return event
+                }
 
                 // Esc (keyCode 53): always clear + blur, even while focused.
                 if event.keyCode == 53 {
@@ -254,6 +287,15 @@ struct SearchFieldView: View {
     @State private var backspaceMonitor: Any?
     @State private var searchGradientRotation: Double = 0
 
+    /// True while the user is composing an @folder mention: the last
+    /// whitespace-separated word starts with `@` and the text does not end
+    /// with a trailing space (space means "done with the mention").
+    private var isInFolderMention: Bool {
+        if model.searchText.hasSuffix(" ") { return false }
+        guard let lastWord = model.searchText.split(separator: " ").last else { return false }
+        return String(lastWord).hasPrefix("@")
+    }
+
     var body: some View {
         @Bindable var model = model
 
@@ -265,7 +307,10 @@ struct SearchFieldView: View {
                     .font(.system(size: 18))
                     .foregroundStyle(.secondary)
 
-                // Combined token + text input
+                // Combined token + text input.
+                // minHeight matches the token-chip height so the search
+                // bar keeps a constant height whether a token is present
+                // or not (otherwise the field grows when a chip appears).
                 HStack(spacing: 8) {
                     // Token chips inline
                     ForEach(model.searchTokens) { token in
@@ -298,6 +343,7 @@ struct SearchFieldView: View {
                             return .handled
                         }
                 }
+                .frame(minHeight: 30)
 
                 // Clear button
                 if !model.searchText.isEmpty || !model.searchTokens.isEmpty {
@@ -316,20 +362,13 @@ struct SearchFieldView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            // Layered Liquid Glass for enhanced visibility
-            .background {
-                let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
-                if #available(macOS 14.0, *) {
-                    Color.clear.glassEffect(in: shape)
-                } else {
-                    shape.fill(.ultraThinMaterial)
-                }
-            }
+            .padding(.vertical, 8)
+            .searchBarChrome()
             .overlay {
+                // Rotating gradient stays as an extra overlay on top of the
+                // shared chrome — only HomeView has a "searching" state.
                 if model.isSearching {
-                    // Rotating gradient border while searching
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .strokeBorder(
                             AngularGradient(
                                 gradient: Gradient(colors: [
@@ -344,27 +383,10 @@ struct SearchFieldView: View {
                             ),
                             lineWidth: 2.5
                         )
-                } else {
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(
-                            isFocused
-                                ? Color.accentColor.opacity(0.5)
-                                : Color.white.opacity(0.2),
-                            lineWidth: isFocused ? 2 : 1
-                        )
+                        .allowsHitTesting(false)
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: isFocused)
             .animation(.easeInOut(duration: 0.3), value: model.isSearching)
-            .shadow(
-                color: model.isSearching
-                    ? Color.accentColor.opacity(0.45)
-                    : (isFocused ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.08)),
-                radius: model.isSearching ? 20 : (isFocused ? 16 : 12),
-                x: 0,
-                y: model.isSearching ? 0 : (isFocused ? 6 : 4)
-            )
-            .animation(.easeInOut(duration: 0.2), value: isFocused)
             .onChange(of: model.isSearching) { _, isSearching in
                 if isSearching {
                     withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
@@ -378,14 +400,14 @@ struct SearchFieldView: View {
             }
 
             // Folder suggestions dropdown
-            if model.searchText.contains("@") {
+            if isInFolderMention {
                 FolderSuggestionsView(selectedIndex: $selectedSuggestionIndex)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: model.searchText.contains("@"))
-        .onChange(of: model.searchText.contains("@")) { oldValue, newValue in
-            if !newValue {
+        .animation(.easeInOut(duration: 0.2), value: isInFolderMention)
+        .onChange(of: isInFolderMention) { _, isActive in
+            if !isActive {
                 selectedSuggestionIndex = 0
             }
         }
@@ -436,6 +458,14 @@ struct SearchFieldView: View {
             selectFolder(suggestions[selectedSuggestionIndex])
         } else if !model.searchText.isEmpty || !model.searchTokens.isEmpty {
             model.performSearch()
+        } else {
+            // Empty field + no tokens: treat Return like Esc — reset to the
+            // idle home state and blur the search field.
+            model.searchResults = []
+            model.searchError = nil
+            model.isSearching = false
+            isFocused = false
+            NSApp.keyWindow?.makeFirstResponder(nil)
         }
     }
 
@@ -462,13 +492,21 @@ struct SearchFieldView: View {
     }
 
     private func getSuggestions() -> [WatchedFolder] {
+        // A trailing space means the user has "finished" the mention —
+        // surface no suggestions so the dropdown dismisses.
+        if model.searchText.hasSuffix(" ") { return [] }
+
         let words = model.searchText.split(separator: " ")
         guard let lastWord = words.last else { return [] }
 
         let word = String(lastWord)
-        guard word.hasPrefix("@"), word.count > 1 else { return [] }
+        guard word.hasPrefix("@") else { return [] }
 
         let query = String(word.dropFirst()).lowercased()
+        if query.isEmpty {
+            // Bare "@" — show every watched folder so the user can pick.
+            return model.watchedFolders
+        }
         return model.watchedFolders.filter {
             $0.name.lowercased().hasPrefix(query)
         }
@@ -596,7 +634,7 @@ struct FolderSuggestionsView: View {
                         .padding(.vertical, 10)
                         .background(
                             index == selectedIndex
-                                ? Color.accentColor.opacity(0.15)
+                                ? Color.white.opacity(0.85)
                                 : Color.clear
                         )
                         .contentShape(Rectangle())
@@ -620,13 +658,21 @@ struct FolderSuggestionsView: View {
     }
 
     private func getSuggestions() -> [WatchedFolder] {
+        // A trailing space means the user has "finished" the mention —
+        // surface no suggestions so the dropdown dismisses.
+        if model.searchText.hasSuffix(" ") { return [] }
+
         let words = model.searchText.split(separator: " ")
         guard let lastWord = words.last else { return [] }
 
         let word = String(lastWord)
-        guard word.hasPrefix("@"), word.count > 1 else { return [] }
+        guard word.hasPrefix("@") else { return [] }
 
         let query = String(word.dropFirst()).lowercased()
+        if query.isEmpty {
+            // Bare "@" — show every watched folder so the user can pick.
+            return model.watchedFolders
+        }
         return model.watchedFolders.filter {
             $0.name.lowercased().hasPrefix(query)
         }
@@ -660,8 +706,8 @@ struct RecentSearchesView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 4) {
                     if model.recentSearches.isEmpty {
                         VStack(spacing: 8) {
                             Text("Drag and drop to add folders")
@@ -673,10 +719,12 @@ struct RecentSearchesView: View {
                         .padding(.bottom, 16)
                     } else {
                         Text("Recent Searches")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
+                            .padding(.top, 20)
 
-                        VStack(spacing: 8) {
+                        VStack(spacing: 2) {
                             ForEach(model.recentSearches.prefix(maxRecentSearches)) { search in
                                 RecentSearchRowView(search: search)
                             }
@@ -695,51 +743,42 @@ struct RecentSearchRowView: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 14) {
-            // Click to load search
-            Button(action: {
-                model.loadRecentSearch(search)
-            }) {
-                HStack(spacing: 14) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20)
-
-                    Text(search.rawQuery)
-                        .font(.system(size: 14))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.quaternary)
-                        .opacity(isHovered ? 1 : 0)
-                }
-            }
-            .buttonStyle(.plain)
-            
-            // Delete button
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    model.recentSearches.removeAll { $0.id == search.id }
-                }
-            }) {
-                Image(systemName: "xmark.circle.fill")
+        Button(action: {
+            model.loadRecentSearch(search)
+        }) {
+            HStack(spacing: 14) {
+                Image(systemName: "clock")
                     .font(.system(size: 16))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+
+                Text(search.rawQuery)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        model.recentSearches.removeAll { $0.id == search.id }
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .opacity(isHovered ? 1 : 0)
             }
-            .buttonStyle(.plain)
-            .opacity(isHovered ? 1 : 0)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+            )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle()) //onHover includes whitespace between search and x button
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-        )
+        .buttonStyle(.plain)
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = hovering

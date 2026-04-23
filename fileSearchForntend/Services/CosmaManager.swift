@@ -862,7 +862,24 @@ class CosmaManager {
         guard let cosmaPath = findExecutable(name: "cosma") else { return nil }
         do {
             let output = try await runProcess(executablePath: cosmaPath, arguments: ["--version"])
-            // Expect something like "cosma 0.5.0" — extract version
+            // Recent cosma builds print a multi-line block:
+            //   cosma version info:
+            //     cosma: 0.8.1
+            //     cosma-backend: 0.8.1
+            //     cosma-tui: 0.4.0
+            //     cosma-client: 0.2.0
+            // The previous `split(" ").last` path grabbed the *last* token on
+            // the last line — cosma-client's version — so the upgrade log
+            // read "0.2.0 → 0.8.1" even when the real cosma was already
+            // current. Match the top-level `cosma:` line first, then fall
+            // back to the legacy single-line format for older builds.
+            for line in output.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("cosma:") {
+                    let value = trimmed.dropFirst("cosma:".count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { return value }
+                }
+            }
             let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
             if let lastWord = trimmed.split(separator: " ").last {
                 return String(lastWord)

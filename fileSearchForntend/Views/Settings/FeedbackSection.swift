@@ -14,8 +14,10 @@ struct FeedbackSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Support")
-                .font(.system(size: 20, weight: .semibold))
+            Text("Have a bug report, feature request, or just want to share how you're using Cosma? We'd love to hear from you.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Button(action: {
                 showingFeedbackSheet = true

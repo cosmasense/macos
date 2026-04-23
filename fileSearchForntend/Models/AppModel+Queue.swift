@@ -74,6 +74,18 @@ extension AppModel {
         }
     }
 
+    /// Force-resume the queue regardless of who paused it. Used when the
+    /// scheduler is the active blocker and the user wants to override its
+    /// pause without first manually pausing then resuming.
+    func forceResumeQueue() async {
+        do {
+            _ = try await apiClient.resumeQueue()
+            await refreshQueueStatus()
+        } catch {
+            queueError = queueErrorMessage(from: error)
+        }
+    }
+
     /// Removes a single item from the queue
     func removeQueueItem(itemId: String) async {
         do {

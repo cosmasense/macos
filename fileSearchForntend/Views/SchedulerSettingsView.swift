@@ -337,7 +337,7 @@ struct SchedulerSettingsView: View {
 
             Divider()
 
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 SchedulerEditor(
                     enabled: $enabled,
                     combineMode: $combineMode,

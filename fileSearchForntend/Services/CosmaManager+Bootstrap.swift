@@ -115,10 +115,23 @@ extension CosmaManager {
         guard let url = URL(string: "http://127.0.0.1:60534/api/bootstrap/status") else { return }
         for attempt in 0..<15 {
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, response) = try await URLSession.shared.data(from: url)
+                // 404 means the attached backend predates the /api/bootstrap/*
+                // routes (cosma-backend < 0.8.0). Surfacing the raw JSON
+                // decode failure — "The data couldn't be read because it
+                // isn't in the correct format" — wedges the wizard behind
+                // an opaque message. Instead, tell the user exactly what
+                // happened so they can quit/relaunch (which triggers the
+                // auto-upgrade path) or kill the stray backend process.
+                if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+                    self.bootstrapError = "Backend is outdated (missing /api/bootstrap). Quit Cosma Sense and relaunch to auto-upgrade. If the error persists, run `pkill -f \"cosma serve\"` in Terminal to clear a stale backend process, then relaunch."
+                    self.bootstrapReady = false
+                    return
+                }
                 let decoded = try JSONDecoder().decode(BootstrapStatusResponse.self, from: data)
                 self.bootstrapComponents = decoded.components
                 self.bootstrapReady = decoded.ready
+                self.bootstrapError = nil
                 return
             } catch {
                 // Retry with backoff: cold backend usually binds its port

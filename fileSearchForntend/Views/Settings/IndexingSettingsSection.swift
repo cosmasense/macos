@@ -23,10 +23,7 @@ struct IndexingSettingsSection: View {
     @State private var hasUnsavedChanges: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Indexing")
-                .font(.system(size: 20, weight: .semibold))
-
+        VStack(alignment: .leading, spacing: 16) {
             // Queue Configuration
             GroupBox("Queue Configuration") {
                 VStack(alignment: .leading, spacing: 12) {

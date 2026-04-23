@@ -9,7 +9,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case permissions = "Permissions"
+    case shortcut = "Shortcut"
     case general = "General"
     case fileFilters = "File Filters"
     case feedback = "Feedback"
@@ -19,7 +19,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .permissions: return "lock.shield"
+        case .shortcut: return "command.square"
         case .general: return "gearshape"
         case .fileFilters: return "line.3.horizontal.decrease.circle"
         case .feedback: return "bubble.left.and.bubble.right"
@@ -38,12 +38,12 @@ struct SettingsView: View {
         @Bindable var model = model
 
         TabView {
-            settingsPage {
+            settingsPage(title: "Shortcut") {
                 HotkeySection(hotkey: $overlayHotkey)
             }
-            .tabItem { Label(SettingsSection.permissions.rawValue, systemImage: SettingsSection.permissions.icon) }
+            .tabItem { Label(SettingsSection.shortcut.rawValue, systemImage: SettingsSection.shortcut.icon) }
 
-            settingsPage {
+            settingsPage(title: "General") {
                 GeneralSection(
                     launchAtStartup: $launchAtStartup,
                     backendURL: $model.backendURL
@@ -51,36 +51,41 @@ struct SettingsView: View {
             }
             .tabItem { Label(SettingsSection.general.rawValue, systemImage: SettingsSection.general.icon) }
 
-            settingsPage {
+            settingsPage(title: "File Filters") {
                 FileFilterSection()
             }
             .tabItem { Label(SettingsSection.fileFilters.rawValue, systemImage: SettingsSection.fileFilters.icon) }
 
-            settingsPage {
+            settingsPage(title: "Feedback") {
                 FeedbackSection()
             }
             .tabItem { Label(SettingsSection.feedback.rawValue, systemImage: SettingsSection.feedback.icon) }
 
-            settingsPage {
+            settingsPage(title: nil) {
                 AdvancedSettingsView()
             }
             .tabItem { Label(SettingsSection.advanced.rawValue, systemImage: SettingsSection.advanced.icon) }
         }
-        .frame(width: 520)
-        .frame(minHeight: 420)
+        .frame(minWidth: 640, idealWidth: 680)
+        .frame(minHeight: 540, idealHeight: 600)
     }
 
     @ViewBuilder
-    private func settingsPage<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        ScrollView {
+    private func settingsPage<Content: View>(title: String?, @ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 if case .available(let installed, let latest) = cosmaManager.updateStatus {
                     UpdateBanner(installed: installed, latest: latest, cosmaManager: cosmaManager)
                 }
+                if let title {
+                    Text(title)
+                        .font(.system(size: 22, weight: .semibold))
+                        .padding(.bottom, 2)
+                }
                 content()
                 Spacer(minLength: 0)
             }
-            .padding(20)
+            .padding(24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }

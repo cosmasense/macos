@@ -41,32 +41,30 @@ struct FileFilterSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
-            HStack {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text("File Filters")
-                            .font(.system(size: 14, weight: .medium))
+                        Text(modeDescription)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
 
                         if model.hasUnsavedFilterChanges {
                             Text("Unsaved Changes")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.orange)
                         }
-
-                        Button(action: { showingHelp = true }) {
-                            Image(systemName: "questionmark.circle")
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
                     }
-
-                    Text(modeDescription)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
+
+                Button(action: { showingHelp = true }) {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Pattern syntax help")
 
                 if model.isLoadingFilterConfig {
                     ProgressView()
@@ -357,7 +355,7 @@ private struct FilterPatternHelpView: View {
 
             Divider()
 
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     // Introduction
                     Text("Use gitignore-like patterns to filter files from search results. Patterns are case-insensitive.")

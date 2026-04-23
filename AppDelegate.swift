@@ -36,6 +36,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 App delegate initialized - hotkey monitor will stay alive")
 
+        // Force Light Mode app-wide. This pins NSApp.appearance so every
+        // NSWindow (main, overlay, settings, status bar menus) renders in
+        // Light regardless of the system appearance.
+        NSApp.appearance = NSAppearance(named: .aqua)
+
+        // Log uncaught exceptions before AppKit converts them into a silent
+        // force-terminate. Without this, a view-init crash shows up as
+        // "Unexpected call to terminate" with no explanation.
+        NSSetUncaughtExceptionHandler { exception in
+            print("💥 Uncaught exception: \(exception.name.rawValue): \(exception.reason ?? "<no reason>")")
+            print("Stack:\n\(exception.callStackSymbols.joined(separator: "\n"))")
+        }
+
         // Apply saved visibility mode
         applyVisibilityMode(currentVisibilityMode)
 
@@ -248,10 +261,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // When clicking dock icon, show main window if no windows visible
-        if !flag {
-            showMainWindow()
-        }
+        // If there are visible windows, let AppKit bring them forward —
+        // do NOT return true into the WindowGroup path or SwiftUI will
+        // spawn a second window on top of the one we already have.
+        if flag { return false }
+
+        // No visible window. We usually have one that's been orderOut'd
+        // (e.g., hideMainWindow during overlay present). Surface it and
+        // return false so SwiftUI does not *also* create a fresh one —
+        // that's the "two app screens appear" the user was seeing.
+        if surfaceHiddenMainWindow() { return false }
+
+        // Genuinely no window exists anywhere — let SwiftUI build one.
+        return true
+    }
+
+    /// Bring an existing (possibly hidden) main window back to front.
+    /// Returns true if a window was surfaced, false if none was found.
+    @discardableResult
+    private func surfaceHiddenMainWindow() -> Bool {
+        guard let window = NSApp.windows.first(where: {
+            $0.contentView != nil && $0.level != .floating && $0.title != "Settings"
+        }) else { return false }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        // Match showMainWindow: surface the window without stealing focus
+        // into the search field.
+        window.makeFirstResponder(nil)
         return true
     }
 
@@ -342,11 +378,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("🛑 Status bar removed")
     }
 
-    private func showMainWindow() {
+    /// Surface the main SwiftUI window. Safe to call when already visible.
+    func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        // Find and show main window
-        if let window = NSApp.windows.first(where: { $0.title == "Search Files" || $0.contentView != nil }) {
+        if let window = NSApp.windows.first(where: {
+            $0.contentView != nil && $0.level != .floating && $0.title != "Settings"
+        }) {
             window.makeKeyAndOrderFront(nil)
+            // Don't auto-focus the search field when the window surfaces.
+            // Users should click the field to start typing — SwiftUI's
+            // TextField otherwise grabs first responder as the only
+            // focusable control.
+            window.makeFirstResponder(nil)
         }
     }
 
@@ -398,10 +441,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         print("🎯 presentOverlay called directly from AppDelegate")
-        overlayController.present(appModel: appModel, onDismiss: { [weak coordinator] in
-            // Keep state in sync when dismissed via X button or clicking outside
-            coordinator?.isOverlayVisible = false
-        })
+        hideMainWindow()
+        overlayController.present(
+            appModel: appModel,
+            onDismiss: { [weak coordinator] in
+                // Dismiss paths (Esc / outside-click / Cmd+W / hotkey
+                // re-toggle) never surface main. Only onZoomToMain does.
+                coordinator?.isOverlayVisible = false
+            },
+            onZoomToMain: { [weak self, weak coordinator] in
+                coordinator?.isOverlayVisible = false
+                self?.showMainWindow()
+            }
+        )
+    }
+
+    /// Hide the main SwiftUI window (preserving state) so the overlay takes over.
+    /// Overlay dismiss paths never re-surface main — only the explicit expand
+    /// button (onZoomToMain) brings it back via `showMainWindow()`.
+    func hideMainWindow() {
+        for window in NSApp.windows where window.isVisible && window.contentView != nil {
+            if window.level == .floating { continue }
+            if window.title == "Settings" { continue }
+            window.orderOut(nil)
+        }
     }
 
     /// Dismiss the overlay directly

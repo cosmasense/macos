@@ -14,11 +14,8 @@ struct BackendSettingsSection: View {
     @State private var showAdvanced = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Processing Configuration")
-                    .font(.system(size: 20, weight: .semibold))
-
                 Spacer()
 
                 if model.isLoadingSettings {

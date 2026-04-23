@@ -183,7 +183,7 @@ private struct StepShell<Content: View, Footer: View>: View {
                     .padding(.horizontal, 32)
             }
 
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 content()
                     .padding(.horizontal, 40)
                     .padding(.vertical, 4)

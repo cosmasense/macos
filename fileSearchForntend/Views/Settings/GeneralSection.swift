@@ -30,10 +30,7 @@ struct GeneralSection: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 20) {
-            Text("General")
-                .font(.system(size: 20, weight: .semibold))
-
+        VStack(alignment: .leading, spacing: 24) {
             // Launch at Startup
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: Binding(
@@ -64,9 +61,6 @@ struct GeneralSection: View {
                 syncLaunchAtStartupStatus()
             }
 
-            // File Filter Section
-            FileFilterSection()
-
             // App Visibility Mode
             VStack(alignment: .leading, spacing: 8) {
                 Text("Show Application In")
@@ -85,7 +79,7 @@ struct GeneralSection: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                .frame(maxWidth: 250, alignment: .leading)
+                .frame(maxWidth: 280, alignment: .leading)
 
                 Text("Choose where the app appears. Menu Bar Only keeps the app running in background.")
                     .font(.system(size: 12))
@@ -205,15 +199,15 @@ struct GeneralSection: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(cosmaManager.isManaged ? .tertiary : .secondary)
 
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     TextField("http://localhost:8000", text: $backendURL)
                         .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 400)
                         .font(.system(size: 13, design: .monospaced))
                         .disabled(cosmaManager.isManaged)
                         .opacity(cosmaManager.isManaged ? 0.5 : 1.0)
+                        .layoutPriority(1)
 
-                    Button("Test Connection") {
+                    Button("Test") {
                         testBackendConnection()
                     }
                     .buttonStyle(.bordered)
@@ -222,10 +216,10 @@ struct GeneralSection: View {
 
                     if connectionTestState == .testing {
                         ProgressView()
-                            .frame(width: 16, height: 16)
                             .controlSize(.small)
                     }
                 }
+                .frame(maxWidth: 480)
 
                 if cosmaManager.isManaged {
                     Text("URL is managed automatically when Managed Backend is enabled.")
@@ -336,7 +330,7 @@ struct BackendLogView: View {
 
             // Log content
             ScrollViewReader { proxy in
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: false) {
                     if cosmaManager.serverLog.isEmpty {
                         Text("No log output yet.")
                             .font(.system(size: 13))

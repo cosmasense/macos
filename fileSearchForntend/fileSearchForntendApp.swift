@@ -31,21 +31,40 @@ struct fileSearchForntendApp: App {
                         hasFullDiskAccess = true
                     }
                     .environment(cosmaManager)
-                    .frame(width: 620, height: 560)
+                    // Flex-fill so the wizard's VisualEffectView background
+                    // always covers the entire NSWindow contentView. A fixed
+                    // .frame(width:height:) bounds the backing glass to the
+                    // child's size, which lets the window's transparent edges
+                    // show through as dark/blurry strips whenever the window
+                    // ends up wider than the child (defaultSize is 720 but
+                    // the wizard used to cap at 620).
+                    .frame(minWidth: 620, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
                 } else if isBackendConnected {
                     ContentView()
                         .environment(appModel)
                         .environment(cosmaManager)
-                        // Match the size recenterMainWindowToSize animates to.
-                        // Previously the frame (720x560) was smaller than the
-                        // window (900x600), which let .containerBackground(.clear)
-                        // leak through as a transparent strip around the content.
-                        .frame(width: 900, height: 600)
+                        // Same flex-fill rule: keep the previous 700x520 as
+                        // a minimum but let the content grow to whatever the
+                        // NSWindow is currently sized to, so we never leave
+                        // transparent strips around the content.
+                        .frame(minWidth: 700, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
                         .environment(\.presentQuickSearchOverlay, {
                             coordinator.showOverlay()
                         })
-                        .environment(\.updateQuickSearchLayout, { isExpanded in
-                            overlayController.updateLayout(isExpanded: isExpanded)
+                        .environment(\.zoomToPopup, {
+                            // Carry in-progress search state across so the
+                            // overlay continues where the main window left
+                            // off — text, tokens, and results. Results are
+                            // copied too so the overlay opens expanded with
+                            // the same hits instead of flashing a re-search.
+                            appModel.popupSearchText = appModel.searchText
+                            appModel.popupSearchTokens = appModel.searchTokens
+                            appModel.popupSearchResults = appModel.searchResults
+                            appDelegate.hideMainWindow()
+                            coordinator.showOverlay()
+                        })
+                        .environment(\.updateQuickSearchLayout, { isExpanded, hasChrome in
+                            overlayController.updateLayout(isExpanded: isExpanded, hasChrome: hasChrome)
                         })
                         .environment(\.controlHotkeyMonitoring, { enabled in
                             setHotkeyMonitoring(enabled: enabled)
@@ -58,7 +77,24 @@ struct fileSearchForntendApp: App {
                                 appModel: appModel,
                                 visible: newValue,
                                 onDismiss: {
+                                    // Overlay dismiss (Esc / outside-click /
+                                    // Cmd+W / hotkey re-toggle) never surfaces
+                                    // main. Only the explicit expand button
+                                    // (onZoomToMain) brings main back.
                                     coordinator.hideOverlay()
+                                },
+                                onZoomToMain: {
+                                    // Symmetric to zoomToPopup: carry the
+                                    // popup's in-progress search (text,
+                                    // tokens, results) back to the main
+                                    // window so expanding feels like moving
+                                    // the same query into a bigger surface,
+                                    // not a reset.
+                                    appModel.searchText = appModel.popupSearchText
+                                    appModel.searchTokens = appModel.popupSearchTokens
+                                    appModel.searchResults = appModel.popupSearchResults
+                                    coordinator.hideOverlay()
+                                    appDelegate.showMainWindow()
                                 }
                             )
                         }
@@ -75,7 +111,7 @@ struct fileSearchForntendApp: App {
                         .onAppear {
                             registerActiveTrigger()
                             // Animate the window to its larger size while keeping its center point
-                            recenterMainWindowToSize(NSSize(width: 900, height: 600))
+                            recenterMainWindowToSize(NSSize(width: 700, height: 520))
                         }
                 } else {
                     BackendConnectionView(onConnected: {
@@ -86,9 +122,10 @@ struct fileSearchForntendApp: App {
                     })
                     .environment(appModel)
                     .environment(cosmaManager)
-                    .frame(width: 720, height: 560)
+                    .frame(minWidth: 720, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
                 }
             }
+            .preferredColorScheme(.light)
             .onAppear {
                 // Store references in app delegate so they stay alive
                 // Do this early so menu bar actions work even before backend connects
@@ -191,7 +228,7 @@ struct fileSearchForntendApp: App {
             }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 560)
         .commands {
             CommandMenu("Quick Search") {
@@ -218,7 +255,7 @@ struct fileSearchForntendApp: App {
                 .environment(\.controlHotkeyMonitoring, { enabled in
                     setHotkeyMonitoring(enabled: enabled)
                 })
-                .frame(width: 544, height: 400)
+                .preferredColorScheme(.light)
         }
     }
 
@@ -326,4 +363,5 @@ struct fileSearchForntendApp: App {
             window.setFrame(newFrame, display: true, animate: true)
         }
     }
+
 }

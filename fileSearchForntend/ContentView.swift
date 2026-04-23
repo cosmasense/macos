@@ -7,9 +7,11 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.zoomToPopup) private var zoomToPopup
     @State private var showFolderPicker = false
     @State private var showFoldersPopover = false
     @State private var showProcessingPopover = false
@@ -26,44 +28,44 @@ struct ContentView: View {
             HomeView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Tap-outside dismiss layer
-            if showFoldersPopover || showProcessingPopover {
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        showFoldersPopover = false
-                        showProcessingPopover = false
-                    }
-            }
-
             // Floating action buttons + inline dropdown panels
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(alignment: .center, spacing: 8) {
-                    ActionPillButton(
-                        title: "Add Folder",
-                        systemImage: "plus"
-                    ) {
-                        showFoldersPopover = false
-                        showProcessingPopover = false
-                        showFolderPicker = true
-                    }
+                    Group {
+                        ActionPillButton(
+                            title: "Add Folder",
+                            systemImage: "plus"
+                        ) {
+                            showFoldersPopover = false
+                            showProcessingPopover = false
+                            showFolderPicker = true
+                        }
 
-                    ActionPillButton(
-                        title: "View Folders",
-                        systemImage: "folder.fill"
-                    ) {
-                        showProcessingPopover = false
-                        showFoldersPopover.toggle()
-                    }
+                        ActionPillButton(
+                            title: "View Folders",
+                            systemImage: "folder.fill"
+                        ) {
+                            showProcessingPopover = false
+                            showFoldersPopover.toggle()
+                        }
 
-                    ActionPillButton(
-                        title: "Processing",
-                        systemImage: "arrow.triangle.2.circlepath",
-                        badge: (model.queueStatus?.totalItems).flatMap { $0 > 0 ? $0 : nil }
-                    ) {
-                        showFoldersPopover = false
-                        showProcessingPopover.toggle()
+                        ActionPillButton(
+                            title: "Processing",
+                            systemImage: "arrow.triangle.2.circlepath",
+                            badge: (model.queueStatus?.totalItems).flatMap { $0 > 0 ? $0 : nil }
+                        ) {
+                            showFoldersPopover = false
+                            showProcessingPopover.toggle()
+                        }
                     }
+                    .opacity(isSearchActive ? 0 : 1)
+                    .offset(y: isSearchActive ? -60 : 0)
+                    .allowsHitTesting(!isSearchActive)
+
+                    WindowControlButton(systemImage: "arrow.down.right.and.arrow.up.left") {
+                        zoomToPopup()
+                    }
+                    .help("Collapse to Quick Search")
                 }
 
                 if showFoldersPopover {
@@ -86,11 +88,21 @@ struct ContentView: View {
                         .transition(.opacity.combined(with: .offset(y: -6)))
                 }
             }
-            .padding(.top, 10)
-            .padding(.trailing, 24)
-            .opacity(isSearchActive ? 0 : 1)
-            .offset(y: isSearchActive ? -60 : 0)
-            .allowsHitTesting(!isSearchActive)
+            .padding(.top, 12)
+            .padding(.trailing, 20)
+            .background(
+                // Passive click-outside dismissal. Uses an NSEvent monitor
+                // instead of a full-window tap layer, because a tap-layer
+                // hit-tests every mouse event and would steal drag-out
+                // gestures on the search results behind the popover.
+                ClickOutsideDismissMonitor(
+                    isActive: showFoldersPopover || showProcessingPopover,
+                    onOutsideClick: {
+                        showFoldersPopover = false
+                        showProcessingPopover = false
+                    }
+                )
+            )
             .animation(.spring(response: 0.45, dampingFraction: 0.82), value: isSearchActive)
             .animation(.easeOut(duration: 0.2), value: showFoldersPopover)
             .animation(.easeOut(duration: 0.2), value: showProcessingPopover)
@@ -102,7 +114,6 @@ struct ContentView: View {
                     .transition(.opacity)
                     .allowsHitTesting(false)
             }
-
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.3), value: model.modelAvailabilityWarning)
@@ -164,23 +175,98 @@ struct ContentView: View {
 struct DropTargetOverlay: View {
     var body: some View {
         ZStack {
-            Color.brandBlue.opacity(0.12)
+            // Frosted white wash — blurs whatever is behind and lightens
+            // the whole window so the call-to-action pops.
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(Color.white.opacity(0.45))
 
             VStack(spacing: 14) {
                 Image(systemName: "plus.rectangle.on.folder.fill")
-                    .font(.system(size: 44, weight: .semibold))
+                    .font(.system(size: 52, weight: .semibold))
                     .foregroundStyle(Color.brandBlue)
                 Text("Drop to add folder")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.brandBlue)
             }
-            .padding(28)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .strokeBorder(Color.brandBlue.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-            )
-            .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 6)
+        }
+    }
+}
+
+// MARK: - Click-Outside Dismiss Monitor
+
+/// Installs an NSEvent local monitor that dismisses the popover when the
+/// user clicks outside its bounds. The monitor observes events passively —
+/// it never consumes them — so drag-out gestures on views behind the
+/// popover (e.g. dragging a search result to Finder) keep working.
+private struct ClickOutsideDismissMonitor: NSViewRepresentable {
+    let isActive: Bool
+    let onOutsideClick: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.hostView = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.hostView = nsView
+        context.coordinator.onOutsideClick = onOutsideClick
+        // Only touch the monitor after the view is in a window — installing
+        // a local event monitor before the host has attached to a window
+        // means the closure captures a dangling weak reference on the very
+        // first event, and AppKit occasionally promotes that into a fatal
+        // "invalid reuse after initialization failure" during app launch.
+        if nsView.window != nil {
+            context.coordinator.syncMonitor(isActive: isActive)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.syncMonitor(isActive: false)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onOutsideClick: onOutsideClick) }
+
+    final class Coordinator {
+        weak var hostView: NSView?
+        var onOutsideClick: () -> Void
+        private var monitor: Any?
+
+        init(onOutsideClick: @escaping () -> Void) {
+            self.onOutsideClick = onOutsideClick
+        }
+
+        deinit {
+            // Defensive: clean up the monitor even if SwiftUI never calls
+            // dismantleNSView (e.g., the parent View disappears without a
+            // tidy teardown path).
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+
+        func syncMonitor(isActive: Bool) {
+            if isActive, monitor == nil {
+                let token = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                    guard
+                        let self,
+                        let host = self.hostView,
+                        let window = host.window,
+                        event.window === window
+                    else { return event }
+
+                    let locInHost = host.convert(event.locationInWindow, from: nil)
+                    if !host.bounds.contains(locInHost) {
+                        self.onOutsideClick()
+                    }
+                    return event
+                }
+                self.monitor = token
+            } else if !isActive, let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
         }
     }
 }
@@ -268,7 +354,7 @@ struct FoldersPopover: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 6) {
                         ForEach(model.watchedFolders) { folder in
                             CompactFolderRow(folder: folder)
@@ -288,52 +374,72 @@ struct CompactFolderRow: View {
     @Environment(AppModel.self) private var model
     let folder: WatchedFolder
     @State private var confirmDelete = false
+    @State private var isExpanded = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 20))
-                .foregroundStyle(.primary)
-                .frame(width: 28)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: isExpanded ? "folder.fill" : "folder")
+                    .font(.system(size: 20))
+                    .foregroundStyle(isExpanded ? Color.brandBlue : .primary)
+                    .frame(width: 28)
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(.easeInOut(duration: 0.2), value: isExpanded)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(folder.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(folder.path)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(folder.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(folder.path)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 6)
+
+                statusIcon
+
+                Button {
+                    model.reindex(folder: folder)
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .help("Re-index")
+                .disabled(folder.status == .indexing)
+
+                Button(role: .destructive) {
+                    confirmDelete = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .help("Remove")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded.toggle()
+                }
             }
 
-            Spacer(minLength: 6)
-
-            statusIcon
-
-            Button {
-                model.reindex(folder: folder)
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 12))
+            if isExpanded {
+                expandedDetails
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .buttonStyle(.plain)
-            .help("Re-index")
-            .disabled(folder.status == .indexing)
-
-            Button(role: .destructive) {
-                confirmDelete = true
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-            .buttonStyle(.plain)
-            .help("Remove")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isExpanded ? Color.primary.opacity(0.04) : .clear)
+        )
         .confirmationDialog(
             "Remove \(folder.name)?",
             isPresented: $confirmDelete,
@@ -342,6 +448,88 @@ struct CompactFolderRow: View {
             Button("Remove", role: .destructive) { model.removeFolder(folder) }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    @ViewBuilder
+    private var expandedDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            detailRow(label: "Status", value: folder.status.rawValue.capitalized)
+
+            if folder.totalFileCount > 0 {
+                let processed = folder.indexedFileCount + folder.skippedFileCount
+                detailRow(label: "Progress", value: "\(processed) / \(folder.totalFileCount) files (\(Int(folder.progress * 100))%)")
+            } else if folder.indexedFileCount > 0 {
+                detailRow(label: "Indexed", value: "\(folder.indexedFileCount) files")
+            }
+
+            if folder.skippedFileCount > 0 {
+                detailRow(label: "Skipped", value: "\(folder.skippedFileCount) files")
+            }
+
+            detailRow(label: "Last modified", value: formatDate(folder.lastModified))
+            detailRow(label: "Recursive", value: folder.recursive ? "Yes" : "No")
+
+            if let pattern = folder.filePattern, !pattern.isEmpty {
+                detailRow(label: "Pattern", value: pattern)
+            }
+
+            if let issue = folder.lastIssueMessage, !issue.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Last issue")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(issue)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .lineLimit(3)
+                }
+            }
+
+            Button {
+                openInFinder()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 10))
+                    Text("Show in Finder")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(Color.brandBlue)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+        .padding(.top, 4)
+    }
+
+    private func detailRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 11))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func openInFinder() {
+        let url = URL(fileURLWithPath: folder.path)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     @ViewBuilder

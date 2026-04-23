@@ -26,21 +26,47 @@ struct QueueContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top bar: tabs + pause button
-            HStack(spacing: 10) {
-                Picker("Queue Tab", selection: $selectedTab) {
-                    ForEach(QueueTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
+            // Top bar: text tabs on the left, pause button pinned right.
+            HStack(spacing: 22) {
+                ForEach(QueueTab.allCases) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Text(tab.rawValue)
+                            .font(.system(
+                                size: 15,
+                                weight: selectedTab == tab ? .bold : .regular
+                            ))
+                            .foregroundStyle(selectedTab == tab ? .primary : .secondary)
+                            // Fixed width per tab so switching weight doesn't
+                            // reflow the layout. Sized just past "Current" at
+                            // 15pt bold so the underline hugs the label.
+                            .frame(width: 64)
+                            .padding(.bottom, 6)
+                            .overlay(alignment: .bottom) {
+                                Rectangle()
+                                    .fill(selectedTab == tab ? Color.primary : .clear)
+                                    .frame(height: 2)
+                            }
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
 
-                QueuePauseButton()
+                Spacer()
+
+                // Group chip + pause button so they share a tight spacing
+                // (8pt) instead of the wide 22pt gap between tab labels.
+                HStack(spacing: 8) {
+                    if let status = model.queueStatus, status.schedulerPaused {
+                        SchedulerWarningChip(failingRules: status.failingRules)
+                    }
+                    QueuePauseButton()
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 14)
-            .padding(.bottom, 10)
+            .padding(.bottom, 11)
 
             // Status summary (only on current tab)
             if selectedTab == .current, let status = model.queueStatus {
@@ -48,8 +74,6 @@ struct QueueContentView: View {
                     .padding(.horizontal, 18)
                     .padding(.bottom, 10)
             }
-
-            Divider()
 
             // Tab content
             switch selectedTab {
@@ -120,7 +144,7 @@ struct QueueContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 6) {
                     ForEach(sortedQueueItems) { item in
                         QueueItemRow(item: item) {
@@ -128,8 +152,9 @@ struct QueueContentView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
+                .padding(.horizontal, 18)
+                .padding(.top, 4)
+                .padding(.bottom, 14)
             }
         }
     }
@@ -176,14 +201,15 @@ struct QueueContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 6) {
                     ForEach(model.recentFiles) { file in
                         RecentFileRow(file: file)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
+                .padding(.horizontal, 18)
+                .padding(.top, 4)
+                .padding(.bottom, 14)
             }
         }
     }
@@ -220,11 +246,10 @@ struct QueueContentView: View {
                         Task { await model.reindexFile(filePath: path) }
                     }
                 }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 8)
 
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 6) {
                         ForEach(model.failedFiles) { file in
                             FailedFileRow(file: file) {
@@ -232,9 +257,8 @@ struct QueueContentView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 18)
                     .padding(.bottom, 14)
-                    .padding(.top, 4)
                 }
             }
         }
@@ -272,7 +296,7 @@ struct QueueStatusSummaryView: View {
     let status: QueueStatusResponse
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        if status.totalItems > 0 {
             HStack(spacing: 16) {
                 // Cooldown is a backend-only debounce after a file changes.
                 // We intentionally don't surface it in the UI — it confused
@@ -283,60 +307,12 @@ struct QueueStatusSummaryView: View {
                 QueueCountPill(label: "Processing", count: status.processing, color: .orange)
                 Spacer()
             }
-
-            if status.paused {
-                HStack(spacing: 8) {
-                    Image(systemName: pauseIcon)
-                        .font(.system(size: 14))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(pauseTitle)
-                            .font(.system(size: 13, weight: .semibold))
-                        if !pauseReason.isEmpty {
-                            Text(pauseReason)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                }
-                .foregroundStyle(pauseBannerColor)
-                .padding(10)
-                .background(pauseBannerColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            }
         }
     }
 
-    private var pauseIcon: String {
-        if status.schedulerPaused {
-            return "calendar.badge.clock"
-        }
-        return "pause.circle.fill"
-    }
-
-    private var pauseBannerColor: Color {
-        status.schedulerPaused ? .orange : .yellow
-    }
-
-    private var pauseTitle: String {
-        if status.manuallyPaused && status.schedulerPaused {
-            return "Paused by user and scheduler"
-        } else if status.schedulerPaused {
-            return "Paused by scheduler"
-        } else {
-            return "Paused by user"
-        }
-    }
-
-    private var pauseReason: String {
-        if status.schedulerPaused {
-            let labels = status.failingRules.compactMap { SchedulerRuleType(rawValue: $0)?.label }
-            if !labels.isEmpty {
-                return "Failing: " + labels.joined(separator: ", ")
-            }
-            return "Scheduler conditions not met"
-        }
-        return ""
-    }
+    // Pause state is now surfaced entirely by the pause button (color +
+    // icon) and the scheduler warning chip next to it — the large banner
+    // that used to live here was redundant and crowded the popover.
 }
 
 struct QueueCountPill: View {
@@ -353,9 +329,6 @@ struct QueueCountPill: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.2), in: Capsule())
     }
 }
 
@@ -417,9 +390,7 @@ struct QueueItemRow: View {
             .buttonStyle(.plain)
             .help("Remove from queue")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 8)
     }
 
     private var statusColor: Color {
@@ -468,9 +439,7 @@ struct RecentFileRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 8)
     }
 
     private func relativeTime(from timestamp: Int) -> String {
@@ -526,9 +495,7 @@ struct FailedFileRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 8)
         .contextMenu {
             Button("Copy Error Report") { copyErrorReport() }
             Button("Copy File Path") {
@@ -686,24 +653,174 @@ struct QueuePauseButton: View {
     @Environment(AppModel.self) private var model
     @State private var isHovering = false
 
-    private var isPaused: Bool { model.queueStatus?.manuallyPaused == true }
+    private var manuallyPaused: Bool { model.queueStatus?.manuallyPaused == true }
+    private var schedulerPaused: Bool { model.queueStatus?.schedulerPaused == true }
+    private var isPaused: Bool { manuallyPaused || schedulerPaused }
+
+    /// Scheduler-paused wins over manual pause for color, because the
+    /// scheduler is the more informative state (it tells the user *why*
+    /// indexing isn't running right now, which manual pause doesn't).
+    private var tint: Color? {
+        if schedulerPaused { return .orange }
+        if manuallyPaused { return .brandBlue }
+        return nil
+    }
+
+    private var schedulerReason: String {
+        let labels = (model.queueStatus?.failingRules ?? [])
+            .compactMap { SchedulerRuleType(rawValue: $0)?.label.lowercased() }
+        return labels.isEmpty ? "conditions not met" : labels.joined(separator: ", ")
+    }
+
+    private var helpText: String {
+        switch (manuallyPaused, schedulerPaused) {
+        case (true, true):
+            return "Paused by you and by the scheduler (waiting on \(schedulerReason)). Click to start. You can modify the schedule in Settings › Indexing."
+        case (true, false):
+            return "Paused by you. Click to start."
+        case (false, true):
+            return "Paused by scheduler — waiting on \(schedulerReason). Click to start. You can modify the schedule in Settings › Indexing."
+        case (false, false):
+            return "Pause queue"
+        }
+    }
 
     var body: some View {
         Button {
-            Task { await model.toggleQueuePause() }
+            Task { await handleTap() }
         } label: {
-            Image(systemName: isPaused ? "play.fill" : "pause.fill")
+            Image(systemName: iconName)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isPaused ? Color.brandBlue : .primary)
+                .foregroundStyle(isPaused ? .white : .primary)
                 .frame(width: 26, height: 26)
-                .background(.quaternary.opacity(isHovering ? 0.45 : 0.25), in: Circle())
+                .background {
+                    Circle().fill(backgroundFill)
+                }
                 .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help(isPaused ? "Resume queue" : "Pause queue")
+        .help(helpText)
         .animation(.easeOut(duration: 0.15), value: isHovering)
+        .animation(.easeOut(duration: 0.2), value: manuallyPaused)
+        .animation(.easeOut(duration: 0.2), value: schedulerPaused)
+    }
+
+    /// When the scheduler is the blocker, we keep the pause glyph showing
+    /// to communicate *what is happening right now* (queue is paused).
+    /// When only the user has paused, we flip to the play glyph because
+    /// there's nothing else holding it — clicking will actually start.
+    private var iconName: String {
+        if schedulerPaused { return "pause.fill" }
+        if manuallyPaused { return "play.fill" }
+        return "pause.fill"
+    }
+
+    /// Any paused state → the click tries to start indexing. If the user
+    /// manually paused, resume that. If only the scheduler is holding,
+    /// force-resume to override its pause (the user wanted manual control
+    /// even when the scheduler says no).
+    private func handleTap() async {
+        if isPaused {
+            if manuallyPaused {
+                await model.toggleQueuePause()
+            } else {
+                await model.forceResumeQueue()
+            }
+        } else {
+            await model.toggleQueuePause()
+        }
+    }
+
+    private var backgroundFill: AnyShapeStyle {
+        if let tint {
+            return AnyShapeStyle(tint.opacity(isHovering ? 1.0 : 0.9))
+        }
+        return AnyShapeStyle(.quaternary.opacity(isHovering ? 0.45 : 0.25))
+    }
+}
+
+// MARK: - Scheduler Warning Chip
+
+/// Compact orange "…" button surfaced next to the pause button when the
+/// scheduler is blocking indexing. Click to reveal the full list of
+/// failing rules in a popover; "Battery Level +1"-style truncation is
+/// gone because the abbreviation was unreadable in practice.
+struct SchedulerWarningChip: View {
+    let failingRules: [String]
+    @State private var showDetails: Bool = false
+
+    var body: some View {
+        Button {
+            showDetails.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.orange.opacity(0.15), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Scheduler is holding indexing — click to see why")
+        .popover(isPresented: $showDetails, arrowEdge: .bottom) {
+            SchedulerWarningDetails(failingRules: failingRules)
+        }
+    }
+}
+
+/// Popover body for `SchedulerWarningChip`: lists every failing rule by
+/// its human label and reminds the user where to edit the schedule.
+private struct SchedulerWarningDetails: View {
+    let failingRules: [String]
+
+    private var ruleLabels: [String] {
+        failingRules.compactMap { SchedulerRuleType(rawValue: $0)?.label }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Scheduler is holding indexing")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+
+            if ruleLabels.isEmpty {
+                Text("Conditions for the current schedule aren't met.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Waiting on:")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    ForEach(ruleLabels, id: \.self) { label in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 4))
+                                .foregroundStyle(.orange)
+                            Text(label)
+                                .font(.system(size: 12))
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Text("Edit the schedule in Settings › Indexing.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(minWidth: 240, alignment: .leading)
     }
 }
 

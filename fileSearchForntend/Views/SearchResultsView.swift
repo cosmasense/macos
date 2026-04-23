@@ -125,7 +125,7 @@ struct SearchResultsView: View {
     var body: some View {
         @Bindable var model = model
         return GeometryReader { geometry in
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     if model.isSearching {
                         LoadingStateView()
@@ -141,17 +141,12 @@ struct SearchResultsView: View {
                             Text("\(filteredResults.count) result\(filteredResults.count == 1 ? "" : "s")")
                                 .font(.system(size: 18, weight: .semibold))
                             Spacer()
-                            Picker("View", selection: Binding(
-                                get: { viewMode },
-                                set: { viewModeRaw = $0.rawValue }
-                            )) {
-                                ForEach(SearchResultViewMode.allCases, id: \.self) { mode in
-                                    Image(systemName: mode.icon)
-                                        .tag(mode)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 96)
+                            ViewModeToggle(
+                                selection: Binding(
+                                    get: { viewMode },
+                                    set: { viewModeRaw = $0.rawValue }
+                                )
+                            )
                             .help("Switch between list and grid view")
                         }
                         .padding(.horizontal, 4)
@@ -227,6 +222,67 @@ struct SearchResultsView: View {
     }
 }
 
+
+// MARK: - View Mode Toggle
+
+/// Custom list/grid toggle with brand-blue highlight. Replaces the default
+/// segmented Picker so the active tint uses `Color.brandBlue` (not the system
+/// accent) and the chrome reads less like an iOS control.
+private struct ViewModeToggle: View {
+    @Binding var selection: SearchResultViewMode
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(SearchResultViewMode.allCases, id: \.self) { mode in
+                ViewModeButton(
+                    mode: mode,
+                    isSelected: selection == mode,
+                    action: { selection = mode }
+                )
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
+        )
+    }
+}
+
+private struct ViewModeButton: View {
+    let mode: SearchResultViewMode
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: mode.icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.7))
+                .frame(width: 34, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(fillColor)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+    }
+
+    private var fillColor: Color {
+        if isSelected { return Color.brandBlue }
+        if isHovering { return Color.primary.opacity(0.08) }
+        return .clear
+    }
+}
 
 // MARK: - Loading State
 
@@ -313,7 +369,7 @@ struct ResultsListView: View {
     let onPreview: (SearchResultItem) -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                 SearchResultRow(
                     result: result,
@@ -374,36 +430,45 @@ struct SearchResultGridCell: View {
     @State private var isHovered = false
     @Environment(AppModel.self) private var model
 
-    var body: some View {
-        VStack(alignment: .center, spacing: 8) {
-            FileThumbnailView(
-                url: URL(fileURLWithPath: result.file.filePath),
-                size: CGSize(width: 110, height: 130),
-                priority: index
-            )
+    private var displayTitle: String {
+        (result.file.title?.isEmpty == false ? result.file.title : nil) ?? result.file.filename
+    }
 
-            Text(result.file.filename)
-                .font(.system(size: 12, weight: .medium))
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomTrailing) {
+                FileThumbnailView(
+                    url: URL(fileURLWithPath: result.file.filePath),
+                    size: CGSize(width: 92, height: 92),
+                    priority: index
+                )
+                .frame(width: 100, height: 96, alignment: .center)
+
+                FileTypeBadge(extension: result.file.fileExtension)
+                    .offset(x: 4, y: 4)
+            }
+            .frame(width: 100, height: 96, alignment: .center)
+
+            Text(displayTitle)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
                 .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.middle)
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(10)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.10) : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? Color.brandBlue.opacity(0.22) : (isHovered ? Color.brandBlue.opacity(0.22) : Color.clear))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.08), lineWidth: isSelected ? 1 : 0.8)
-        )
-        .contentShape(Rectangle())
+        .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
+            isHovered = hovering
         }
         .onTapGesture {
             onSelect()
@@ -435,68 +500,92 @@ struct SearchResultRow: View {
     let onOpen: () -> Void
     let onPreview: () -> Void
     @State private var isHovered = false
+    @State private var metadata: FileMetadata = .empty
     @Environment(AppModel.self) private var model
+
+    private var parentFolderName: String {
+        let parent = (result.file.filePath as NSString).deletingLastPathComponent
+        return (parent as NSString).lastPathComponent
+    }
 
     var body: some View {
         HStack(spacing: 14) {
-            // Larger file preview — natural aspect ratio
-            FileThumbnailView(
-                url: URL(fileURLWithPath: result.file.filePath),
-                size: CGSize(width: 64, height: 80),
-                priority: index
-            )
+            ZStack(alignment: .bottomTrailing) {
+                FileThumbnailView(
+                    url: URL(fileURLWithPath: result.file.filePath),
+                    size: CGSize(width: 68, height: 68),
+                    priority: index
+                )
+                FileTypeBadge(extension: result.file.fileExtension)
+                    .offset(x: 4, y: 4)
+            }
+            .frame(width: 72, height: 72)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Title (filename)
                 Text(result.file.filename)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                // Summary below title
-                if let summary = result.file.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
-                Spacer(minLength: 2)
-
-                // File path — dark blue hyperlink with strong contrast on transparent bg
-                Text(result.file.filePath)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color(red: 0.10, green: 0.30, blue: 0.75))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .onTapGesture {
-                        let url = URL(fileURLWithPath: result.file.filePath)
-                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                // Spotlight-style metadata: type · size · date · 📁 parent
+                HStack(spacing: 6) {
+                    if !metadata.typeDescription.isEmpty {
+                        Text(metadata.typeDescription)
                     }
+                    if !metadata.sizeString.isEmpty {
+                        Text("·")
+                        Text(metadata.sizeString)
+                    }
+                    if !metadata.dateString.isEmpty {
+                        Text("·")
+                        Text(metadata.dateString)
+                    }
+                    if !parentFolderName.isEmpty {
+                        Text("·")
+                        Image(systemName: "folder")
+                            .font(.system(size: 10))
+                        Text(parentFolderName)
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             }
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(minHeight: 90)
+        .frame(minHeight: 88)
+        .task(id: result.file.filePath) {
+            metadata = FileMetadata.load(path: result.file.filePath)
+        }
         .background(
             RoundedRectangle(cornerRadius: 14)
-                .fill(isSelected ? Color.accentColor.opacity(0.08) : (isHovered ? Color.primary.opacity(0.03) : Color.clear))
+                .fill(isSelected ? Color.brandBlue.opacity(0.22) : (isHovered ? Color.brandBlue.opacity(0.22) : Color.clear))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.white.opacity(0.08), lineWidth: isSelected ? 1 : 0.8)
-        )
+        .animation(.easeOut(duration: 0.15), value: isHovered)
         .contentShape(Rectangle())
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
+            isHovered = hovering
         }
         .onTapGesture {
             onSelect()
             onPreview()
+        }
+        // Drag originates from anywhere on the row, but the drag image
+        // shows only the file thumbnail — the row's text/paths are
+        // context, not something the user wants to see flying with the cursor.
+        .onDrag {
+            createDragProvider()
+        } preview: {
+            FileThumbnailView(
+                url: URL(fileURLWithPath: result.file.filePath),
+                size: CGSize(width: 64, height: 80),
+                priority: index
+            )
         }
         .contextMenu {
             Button("Open") {
@@ -509,32 +598,13 @@ struct SearchResultRow: View {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
             }
         }
-        .onDrag {
-            createDragProvider()
-        }
     }
 
     private func createDragProvider() -> NSItemProvider {
+        // Unsandboxed app + Full Disk Access means we can hand the original
+        // file URL directly to the drop target — no temp copy, and no
+        // bookmark prompt for files that live outside a watched folder.
         let url = URL(fileURLWithPath: result.file.filePath)
-
-        var tempFileURL: URL?
-        do {
-            try model.withSecurityScopedAccess(for: url.path) {
-                let tempDir = FileManager.default.temporaryDirectory
-                let tempFile = tempDir.appendingPathComponent(result.file.filename)
-                try? FileManager.default.removeItem(at: tempFile)
-                try FileManager.default.copyItem(at: url, to: tempFile)
-                tempFileURL = tempFile
-            }
-        } catch {
-            print("Failed to copy file for drag: \(error)")
-        }
-
-        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
-            provider.suggestedName = result.file.filename
-            return provider
-        }
-
         let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
         provider.suggestedName = result.file.filename
         return provider
@@ -650,13 +720,8 @@ private struct FileThumbnailView: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
                     .frame(width: size.width, height: size.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(.quaternary.opacity(0.3), lineWidth: 0.5)
-                    )
                     .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 1)
                     // Subtle crossfade when upgrading from icon → thumbnail
                     .animation(.easeInOut(duration: 0.18), value: isFullThumbnail)
@@ -704,6 +769,47 @@ private struct FileThumbnailView: View {
             image = ns
             isFullThumbnail = true
         }
+    }
+}
+
+// MARK: - File Metadata (Spotlight-style)
+
+/// Human-readable file attributes shown under the filename in list rows.
+/// Loaded lazily via `.task` so we don't stat every result up-front.
+struct FileMetadata: Equatable {
+    var typeDescription: String
+    var sizeString: String
+    var dateString: String
+
+    static let empty = FileMetadata(typeDescription: "", sizeString: "", dateString: "")
+
+    static func load(path: String) -> FileMetadata {
+        let url = URL(fileURLWithPath: path)
+        let keys: Set<URLResourceKey> = [
+            .localizedTypeDescriptionKey,
+            .fileSizeKey,
+            .contentModificationDateKey
+        ]
+        guard let values = try? url.resourceValues(forKeys: keys) else {
+            return .empty
+        }
+
+        let type = values.localizedTypeDescription ?? ""
+
+        var size = ""
+        if let bytes = values.fileSize {
+            size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        }
+
+        var date = ""
+        if let modified = values.contentModificationDate {
+            let f = DateFormatter()
+            f.dateStyle = .short
+            f.timeStyle = .short
+            date = f.string(from: modified)
+        }
+
+        return FileMetadata(typeDescription: type, sizeString: size, dateString: date)
     }
 }
 

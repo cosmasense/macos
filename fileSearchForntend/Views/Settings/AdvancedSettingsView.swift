@@ -15,13 +15,20 @@ struct AdvancedSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
-            SettingsSectionHeader(title: "Processing Models", icon: "cpu")
-            BackendSettingsSection()
+            Text("Advanced")
+                .font(.system(size: 22, weight: .semibold))
+
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsSectionHeader(title: "Processing Models", icon: "cpu")
+                BackendSettingsSection()
+            }
 
             Divider()
 
-            SettingsSectionHeader(title: "Queue & Scheduler", icon: "clock.arrow.2.circlepath")
-            IndexingSettingsSection()
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsSectionHeader(title: "Queue & Scheduler", icon: "clock.arrow.2.circlepath")
+                IndexingSettingsSection()
+            }
         }
     }
 }

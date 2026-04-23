@@ -171,33 +171,10 @@ struct CompactSearchResultCard: View {
     }
     
     private func createDragProvider() -> NSItemProvider {
+        // Hand the original URL directly — no temp copy. The app is
+        // unsandboxed and uses Full Disk Access, so the drop target
+        // (Finder, Mail, etc.) can read the file as needed.
         let url = URL(fileURLWithPath: result.file.filePath)
-        
-        // Copy file to temp directory - this makes it work like Finder
-        var tempFileURL: URL?
-        do {
-            // Copy file to temp directory
-            let tempDir = FileManager.default.temporaryDirectory
-            let tempFile = tempDir.appendingPathComponent(result.file.filename)
-            
-            // Remove if exists
-            try? FileManager.default.removeItem(at: tempFile)
-            
-            // Copy the file
-            try FileManager.default.copyItem(at: url, to: tempFile)
-            tempFileURL = tempFile
-        } catch {
-            print("Failed to copy file for drag: \(error)")
-        }
-        
-        // If we successfully created a temp copy, use that
-        // This makes it behave exactly like dragging from Finder!
-        if let tempFile = tempFileURL, let provider = NSItemProvider(contentsOf: tempFile) {
-            provider.suggestedName = result.file.filename
-            return provider
-        }
-        
-        // Fallback: just provide the original URL
         let provider = NSItemProvider(contentsOf: url) ?? NSItemProvider()
         provider.suggestedName = result.file.filename
         return provider

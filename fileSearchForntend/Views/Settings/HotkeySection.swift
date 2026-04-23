@@ -15,87 +15,91 @@ struct HotkeySection: View {
     @Binding var hotkey: String
     @AppStorage("overlayTriggerMode") private var triggerMode = "hotkey"
     @State private var isRecording = false
+    @State private var errorText: String?
     @Environment(\.controlHotkeyMonitoring) private var controlHotkeys
 
-    private var displayText: String {
-        if isRecording { return "Press any key..." }
-        return hotkeyDisplayString(hotkey) ?? "Not set"
+    private static let reservedShortcuts: Set<String> = [
+        "command+q", "command+w", "command+c", "command+v", "command+x",
+        "command+a", "command+z", "command+s", "command+n", "command+t",
+        "command+f", "command+p", "command+h", "command+m", "command+o",
+        "command+space", "command+tab", "command+shift+3", "command+shift+4",
+        "command+shift+5", "command+shift+z", "command+option+esc"
+    ]
+
+    private func validate(_ raw: String) -> String? {
+        let parts = raw.split(separator: "+").map(String.init)
+        guard parts.count >= 2 else { return "Include at least one modifier (⌘, ⌥, ⌃, or ⇧)." }
+        if Self.reservedShortcuts.contains(raw) { return "That shortcut is reserved by macOS. Try another." }
+        return nil
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Search Overlay Shortcut")
-                .font(.system(size: 14, weight: .medium))
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Set a keyboard shortcut to open the search overlay from anywhere.")
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            // Trigger mode picker
-            HStack(spacing: 12) {
-                Text("Trigger Mode")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-
-                Picker("Trigger Mode", selection: $triggerMode) {
-                    Text("Both Command Keys").tag("dualCommand")
-                    Text("Custom Shortcut").tag("hotkey")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 300)
-            }
-
-            if triggerMode == "dualCommand" {
-                HStack(spacing: 8) {
-                    Image(systemName: "command")
-                        .font(.system(size: 16))
-                    Text("Press both \u{2318} keys simultaneously to toggle Quick Search")
+            HStack(spacing: 10) {
+                if isRecording {
+                    Text("Press keys then release…")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.brandBlue)
+                } else {
+                    ShortcutKeyCapsView(parts: hotkey.isEmpty
+                                        ? ["command", "command"]
+                                        : hotkey.split(separator: "+").map(String.init))
+                    Text(hotkey.isEmpty ? "Tap both Command keys" : "")
                         .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-            } else {
-                HStack(spacing: 12) {
-                    Text(displayText)
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 200, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(.white.opacity(0.12))
-                        )
-
-                    Button(isRecording ? "Cancel" : "Record") {
-                        isRecording.toggle()
-                        controlHotkeys(!isRecording)
+                Spacer()
+                if isRecording {
+                    Button("Cancel") {
+                        isRecording = false
+                        controlHotkeys(true)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12))
+                } else {
+                    if !hotkey.isEmpty {
+                        Button("Reset") { hotkey = "" }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Change") {
+                        errorText = nil
+                        hotkey = ""
+                        isRecording = true
+                        controlHotkeys(false)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-
-                    Button("Clear") {
-                        hotkey = ""
-                        controlHotkeys(true)
-                        isRecording = false
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .disabled(hotkey.isEmpty)
                 }
-                .background(
-                    HotkeyCaptureView(isRecording: $isRecording) { key in
-                        hotkey = key.lowercased()
-                        isRecording = false
-                        controlHotkeys(true)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .background(
+                InlineHotkeyCapture(isRecording: $isRecording) { key in
+                    if let err = validate(key) {
+                        errorText = err
+                    } else {
+                        errorText = nil
+                        hotkey = key
                     }
-                    .allowsHitTesting(false)
-                )
+                    isRecording = false
+                    controlHotkeys(true)
+                }
+                .allowsHitTesting(false)
+            )
 
-                Text("Click record, then press the key you'd like to use. Leave blank to disable the shortcut.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+            if let errorText {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(errorText).font(.system(size: 12)).foregroundStyle(.secondary)
+                }
             }
 
             // Permissions Section
@@ -115,6 +119,9 @@ struct HotkeySection: View {
                     action: { openFullDiskAccessPreferences() }
                 )
             }
+        }
+        .onChange(of: hotkey) { _, newValue in
+            triggerMode = newValue.isEmpty ? "dualCommand" : "hotkey"
         }
         .onAppear {
             checkPermissions()
@@ -198,55 +205,107 @@ private struct PermissionRow: View {
     }
 }
 
-// MARK: - Hotkey Capture View
+// MARK: - Shortcut Key Caps (matches setup wizard)
 
-private struct HotkeyCaptureView: NSViewRepresentable {
+private struct ShortcutKeyCapsView: View {
+    let parts: [String]
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { idx, part in
+                if idx > 0 { Text("+").foregroundStyle(.secondary) }
+                KeyCap(text: symbol(for: part))
+            }
+        }
+    }
+    private func symbol(for s: String) -> String {
+        switch s {
+        case "command": return "\u{2318}"
+        case "option": return "\u{2325}"
+        case "control": return "\u{2303}"
+        case "shift": return "\u{21E7}"
+        case "space": return "Space"
+        default: return s.uppercased()
+        }
+    }
+}
+
+private struct KeyCap: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: 44, minHeight: 22)
+            .padding(.horizontal, 10)
+            .background(.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+    }
+}
+
+// MARK: - Inline Hotkey Capture (captures on modifier release)
+
+private struct InlineHotkeyCapture: NSViewRepresentable {
     @Binding var isRecording: Bool
     let onCapture: (String) -> Void
 
     func makeNSView(context: Context) -> CaptureView {
-        let view = CaptureView()
-        view.onCapture = onCapture
-        return view
+        let v = CaptureView()
+        v.onCapture = onCapture
+        return v
     }
 
     func updateNSView(_ nsView: CaptureView, context: Context) {
-        nsView.isRecording = isRecording
         nsView.onCapture = onCapture
+        nsView.isRecording = isRecording
     }
 
     final class CaptureView: NSView {
         var onCapture: ((String) -> Void)?
+        private var pending: String?
         var isRecording = false {
             didSet {
-                if isRecording {
-                    window?.makeFirstResponder(self)
-                }
+                if isRecording { window?.makeFirstResponder(self); pending = nil }
+            }
+        }
+        override var acceptsFirstResponder: Bool { true }
+
+        private func modParts(_ flags: NSEvent.ModifierFlags) -> [String] {
+            var m: [String] = []
+            if flags.contains(.command) { m.append("command") }
+            if flags.contains(.option) { m.append("option") }
+            if flags.contains(.control) { m.append("control") }
+            if flags.contains(.shift) { m.append("shift") }
+            return m
+        }
+
+        override func keyDown(with event: NSEvent) {
+            guard isRecording else { super.keyDown(with: event); return }
+            guard let chars = event.charactersIgnoringModifiers, let first = chars.first else { return }
+            let keyName: String
+            if first == " " { keyName = "space" }
+            else if first.isLetter || first.isNumber { keyName = String(first).lowercased() }
+            else { return }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            pending = (modParts(flags) + [keyName]).joined(separator: "+")
+        }
+
+        override func flagsChanged(with event: NSEvent) {
+            guard isRecording else { return }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.isEmpty, let p = pending {
+                pending = nil
+                onCapture?(p)
             }
         }
 
-        override var acceptsFirstResponder: Bool { true }
-
-        override func keyDown(with event: NSEvent) {
-            guard isRecording else {
-                super.keyDown(with: event)
-                return
-            }
-            guard let chars = event.charactersIgnoringModifiers,
-                  let first = chars.first else {
-                return
-            }
-            let normalizedKey: String
-            if first == " " {
-                normalizedKey = "space"
-            } else if first.isLetter || first.isNumber {
-                normalizedKey = String(first).lowercased()
-            } else {
-                return
-            }
+        override func keyUp(with event: NSEvent) {
+            guard isRecording else { return }
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let components = normalizedModifiers(flags) + [normalizedKey]
-            onCapture?(components.joined(separator: "+"))
+            if flags.isEmpty, let p = pending {
+                pending = nil
+                onCapture?(p)
+            }
         }
     }
 }
@@ -267,41 +326,5 @@ func checkFullDiskAccessPermission() -> Bool {
 private func openFullDiskAccessPreferences() {
     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
         NSWorkspace.shared.open(url)
-    }
-}
-
-// MARK: - Hotkey String Helpers
-
-private func normalizedModifiers(_ flags: NSEvent.ModifierFlags) -> [String] {
-    var parts: [String] = []
-    if flags.contains(.command) { parts.append("command") }
-    if flags.contains(.option) { parts.append("option") }
-    if flags.contains(.control) { parts.append("control") }
-    if flags.contains(.shift) { parts.append("shift") }
-    return parts
-}
-
-private func hotkeyDisplayString(_ raw: String) -> String? {
-    guard !raw.isEmpty else { return nil }
-    let parts = raw.split(separator: "+").map { String($0) }
-    guard let key = parts.last else { return nil }
-    let modifiers = parts.dropLast().map { modifierSymbol($0) }
-    let keySymbol = key == "space" ? "Space" : key.uppercased()
-    let symbols = modifiers + [keySymbol]
-    return symbols.joined(separator: " ")
-}
-
-private func modifierSymbol(_ raw: String) -> String {
-    switch raw {
-    case "command":
-        return "\u{2318}"
-    case "option":
-        return "\u{2325}"
-    case "control":
-        return "\u{2303}"
-    case "shift":
-        return "\u{21E7}"
-    default:
-        return raw.uppercased()
     }
 }
