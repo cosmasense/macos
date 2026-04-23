@@ -119,6 +119,79 @@ extension AppModel {
         } catch {
             jobsError = "Unable to load watched folders: \(error.localizedDescription)"
         }
+
+        // Folder-on-disk reconciliation: a watched folder the user deleted
+        // in Finder leaves thousands of stale queue items behind. Purge
+        // them now (and the watch job itself).
+        await cleanupDeletedFolders()
+    }
+
+    /// Detects watched folders whose underlying directory no longer exists
+    /// on disk and purges them: removes all queue items pointing inside the
+    /// folder, then deletes the watch job. Conservative about unmounted
+    /// drives — only acts when the folder's PARENT still exists, which
+    /// rules out a whole disk being unplugged.
+    func cleanupDeletedFolders() async {
+        let fm = FileManager.default
+        let stale: [WatchedFolder] = watchedFolders.filter { folder in
+            let path = (folder.path as NSString).standardizingPath
+            var isDir: ObjCBool = false
+            let folderExists = fm.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+            if folderExists { return false }
+            // Only treat as deleted if the parent is reachable — protects
+            // against an unmounted external drive nuking everything.
+            let parent = (path as NSString).deletingLastPathComponent
+            var parentIsDir: ObjCBool = false
+            let parentExists = fm.fileExists(atPath: parent, isDirectory: &parentIsDir) && parentIsDir.boolValue
+            return parentExists
+        }
+        guard !stale.isEmpty else { return }
+
+        for folder in stale {
+            await purgeQueueItems(insideFolderPath: folder.path)
+            if let jobId = folder.backendID {
+                _ = try? await apiClient.deleteWatchJob(jobId: jobId)
+            }
+            watchedFolders.removeAll { $0.id == folder.id }
+        }
+
+        // Refresh the queue UI so the count drops to reflect the purge.
+        await refreshQueueStatus()
+        await refreshQueueItems()
+    }
+
+    /// Pages through the backend queue and deletes every item whose file
+    /// path lives inside `folderPath`. Pagination lets us handle queues
+    /// with thousands of stale items without a single huge response.
+    private func purgeQueueItems(insideFolderPath folderPath: String) async {
+        let normalizedFolder = (folderPath as NSString).standardizingPath
+        let pageSize = 500
+        var offset = 0
+
+        while true {
+            let response: QueueItemsResponse
+            do {
+                response = try await apiClient.fetchQueueItems(offset: offset, limit: pageSize)
+            } catch {
+                return
+            }
+            if response.items.isEmpty { return }
+
+            let toDelete = response.items.filter { item in
+                (item.filePath as NSString).standardizingPath.hasPrefix(normalizedFolder)
+            }
+
+            for item in toDelete {
+                _ = try? await apiClient.removeQueueItem(itemId: item.id)
+            }
+
+            // If the page returned fewer than requested, we've reached the end.
+            if response.items.count < pageSize { return }
+            // Advance by the unfiltered page size — deletions happened on the
+            // backend, but we paged at the original offset so we still need to
+            // step forward to avoid re-scanning the same items.
+            offset += pageSize - toDelete.count
+        }
     }
 
     /// Fetches aggregate file statistics from the backend

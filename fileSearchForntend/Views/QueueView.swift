@@ -743,23 +743,36 @@ struct QueuePauseButton: View {
 
 // MARK: - Scheduler Warning Chip
 
-/// Compact orange "…" button surfaced next to the pause button when the
-/// scheduler is blocking indexing. Click to reveal the full list of
-/// failing rules in a popover; "Battery Level +1"-style truncation is
-/// gone because the abbreviation was unreadable in practice.
+/// Compact orange chip surfaced next to the pause button when the
+/// scheduler is blocking indexing. Inline label names the single failing
+/// rule (e.g., "Battery Level"); when multiple rules fail it collapses to
+/// "N scheduling" so the chip stays compact. Click to see the full list.
 struct SchedulerWarningChip: View {
     let failingRules: [String]
     @State private var showDetails: Bool = false
+
+    private var ruleLabels: [String] {
+        failingRules.compactMap { SchedulerRuleType(rawValue: $0)?.label }
+    }
+
+    private var chipLabel: String {
+        let labels = ruleLabels
+        if labels.count >= 2 { return "\(labels.count) scheduling" }
+        if let only = labels.first { return only }
+        return "Scheduler paused"
+    }
 
     var body: some View {
         Button {
             showDetails.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10, weight: .semibold))
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 11, weight: .bold))
+                Text(chipLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .foregroundStyle(.orange)
             .padding(.horizontal, 8)

@@ -181,13 +181,16 @@ struct DropTargetOverlay: View {
                 .fill(.ultraThinMaterial)
                 .overlay(Color.white.opacity(0.45))
 
+            // Match the empty-state "Drag and drop to add folders" copy in
+             // RecentSearchesView: same 16pt medium secondary-gray type, and
+             // the line (non-filled) SF Symbol tinted to match.
             VStack(spacing: 14) {
-                Image(systemName: "plus.rectangle.on.folder.fill")
-                    .font(.system(size: 52, weight: .semibold))
-                    .foregroundStyle(Color.brandBlue)
+                Image(systemName: "plus.rectangle.on.folder")
+                    .font(.system(size: 52, weight: .light))
+                    .foregroundStyle(.secondary)
                 Text("Drop to add folder")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.brandBlue)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
         }
     }
