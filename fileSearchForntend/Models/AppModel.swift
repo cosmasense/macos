@@ -289,16 +289,23 @@ class AppModel {
     }
 
     /// Poll /api/status/ until the backend reports `embedder_ready=true`,
-    /// then stop. Cheap (one HTTP GET every 2s, only while not ready) and
-    /// scoped to the post-launch window where the embedder model is
-    /// loading. Without this, search-bar disabled state never flipped on
-    /// after the bootstrap files were already present on disk — there
-    /// was no other signal that the in-memory model had finished loading.
+    /// then stop. Uses the fast 3s-timeout health session inside
+    /// fetchStatus(), so each poll fails quickly rather than queueing
+    /// 30s-deep behind a stalled backend.
+    ///
+    /// Backoff strategy: 2s after a successful (but not-yet-ready)
+    /// response so we get prompt UI updates once the embedder finishes
+    /// loading; 5s after a connection refused / timeout so we don't
+    /// pile up requests against an unresponsive backend. Without the
+    /// error backoff, a stuck event loop produced ~15 in-flight pollers
+    /// (3s timeout + 2s sleep across 30+ seconds) which only made the
+    /// stall worse.
     private func startEmbedderReadinessPolling() {
         embedderPollTask?.cancel()
         embedderPollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
+                var delay: Duration = .seconds(2)
                 do {
                     let status = try await self.apiClient.fetchStatus()
                     let ready = status.embedderReady ?? false
@@ -307,11 +314,13 @@ class AppModel {
                     }
                     if ready { return }
                 } catch {
-                    // Backend not reachable yet (cold start) — keep retrying
-                    // silently. The connection-state machinery surfaces a
-                    // separate error to the UI if the backend stays down.
+                    // Connection refused (backend cold) or timeout
+                    // (event loop blocked) — back off harder and don't
+                    // spam logs. Connection-state machinery handles the
+                    // user-facing "backend down" surfacing.
+                    delay = .seconds(5)
                 }
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: delay)
             }
         }
     }
