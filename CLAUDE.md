@@ -15,6 +15,28 @@ rm -rf ~/Library/Developer/Xcode/DerivedData/fileSearchForntend-*
 
 **Backend requirement:** The app requires the cosma Python backend at `http://localhost:60534`. The app auto-starts it via `CosmaManager` — no manual launch needed.
 
+## Dev vs Production
+
+The frontend picks which backend to run based on a single env var, `COSMA_DEV`.
+There is no Debug/Release configuration gate — the same binary behaves
+differently depending on the environment it's launched in.
+
+| Mode | Trigger | Backend source | Auto-upgrade | Use when |
+|------|---------|----------------|--------------|----------|
+| **Dev** | `COSMA_DEV=1` set in env | Local repo at `~/Documents/code/SAIL/cosma` (via `PYTHONPATH` over source) | No | Iterating on backend code — edits to `.py` files take effect on next backend restart, no rebuild or reinstall needed |
+| **Prod** | Env var absent | `cosma` installed via `uv tool install` | Yes — `uv tool upgrade cosma` runs every launch (3s timeout) against PyPI | Normal user launches, TestFlight/shipping builds |
+
+### Enabling dev mode
+
+- **From Xcode:** Edit scheme → Run → Arguments → Environment Variables → add `COSMA_DEV=1`. Optionally `COSMA_DEV_REPO=/custom/path/to/cosma` to override the default location.
+- **From a built .app outside Xcode:** `launchctl setenv COSMA_DEV 1 && open /path/to/app`. LaunchServices does not propagate shell env by default.
+
+If `COSMA_DEV=1` is set but the repo or venv is missing, the app logs a warning and falls back to the production path — dev mode never silently fails without an obvious note in the CosmaManager log.
+
+### Releasing dev changes to users
+
+Backend edits on the dev path do **not** reach production users until the backend package is released to PyPI. End users' `uv tool upgrade cosma` pulls from PyPI on every launch; they get your change only after a new version is published. See `cosma/docs/RELEASING.md`.
+
 ## Architecture Overview
 
 macOS SwiftUI app providing a native frontend for AI-powered file search and indexing. The backend (separate `cosma` repo) handles indexing, embedding, and semantic search.
@@ -55,7 +77,7 @@ fileSearchForntendApp.onAppear
 - **Auto-upgrade on launch:** `upgradeCosmaIfNeeded()` bumps the installed
   cosma tool to the latest PyPI release before serving, so users stay in
   sync without a manual update (see `docs/RELEASING.md` for the full flow)
-- **Launch strategies:** Local dev checkout → installed `cosma` binary → fresh install
+- **Launch strategies:** Local dev source (only when `COSMA_DEV=1`) → installed `cosma` binary → fresh install (see "Dev vs Production" below)
 - **Health polling:** Retries `/api/status/` until backend responds
 - **Crash recovery:** Detects process death, auto-restarts
 - **Graceful shutdown:** SIGTERM with 12s window before SIGKILL

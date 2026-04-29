@@ -121,6 +121,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateCancel
         }
 
+        // macOS log-out / restart / shutdown — never interrupt the system
+        // sequence with our own confirmation dialog. AppKit wraps those
+        // quits in a reason field on the current Apple event; bypass the
+        // dialog and go straight to graceful shutdown so loginwindow
+        // doesn't have to force-kill us.
+        if isSystemShutdownOrLogout() {
+            dismissQuitConfirmation()
+            beginGracefulShutdown()
+            return .terminateCancel
+        }
+
         // Double Cmd+Q (< 0.8 s apart) — skip confirmation, even if
         // the confirmation window is already showing.
         let now = Date()
@@ -169,17 +180,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingView = NSHostingView(rootView: view)
         hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
+        // Borderless + transparent background so only the SwiftUI glass
+        // panel inside QuitConfirmationView is visible. Using .titled here
+        // drew a second NSWindow frame behind our glass, producing a
+        // double-card look (an outer rounded rectangle plus the inner
+        // dialog). We still want a drop shadow so the dialog reads as
+        // floating above the main window.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.isOpaque = false
-        window.title = ""
+        window.hasShadow = true
         window.contentView = hostingView
         window.center()
         window.level = .floating
@@ -192,6 +208,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func dismissQuitConfirmation() {
         quitConfirmationWindow?.close()
         quitConfirmationWindow = nil
+    }
+
+    /// Returns true when the current quit was initiated by loginwindow as
+    /// part of a logout / restart / shutdown. We detect this by inspecting
+    /// the 'why?' reason on the active AppleEvent — AppKit forwards one
+    /// of the kAE* reason codes on system-driven quits but not on user
+    /// Cmd-Q. When true, we skip our confirmation dialog: blocking a
+    /// system shutdown with a non-modal window is a bad citizen move
+    /// (and loginwindow will force-kill us after its timeout anyway).
+    private func isSystemShutdownOrLogout() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else {
+            return false
+        }
+        // Reason code lives in either a parameter or attribute with key
+        // 'why?'. Carbon constants are imported as Int but the descriptor
+        // API takes AEKeyword (UInt32), so convert with fourCharCode.
+        let whyKeyword = fourCharCode("why?")
+        let descriptor = event.paramDescriptor(forKeyword: whyKeyword)
+            ?? event.attributeDescriptor(forKeyword: whyKeyword)
+        guard let descriptor else { return false }
+        let reasonCode = descriptor.typeCodeValue
+        // 'logo' = logout, 'rlgo' = really log out (no Cancel),
+        // 'rrst' / 'rsdn' = pre-dialog restart/shutdown broadcast,
+        // 'rest' / 'shut' = the actual restart/shutdown.
+        switch reasonCode {
+        case fourCharCode("logo"), fourCharCode("rlgo"),
+             fourCharCode("rrst"), fourCharCode("rsdn"),
+             fourCharCode("rest"), fourCharCode("shut"):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func fourCharCode(_ s: String) -> FourCharCode {
+        precondition(s.utf8.count == 4, "fourCharCode expects a 4-byte string")
+        var result: FourCharCode = 0
+        for byte in s.utf8 {
+            result = (result << 8) | FourCharCode(byte)
+        }
+        return result
     }
 
     // MARK: - Graceful Shutdown
@@ -261,34 +318,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // If there are visible windows, let AppKit bring them forward —
-        // do NOT return true into the WindowGroup path or SwiftUI will
-        // spawn a second window on top of the one we already have.
-        if flag { return false }
-
-        // No visible window. We usually have one that's been orderOut'd
-        // (e.g., hideMainWindow during overlay present). Surface it and
-        // return false so SwiftUI does not *also* create a fresh one —
-        // that's the "two app screens appear" the user was seeing.
+        // Always try to surface the main search window on dock/icon reopen,
+        // even if Settings happens to be visible. Previously, if the user
+        // had Settings open when they quit (or closed the main window and
+        // left Settings as the front window), clicking the dock icon would
+        // restore only Settings and leave the user with no way to reach the
+        // search UI. Finding and surfacing the existing main window here
+        // covers that case without creating a duplicate.
         if surfaceHiddenMainWindow() { return false }
 
-        // Genuinely no window exists anywhere — let SwiftUI build one.
+        // Genuinely no main window exists — let SwiftUI build one. Returning
+        // true is still safe when Settings is open because SwiftUI only
+        // recreates the main WindowGroup window, not the Settings scene.
         return true
     }
 
     /// Bring an existing (possibly hidden) main window back to front.
-    /// Returns true if a window was surfaced, false if none was found.
+    /// Returns true only if a window actually became visible — otherwise
+    /// the caller lets SwiftUI create a fresh one. Previously we returned
+    /// true whenever a candidate NSWindow was found in NSApp.windows, even
+    /// if the window had already been released/destroyed by SwiftUI; in
+    /// that case ``makeKeyAndOrderFront`` silently failed and the dock
+    /// icon clicked to nothing.
     @discardableResult
     private func surfaceHiddenMainWindow() -> Bool {
-        guard let window = NSApp.windows.first(where: {
+        let candidates = NSApp.windows.filter {
             $0.contentView != nil && $0.level != .floating && $0.title != "Settings"
-        }) else { return false }
+        }
+        guard !candidates.isEmpty else { return false }
         NSApp.activate(ignoringOtherApps: true)
+        // Prefer an already-visible candidate if there is one — avoids
+        // raising a stale hidden window over a live one.
+        let window = candidates.first(where: \.isVisible) ?? candidates[0]
         window.makeKeyAndOrderFront(nil)
         // Match showMainWindow: surface the window without stealing focus
         // into the search field.
         window.makeFirstResponder(nil)
-        return true
+        // Verify the window is actually on screen. If SwiftUI destroyed the
+        // backing window (Cmd+W on a single-window WindowGroup can leave a
+        // zombie entry in NSApp.windows that can't be re-shown), report
+        // failure so the caller lets SwiftUI build a fresh window.
+        return window.isVisible
     }
 
     // MARK: - Hotkey
@@ -390,6 +460,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // TextField otherwise grabs first responder as the only
             // focusable control.
             window.makeFirstResponder(nil)
+            // If Settings is also visible, push it behind the main window.
+            // Without this, the overlay's enlarge button (and dock reopen)
+            // could surface main but leave Settings on top — the user sees
+            // the settings page and loses access to search.
+            if let settings = NSApp.windows.first(where: {
+                $0.isVisible && $0.title == "Settings"
+            }) {
+                settings.order(.below, relativeTo: window.windowNumber)
+            }
         }
     }
 

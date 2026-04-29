@@ -126,48 +126,56 @@ class CosmaManager {
 
         // Step 2: Check prerequisites and launch the server.
         // Three strategies, tried in order:
-        //   1. Local dev venv (for developers working in the repo)
+        //   1. Local dev venv (only when COSMA_DEV=1 is set in the environment)
         //   2. `cosma` already installed via uv tool
         //   3. Auto-install: ensure uv → ensure cosma → launch
         do {
             let home = realHomeDirectory()
 
-            // --- Strategy 1: Local dev repo with venv ---
+            // --- Strategy 1: Local dev repo with venv (opt-in via COSMA_DEV=1) ---
+            // Production builds must never accidentally fall into this path just
+            // because a path happens to exist on disk. Gate it explicitly on an
+            // env var. For Xcode development, set COSMA_DEV=1 in the scheme's
+            // "Run > Arguments > Environment Variables". COSMA_DEV_REPO can
+            // override the default repo path.
             setupStage = .checkingUV
             await Task.yield()
 
-            let repoRoot = "\(home)/Documents/code/SAIL/cosma"
-            let venvActivate = "\(repoRoot)/.venv/bin/activate"
-            let backendInit = "\(repoRoot)/packages/cosma-backend/src/cosma_backend/__init__.py"
+            let env = ProcessInfo.processInfo.environment
+            if env["COSMA_DEV"] == "1" {
+                let repoRoot = env["COSMA_DEV_REPO"] ?? "\(home)/Documents/code/SAIL/cosma"
+                let venvActivate = "\(repoRoot)/.venv/bin/activate"
+                let backendInit = "\(repoRoot)/packages/cosma-backend/src/cosma_backend/__init__.py"
 
-            if FileManager.default.fileExists(atPath: venvActivate) &&
-               FileManager.default.fileExists(atPath: backendInit) {
-                setupStage = .checkingCosma
-                await Task.yield()
-                await ensureOllamaAndModel()
-                setupStage = .startingServer
+                if FileManager.default.fileExists(atPath: venvActivate) &&
+                   FileManager.default.fileExists(atPath: backendInit) {
+                    setupStage = .checkingCosma
+                    await Task.yield()
+                    await ensureOllamaAndModel()
+                    setupStage = .startingServer
 
-                let venvPython = "\(repoRoot)/.venv/bin/python"
-                let pythonPath = "\(repoRoot)/packages/cosma-backend/src"
-                appendLog("[CosmaManager] Launching python directly: \(venvPython) -m cosma_backend")
-                try await launchBackendProcess(
-                    executable: venvPython,
-                    arguments: ["-m", "cosma_backend"],
-                    extraEnv: [
-                        "PYTHONPATH": pythonPath,
-                        "TOKENIZERS_PARALLELISM": "false",
-                    ]
-                )
-                scheduleUpdateChecks()
-                return
+                    let venvPython = "\(repoRoot)/.venv/bin/python"
+                    let pythonPath = "\(repoRoot)/packages/cosma-backend/src"
+                    appendLog("[CosmaManager] COSMA_DEV=1 — launching local source: \(venvPython) -m cosma_backend (repo: \(repoRoot))")
+                    try await launchBackendProcess(
+                        executable: venvPython,
+                        arguments: ["-m", "cosma_backend"],
+                        extraEnv: [
+                            "PYTHONPATH": pythonPath,
+                            "TOKENIZERS_PARALLELISM": "false",
+                        ]
+                    )
+                    scheduleUpdateChecks()
+                    return
+                }
+                appendLog("[CosmaManager] COSMA_DEV=1 but dev repo not found at \(repoRoot) — falling back to installed cosma")
             }
-            appendLog("[CosmaManager] No local dev backend found at \(repoRoot)")
 
             // --- Strategy 2: cosma already on PATH ---
             setupStage = .checkingCosma
             await Task.yield()
 
-            if let cosmaPath = findExecutable(name: "cosma") {
+            if let cosmaPath = await findExecutable(name: "cosma") {
                 // Before launching, bring the installed `cosma` tool up to
                 // the latest PyPI release. Without this step, a user who
                 // installed the app a week ago keeps running an old backend
@@ -198,7 +206,7 @@ class CosmaManager {
             await ensureOllamaAndModel()
 
             setupStage = .startingServer
-            guard let cosmaPath = findExecutable(name: "cosma") else {
+            guard let cosmaPath = await findExecutable(name: "cosma") else {
                 throw CosmaError.installFailed("cosma not found after installation")
             }
             appendLog("[CosmaManager] Launching freshly installed cosma: \(cosmaPath) serve")
@@ -240,7 +248,7 @@ class CosmaManager {
     private func ensureUV() async throws -> String {
         setupStage = .checkingUV
 
-        if let path = findExecutable(name: "uv") {
+        if let path = await findExecutable(name: "uv") {
             return path
         }
 
@@ -248,7 +256,7 @@ class CosmaManager {
         try await runShellScript("curl -LsSf https://astral.sh/uv/install.sh | sh")
 
         // Re-check after install
-        if let path = findExecutable(name: "uv") {
+        if let path = await findExecutable(name: "uv") {
             return path
         }
 
@@ -260,7 +268,7 @@ class CosmaManager {
     private func ensureCosma(uvPath: String) async throws {
         setupStage = .checkingCosma
 
-        if findExecutable(name: "cosma") != nil {
+        if await findExecutable(name: "cosma") != nil {
             installedVersion = await getInstalledVersion()
             return
         }
@@ -268,7 +276,7 @@ class CosmaManager {
         setupStage = .installingCosma
         try await runProcess(executablePath: uvPath, arguments: ["tool", "install", "cosma"])
 
-        guard findExecutable(name: "cosma") != nil else {
+        guard await findExecutable(name: "cosma") != nil else {
             throw CosmaError.installFailed("cosma not found after installation")
         }
 
@@ -296,14 +304,14 @@ class CosmaManager {
         do {
             setupStage = .checkingOllama
             let ollamaPath: String
-            if let existing = findExecutable(name: "ollama") {
+            if let existing = await findExecutable(name: "ollama") {
                 ollamaPath = existing
                 appendLog("[CosmaManager] ollama found at \(existing)")
             } else {
                 setupStage = .installingOllama
                 appendLog("[CosmaManager] ollama not found — attempting install")
                 try await installOllama()
-                guard let installed = findExecutable(name: "ollama") else {
+                guard let installed = await findExecutable(name: "ollama") else {
                     appendLog("[CosmaManager] ollama still not found after install — skipping model pull")
                     return
                 }
@@ -330,7 +338,7 @@ class CosmaManager {
 
     /// Install Ollama via Homebrew cask if available; otherwise throw.
     private func installOllama() async throws {
-        if let brew = findExecutable(name: "brew") {
+        if let brew = await findExecutable(name: "brew") {
             _ = try await runProcess(executablePath: brew, arguments: ["install", "--cask", "ollama"])
             return
         }
@@ -339,7 +347,7 @@ class CosmaManager {
         try await runShellScript(
             "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
         )
-        guard let brew = findExecutable(name: "brew") else {
+        guard let brew = await findExecutable(name: "brew") else {
             throw CosmaError.installFailed("Homebrew not found after installation")
         }
         _ = try await runProcess(executablePath: brew, arguments: ["install", "--cask", "ollama"])
@@ -557,7 +565,7 @@ class CosmaManager {
     /// the upgrade itself errors, we log and continue with what's installed.
     /// Bounded to ~8s so a flaky network can't block startup.
     private func upgradeCosmaIfNeeded() async {
-        guard let uvPath = findExecutable(name: "uv") else { return }
+        guard let uvPath = await findExecutable(name: "uv") else { return }
         let installed = await getInstalledVersion()
         installedVersion = installed
 
@@ -629,7 +637,7 @@ class CosmaManager {
     }
 
     func performUpdate() async {
-        guard let uvPath = findExecutable(name: "uv") else {
+        guard let uvPath = await findExecutable(name: "uv") else {
             updateStatus = .failed("uv not found")
             return
         }
@@ -719,7 +727,12 @@ class CosmaManager {
 
     // MARK: - Helpers
 
-    private func findExecutable(name: String) -> String? {
+    /// Locate an executable. The fast path (stat-ing a handful of known
+    /// install dirs) stays synchronous; the login-shell `which` fallback
+    /// used to run with a synchronous `waitUntilExit` on the main actor,
+    /// freezing the UI for up to several hundred ms while `.zshrc` loaded.
+    /// Now it runs on a detached task so the main actor stays responsive.
+    private func findExecutable(name: String) async -> String? {
         let home = realHomeDirectory()
         let commonPaths = [
             "\(home)/.local/bin/\(name)",
@@ -742,26 +755,36 @@ class CosmaManager {
             }
         }
 
-        // Fallback: use /bin/sh -l -c which (login shell to get full PATH)
-        let whichProcess = Process()
-        whichProcess.executableURL = URL(fileURLWithPath: "/bin/sh")
-        whichProcess.arguments = ["-l", "-c", "which \(name)"]
-        let pipe = Pipe()
-        whichProcess.standardOutput = pipe
-        whichProcess.standardError = FileHandle.nullDevice
+        // Fallback: use /bin/sh -l -c which (login shell to get full PATH).
+        // Offloaded to a detached task — a login shell can take hundreds of
+        // ms to source .zshrc and blocking the main actor caused visible UI
+        // hangs during bootstrap / update checks.
+        let shellResult = await Task.detached(priority: .userInitiated) { () -> String? in
+            let whichProcess = Process()
+            whichProcess.executableURL = URL(fileURLWithPath: "/bin/sh")
+            whichProcess.arguments = ["-l", "-c", "which \(name)"]
+            let pipe = Pipe()
+            whichProcess.standardOutput = pipe
+            whichProcess.standardError = FileHandle.nullDevice
 
-        do {
-            try whichProcess.run()
-            whichProcess.waitUntilExit()
-            if whichProcess.terminationStatus == 0 {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
-                    appendLog("[CosmaManager] Found \(name) via shell at \(path)")
-                    return path
+            do {
+                try whichProcess.run()
+                whichProcess.waitUntilExit()
+                if whichProcess.terminationStatus == 0 {
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+                        return path
+                    }
                 }
-            }
-        } catch {}
+            } catch {}
+            return nil
+        }.value
+
+        if let path = shellResult {
+            appendLog("[CosmaManager] Found \(name) via shell at \(path)")
+            return path
+        }
 
         appendLog("[CosmaManager] \(name) not found in any known location")
         return nil
@@ -859,7 +882,7 @@ class CosmaManager {
     }
 
     private func getInstalledVersion() async -> String? {
-        guard let cosmaPath = findExecutable(name: "cosma") else { return nil }
+        guard let cosmaPath = await findExecutable(name: "cosma") else { return nil }
         do {
             let output = try await runProcess(executablePath: cosmaPath, arguments: ["--version"])
             // Recent cosma builds print a multi-line block:
@@ -933,6 +956,39 @@ class CosmaManager {
         if serverLog.count > 50_000 {
             serverLog = String(serverLog.suffix(25_000))
         }
+        Self.writeFrontendLog(text)
+    }
+
+    /// Append a line to ~/Library/Logs/cosma/cosma-frontend.log so startup,
+    /// auto-install, and launch-strategy history survives app restarts. The
+    /// in-memory `serverLog` is cleared whenever the process exits, which
+    /// makes post-mortem debugging of a bad launch impossible.
+    nonisolated private static func writeFrontendLog(_ text: String) {
+        guard let logURL = frontendLogURL() else { return }
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(ts)] \(text)\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        let fm = FileManager.default
+        _ = try? fm.createDirectory(at: logURL.deletingLastPathComponent(),
+                                    withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: logURL.path) {
+            fm.createFile(atPath: logURL.path, contents: nil)
+        }
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        }
+    }
+
+    nonisolated private static func frontendLogURL() -> URL? {
+        guard let pw = getpwuid(getuid()), let homeC = pw.pointee.pw_dir else {
+            return nil
+        }
+        let home = String(cString: homeC)
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent("Library/Logs/cosma/cosma-frontend.log")
     }
 }
 
