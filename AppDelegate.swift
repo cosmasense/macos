@@ -41,6 +41,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Light regardless of the system appearance.
         NSApp.appearance = NSAppearance(named: .aqua)
 
+        // Start the main-thread watchdog so any UI freeze gets logged
+        // with timing data, instead of relying on the user noticing
+        // "the app feels stuck" without anything in the log to explain
+        // it. Logs land in OSLog under com.filesearch / watchdog —
+        // filterable in Console.app.
+        MainThreadWatchdog.shared.start()
+
         // Log uncaught exceptions before AppKit converts them into a silent
         // force-terminate. Without this, a view-init crash shows up as
         // "Unexpected call to terminate" with no explanation.
