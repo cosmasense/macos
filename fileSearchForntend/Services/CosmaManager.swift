@@ -124,6 +124,17 @@ class CosmaManager {
             return
         }
 
+        // Step 1b: A previous run may have left a stale backend process
+        // bound to :60534 (e.g., the app was force-quit, a Python crash
+        // left a zombie holding the port, or a previous launch ran a
+        // different binary). The warm-attach probe above only succeeds
+        // when /api/status/ responds — a process that bound the port
+        // but is wedged on something synchronous would fail that probe
+        // AND fail our subsequent bind, leaving the user stuck on the
+        // setup wizard with no signal as to why. Reap stale owners
+        // before we try to launch.
+        await reapStaleBackendProcesses()
+
         // Step 2: Check prerequisites and launch the server.
         // Three strategies, tried in order:
         //   1. Local dev venv (only when COSMA_DEV=1 is set in the environment)
@@ -868,6 +879,129 @@ class CosmaManager {
                 try process.run()
             } catch {
                 continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    /// Find and terminate any process holding TCP port 60534 OR running a
+    /// cosma-backend Python entrypoint. Called from `startManagedBackend`
+    /// once the warm-attach probe has confirmed nothing healthy is on
+    /// :60534, so any owner of that port is, by definition, stale.
+    ///
+    /// Strategy:
+    ///   1. `lsof -nP -iTCP:60534 -sTCP:LISTEN -t` for PIDs holding the port.
+    ///   2. `pgrep -f "cosma_backend|cosma serve"` to also catch backends
+    ///      that crashed mid-boot (port not yet bound, but Python still up).
+    ///   3. SIGTERM all collected PIDs, give them ~1.5s to exit cleanly,
+    ///      then SIGKILL anything that didn't.
+    ///   4. Wait up to ~2s for the port to become free before returning.
+    ///
+    /// We deliberately avoid killing arbitrary processes (no broad pkill);
+    /// the union of "port holder" and "matches our Python entrypoint" is
+    /// narrow enough that a false positive would have to be using our
+    /// dedicated port AND running our module.
+    private func reapStaleBackendProcesses() async {
+        let pids = await collectStaleBackendPIDs()
+        guard !pids.isEmpty else { return }
+        appendLog("[CosmaManager] Reaping stale backend PIDs: \(pids)")
+
+        // SIGTERM round — give the backend a chance to run its own
+        // after_serving cleanup (Ollama unload, DB close).
+        for pid in pids {
+            kill(pid, SIGTERM)
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // SIGKILL anything still alive after the grace window.
+        let stillAlive = pids.filter { isProcessAlive($0) }
+        if !stillAlive.isEmpty {
+            appendLog("[CosmaManager] SIGTERM didn't suffice for \(stillAlive); SIGKILL")
+            for pid in stillAlive {
+                kill(pid, SIGKILL)
+            }
+        }
+
+        // Wait for the port to actually free up — the launch will fail
+        // with EADDRINUSE if we race ahead. Bounded so we never block
+        // the UI more than ~2s on this path.
+        for _ in 0..<10 {
+            if await !isPortBound(60534) { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    /// Union of (a) PIDs listening on :60534 and (b) PIDs whose argv
+    /// matches a cosma-backend entrypoint. Returns deduplicated, excludes
+    /// our own pid out of paranoia.
+    private func collectStaleBackendPIDs() async -> [pid_t] {
+        var collected: Set<pid_t> = []
+
+        // (a) Port holders. lsof's `-t` flag prints just PIDs, one per line.
+        if let lsofPath = await findExecutable(name: "lsof") {
+            if let out = try? await runProcess(
+                executablePath: lsofPath,
+                arguments: ["-nP", "-iTCP:60534", "-sTCP:LISTEN", "-t"]
+            ) {
+                for line in out.split(whereSeparator: { $0 == "\n" || $0 == " " }) {
+                    if let pid = pid_t(line.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        collected.insert(pid)
+                    }
+                }
+            }
+        }
+
+        // (b) Anything matching our Python entrypoint, in case the port
+        // isn't bound yet (e.g., crashed mid-startup before listen()).
+        if let pgrepPath = await findExecutable(name: "pgrep") {
+            if let out = try? await runProcess(
+                executablePath: pgrepPath,
+                arguments: ["-f", "cosma_backend|cosma serve"]
+            ) {
+                for line in out.split(whereSeparator: { $0 == "\n" }) {
+                    if let pid = pid_t(line.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        collected.insert(pid)
+                    }
+                }
+            }
+        }
+
+        let mypid = ProcessInfo.processInfo.processIdentifier
+        collected.remove(mypid)
+        return Array(collected)
+    }
+
+    /// `kill -0` semantics: signal 0 doesn't deliver, just tests permission.
+    /// Returns true iff the process exists and we can signal it.
+    private func isProcessAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0
+    }
+
+    /// Quick TCP probe — bind would fail, so connect-then-close is the
+    /// cheapest way to ask "is *something* listening here?". 100 ms timeout
+    /// because either the port is bound and accepts immediately, or it's
+    /// free and we get ECONNREFUSED instantly.
+    private func isPortBound(_ port: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let queue = DispatchQueue.global(qos: .utility)
+            queue.async {
+                let sock = socket(AF_INET, SOCK_STREAM, 0)
+                guard sock >= 0 else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                defer { close(sock) }
+
+                var addr = sockaddr_in()
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_port = port.bigEndian
+                addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+                let result = withUnsafePointer(to: &addr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { ptr in
+                        Darwin.connect(sock, ptr, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+                continuation.resume(returning: result == 0)
             }
         }
     }
