@@ -223,22 +223,34 @@ extension AppModel {
         }
     }
 
-    /// Updates folder progress based on queue item completion ratio
+    /// Updates folder progress based on queue item completion ratio.
+    ///
+    /// Performance note: this is called from `handleBackend(event:)` on
+    /// the main actor for every queue_item_added / completed / removed
+    /// event. The previous implementation did
+    /// `queueProgressItems.filter { $0.key.standardizingPath.hasPrefix(folderPath) }`
+    /// which is O(queueSize) per event with Unicode-grapheme `hasPrefix`
+    /// comparisons. Under a single batched-enqueue burst (442 paths in
+    /// one queue_batch_added), 442 × queueSize grapheme comparisons
+    /// produced a 2.9s main-thread hang the watchdog caught at startup.
+    ///
+    /// The fix uses the per-folder counters that ``trackQueueItemAdded``
+    /// and ``trackQueueItemCompleted`` already maintain in
+    /// ``WatchedFolder.totalFileCount`` / ``indexedFileCount``. Progress
+    /// is total/completed read directly off the folder, which is O(F)
+    /// in the number of watched folders (typically < 10) and constant-
+    /// time per event.
     internal func updateFolderProgressFromQueue(forFilePath filePath: String) {
         let normalizedFile = (filePath as NSString).standardizingPath
         guard let folderIndex = watchedFolders.firstIndex(where: { normalizedFile.hasPrefix($0.path) }) else {
             return
         }
-        let folderPath = watchedFolders[folderIndex].path
 
-        // Count items belonging to this folder
-        let folderItems = queueProgressItems.filter { ($0.key as NSString).standardizingPath.hasPrefix(folderPath) }
-        let total = folderItems.count
-        let completed = folderItems.values.filter(\.completed).count
-
+        let total = watchedFolders[folderIndex].totalFileCount
+        let completed = watchedFolders[folderIndex].indexedFileCount
         guard total > 0 else { return }
 
-        let progress = Double(completed) / Double(total)
+        let progress = min(1.0, Double(completed) / Double(total))
         watchedFolders[folderIndex].progress = progress
         watchedFolders[folderIndex].lastModified = Date()
 
