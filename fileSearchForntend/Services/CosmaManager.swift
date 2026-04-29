@@ -95,6 +95,15 @@ class CosmaManager {
     @ObservationIgnored private var restartCount = 0
     @ObservationIgnored private let maxRestarts = 3
     @ObservationIgnored private var recoveryPollTask: Task<Void, Never>?
+    /// Single-instance guard. Set true on entry to `startManagedBackend`,
+    /// cleared on exit. Prevents two concurrent calls (e.g. an Xcode
+    /// hot-reload firing while a previous launch attempt is still
+    /// running) from racing and spawning two backends. Without this,
+    /// both calls could pass the warm-attach probe (port not yet
+    /// bound), both could call the reaper (no PIDs to kill), and both
+    /// could `launchBackendProcess` — the second EADDRINUSE silently
+    /// crashes the second python child while the first runs fine.
+    @ObservationIgnored private var startupInFlight: Bool = false
     @ObservationIgnored private var dismissedVersion: String? {
         get { UserDefaults.standard.string(forKey: "cosmaDismissedUpdateVersion") }
         set { UserDefaults.standard.set(newValue, forKey: "cosmaDismissedUpdateVersion") }
@@ -104,6 +113,17 @@ class CosmaManager {
 
     func startManagedBackend() async {
         print("[CosmaManager] startManagedBackend called")
+        // Re-entrance guard: if a previous startup is still running,
+        // bail out. The original call will reach `setupStage = .running`
+        // and the UI's bootstrap-onChange will pick it up. Note that
+        // CosmaManager is @MainActor-isolated so this read/write is
+        // race-free without a lock.
+        if startupInFlight {
+            print("[CosmaManager] startManagedBackend already in flight — skipping duplicate call")
+            return
+        }
+        startupInFlight = true
+        defer { startupInFlight = false }
         stopRecoveryPolling()
 
         // Step 1: Quick attach if backend is already running (no setup needed).
@@ -187,14 +207,16 @@ class CosmaManager {
             await Task.yield()
 
             if let cosmaPath = await findExecutable(name: "cosma") {
-                // Before launching, bring the installed `cosma` tool up to
-                // the latest PyPI release. Without this step, a user who
-                // installed the app a week ago keeps running an old backend
-                // that may be missing newer endpoints (e.g. /api/bootstrap/*),
-                // leading to silent 404s in the UI. `uv tool upgrade` is a
-                // no-op when already current, and 3s-bounded so a slow
-                // network can't stall app launch.
-                await upgradeCosmaIfNeeded()
+                // Launch the *currently installed* cosma immediately — no
+                // PyPI check, no upgrade — so the user sees a working
+                // backend in <1s instead of waiting on a possibly-slow
+                // network round trip. The upgrade still happens, just
+                // off the launch hot path: scheduleUpdateChecks() at the
+                // end fires a background `checkForUpdates`, and
+                // `upgradeCosmaInBackground()` runs `uv tool upgrade
+                // cosma` if a newer version exists. The new bits land on
+                // the user's next quit + relaunch (which kills our
+                // backend; the reaper guarantees only one is running).
                 await ensureOllamaAndModel()
                 setupStage = .startingServer
                 appendLog("[CosmaManager] Launching cosma directly: \(cosmaPath) serve")
@@ -204,6 +226,7 @@ class CosmaManager {
                     extraEnv: [:]
                 )
                 scheduleUpdateChecks()
+                Task { await self.upgradeCosmaInBackground() }
                 return
             }
             appendLog("[CosmaManager] cosma not found — starting auto-install")
@@ -608,6 +631,27 @@ class CosmaManager {
         } catch {
             appendLog("[CosmaManager] Auto-upgrade failed — continuing with old version: \(error.localizedDescription)")
         }
+    }
+
+    /// Background variant of `upgradeCosmaIfNeeded` that runs *after* the
+    /// backend has launched. Same effect (running `uv tool upgrade cosma`
+    /// when PyPI has a newer version), but the launch path no longer
+    /// awaits it — so a slow PyPI fetch or a multi-minute wheel install
+    /// can't keep the user staring at the setup wizard.
+    ///
+    /// Updated bits don't apply to the *currently running* process; they
+    /// take effect on the next quit + relaunch. The reaper in
+    /// `startManagedBackend` guarantees the old process gets killed
+    /// before the new one is spawned, so there's no chance of two
+    /// backends overlapping after an upgrade lands.
+    private func upgradeCosmaInBackground() async {
+        // Small delay so we don't fight the just-started backend for I/O
+        // bandwidth (the backend spends its first few seconds loading
+        // SQLite + the embedder model). 3s is short enough that a user
+        // who quits-and-relaunches in under a minute still gets the new
+        // version on the second launch.
+        try? await Task.sleep(for: .seconds(3))
+        await upgradeCosmaIfNeeded()
     }
 
     /// Generic async timeout wrapper. `operation` is cancelled if it doesn't
