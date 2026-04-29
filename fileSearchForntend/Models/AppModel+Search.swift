@@ -6,6 +6,15 @@
 //
 
 import Foundation
+import OSLog
+
+/// Subsystem-tagged logger so search timing shows up in Console.app
+/// under "filesearch" with the "search" category — easy to filter.
+/// Each search emits start / success / error / cancel lines with the
+/// query, request id, and elapsed ms, so when a search hangs we can
+/// correlate the frontend log against the backend's
+/// "Search request received" / "Search completed" timing chain.
+private let searchLog = Logger(subsystem: "com.filesearch", category: "search")
 
 // MARK: - Main Window Search
 
@@ -80,6 +89,10 @@ extension AppModel {
             }
         }
 
+        let started = Date()
+        let shortID = requestID.uuidString.prefix(8)
+        searchLog.info("search.start id=\(shortID) q=\(normalizedQuery, privacy: .public) dir=\(directory ?? "-", privacy: .public) ai_ready=\(self.aiReadyForSearch) embedder_ready=\(self.embedderReady)")
+
         do {
             let response = try await apiClient.search(
                 query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
@@ -88,18 +101,31 @@ extension AppModel {
                 limit: 50
             )
 
-            guard activeSearchRequestID == requestID else { return }
+            let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+            guard activeSearchRequestID == requestID else {
+                searchLog.info("search.cancel id=\(shortID) elapsed=\(elapsedMs)ms (superseded)")
+                return
+            }
             searchResults = response.results
-            // Update cache (with eviction if needed)
             cacheSearchResults(key: cacheKey, results: response.results)
+            searchLog.info("search.ok id=\(shortID) elapsed=\(elapsedMs)ms results=\(response.results.count)")
         } catch let error as APIError {
-            guard activeSearchRequestID == requestID else { return }
-            // Only show error if we don't already have cached results showing
+            let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+            guard activeSearchRequestID == requestID else {
+                searchLog.info("search.cancel id=\(shortID) elapsed=\(elapsedMs)ms (superseded)")
+                return
+            }
+            searchLog.error("search.err id=\(shortID) elapsed=\(elapsedMs)ms type=APIError detail=\(error.localizedDescription, privacy: .public)")
             if searchResults.isEmpty {
                 searchError = error.localizedDescription
             }
         } catch {
-            guard activeSearchRequestID == requestID else { return }
+            let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+            guard activeSearchRequestID == requestID else {
+                searchLog.info("search.cancel id=\(shortID) elapsed=\(elapsedMs)ms (superseded)")
+                return
+            }
+            searchLog.error("search.err id=\(shortID) elapsed=\(elapsedMs)ms type=\(String(describing: type(of: error))) detail=\(error.localizedDescription, privacy: .public)")
             if searchResults.isEmpty {
                 searchError = "An unexpected error occurred: \(error.localizedDescription)"
             }

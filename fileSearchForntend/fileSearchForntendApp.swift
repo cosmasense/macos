@@ -209,15 +209,16 @@ struct fileSearchForntendApp: App {
             .onChange(of: cosmaManager.updateStatus) {
                 appDelegate.syncStatusBarWithCosmaManager()
             }
-            // Mirror bootstrap readiness onto AppModel so non-View code
-            // (search/index) can gate without pulling CosmaManager in.
+            // Mirror bootstrap + embedder readiness onto AppModel so
+            // non-View code (search/index) can gate without pulling
+            // CosmaManager in. Both signals must be true: bootstrap
+            // means model files are on disk; embedderReady means the
+            // SentenceTransformer has actually been loaded into memory
+            // and warmed. Without the embedder gate, queries submitted
+            // in the cold-start window blocked the asyncio event loop
+            // for 5-15s and timed out.
             .onChange(of: cosmaManager.bootstrapReady) { _, ready in
-                appModel.aiReadyForSearch = ready
-                // Bootstrap just finished while the backend is already
-                // running — transition into the main UI now. Paired with
-                // the gate in the setupStage onChange above, this ensures
-                // we enter the main UI exactly once and only after models
-                // are on disk.
+                appModel.aiReadyForSearch = ready && appModel.embedderReady
                 if ready, case .running = cosmaManager.setupStage, !isBackendConnected {
                     appModel.connectToBackend()
                     withAnimation(.easeInOut(duration: 0.3)) {
@@ -225,6 +226,9 @@ struct fileSearchForntendApp: App {
                     }
                     Task { await appModel.checkModelAvailability() }
                 }
+            }
+            .onChange(of: appModel.embedderReady) { _, ready in
+                appModel.aiReadyForSearch = cosmaManager.bootstrapReady && ready
             }
         }
         .windowStyle(.hiddenTitleBar)
