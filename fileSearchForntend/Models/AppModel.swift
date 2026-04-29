@@ -511,6 +511,19 @@ class AppModel {
                 trackQueueItemAdded(filePath: fp)
             }
 
+        case .queueBatchAdded:
+            // Coalesced burst from the backend during bulk discovery —
+            // see indexing_queue._added_flush_loop. One SSE event with
+            // up to ~500 paths instead of 500 individual ADDED events.
+            // Iterating here is cheap because trackQueueItemAdded only
+            // mutates an @ObservationIgnored dict; folder-level state
+            // changes are debounced by the backend's flush interval.
+            if let paths = event.data.paths {
+                for fp in paths {
+                    trackQueueItemAdded(filePath: fp)
+                }
+            }
+
         case .queueItemUpdated, .queueItemProcessing:
             break
 

@@ -309,6 +309,11 @@ struct EventData: Codable {
     let status: String?
     let source: String?
     let id: String?
+    // Used by `queue_batch_added`: the coalesced list of newly-enqueued
+    // file paths. Optional so older payloads / unrelated opcodes decode
+    // unchanged.
+    let paths: [String]?
+    let count: Int?
 
     enum CodingKeys: String, CodingKey {
         case path
@@ -323,6 +328,8 @@ struct EventData: Codable {
         case status
         case source
         case id
+        case paths
+        case count
     }
 
     init(from decoder: Decoder) throws {
@@ -339,6 +346,8 @@ struct EventData: Codable {
         status = try container.decodeIfPresent(String.self, forKey: .status)
         source = try container.decodeIfPresent(String.self, forKey: .source)
         id = try container.decodeIfPresent(String.self, forKey: .id)
+        paths = try container.decodeIfPresent([String].self, forKey: .paths)
+        count = try container.decodeIfPresent(Int.self, forKey: .count)
     }
 }
 
@@ -375,6 +384,10 @@ enum EventOpcode: String, Codable {
 
     // Queue events
     case queueItemAdded = "queue_item_added"
+    // Coalesced burst of newly-enqueued items emitted by the backend
+    // during bulk discovery to keep the SSE stream from drowning in
+    // per-file ADDED events. Carries `paths: [String]` and `count`.
+    case queueBatchAdded = "queue_batch_added"
     case queueItemUpdated = "queue_item_updated"
     case queueItemProcessing = "queue_item_processing"
     case queueItemCompleted = "queue_item_completed"
