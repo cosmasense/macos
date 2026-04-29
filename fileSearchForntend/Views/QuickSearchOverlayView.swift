@@ -795,17 +795,22 @@ private class QuickLookHelper: NSObject, QLPreviewPanelDataSource, QLPreviewPane
 
 struct PopupSearchFieldView: View {
     @Environment(AppModel.self) private var model
-    @Environment(CosmaManager.self) private var cosmaManager
     @FocusState.Binding var isFocused: Bool
     @Binding var selectedSuggestionIndex: Int
     var onEmptySubmit: () -> Void = {}
     @State private var backspaceMonitor: Any?
 
-    // Mirror of HomeView.aiReady — search is a no-op if either the
-    // bootstrap files aren't on disk or the embedder hasn't loaded into
-    // memory yet. Without this gate, the popup overlay let users submit
-    // queries during cold-start and they came back empty.
-    private var aiReady: Bool { cosmaManager.bootstrapReady && model.embedderReady }
+    // Use `model.aiReadyForSearch` rather than reading CosmaManager
+    // directly — the popup overlay is hosted in a separate NSPanel
+    // (see QuickSearchOverlayController) which lives outside the
+    // SwiftUI App scene, so its environment is built manually and
+    // currently injects only AppModel. Reading CosmaManager from
+    // @Environment crashed with "No Observable object of type
+    // CosmaManager found." Funneling the gate through AppModel keeps
+    // the popup self-contained while still combining bootstrapReady
+    // AND embedderReady (set at the App level in
+    // fileSearchForntendApp.onChange handlers).
+    private var aiReady: Bool { model.aiReadyForSearch }
 
     /// Matches the outer overlay's definition: user is composing an @folder
     /// mention iff the last whitespace-separated word starts with '@' and
