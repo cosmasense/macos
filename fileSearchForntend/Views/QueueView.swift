@@ -655,12 +655,27 @@ struct QueuePauseButton: View {
 
     private var manuallyPaused: Bool { model.queueStatus?.manuallyPaused == true }
     private var schedulerPaused: Bool { model.queueStatus?.schedulerPaused == true }
-    private var isPaused: Bool { manuallyPaused || schedulerPaused }
+    /// Authoritative "is the queue actually paused" — uses the backend's
+    /// computed `paused` field (which already accounts for the user
+    /// override on top of scheduler + bootstrap), not the per-flag OR
+    /// of `manually_paused || scheduler_paused`. With the v0.8.8
+    /// override semantics, those two flags can both be false while the
+    /// queue is running because of an override=True nudge, or both
+    /// false while the queue is paused via override=False. Trusting the
+    /// backend's combined `paused` keeps the button label honest.
+    private var isPaused: Bool { model.queueStatus?.paused == true }
+    /// One-shot override state from the backend.
+    ///   nil    → no override, scheduler/manual flags reflect reality
+    ///   true   → user nudged "run now" (overrides scheduler pause)
+    ///   false  → user nudged "pause now" (overrides scheduler run)
+    private var userOverride: Bool? { model.queueStatus?.userOverride }
 
     /// Scheduler-paused wins over manual pause for color, because the
     /// scheduler is the more informative state (it tells the user *why*
     /// indexing isn't running right now, which manual pause doesn't).
     private var tint: Color? {
+        // Override → scheduler-pause: "running because the user said so" → no special tint
+        if userOverride == true && schedulerPaused { return nil }
         if schedulerPaused { return .orange }
         if manuallyPaused { return .brandBlue }
         return nil
@@ -673,6 +688,15 @@ struct QueuePauseButton: View {
     }
 
     private var helpText: String {
+        // Override states get their own messages — they're the most
+        // surprising case (the queue is in a state opposite to what the
+        // scheduler/manual flags would suggest).
+        if userOverride == true && schedulerPaused {
+            return "Running by your override even though the scheduler would pause for \(schedulerReason). Click to pause. The override clears automatically once the scheduler conditions change."
+        }
+        if userOverride == false && !schedulerPaused {
+            return "Paused by you. Click to start. The pause clears automatically once the scheduler conditions change."
+        }
         switch (manuallyPaused, schedulerPaused) {
         case (true, true):
             return "Paused by you and by the scheduler (waiting on \(schedulerReason)). Click to start. You can modify the schedule in Settings › Indexing."
@@ -705,29 +729,29 @@ struct QueuePauseButton: View {
         .animation(.easeOut(duration: 0.15), value: isHovering)
         .animation(.easeOut(duration: 0.2), value: manuallyPaused)
         .animation(.easeOut(duration: 0.2), value: schedulerPaused)
+        .animation(.easeOut(duration: 0.2), value: userOverride)
     }
 
-    /// When the scheduler is the blocker, we keep the pause glyph showing
-    /// to communicate *what is happening right now* (queue is paused).
-    /// When only the user has paused, we flip to the play glyph because
-    /// there's nothing else holding it — clicking will actually start.
+    /// Glyph reflects the *next action* the user will take by tapping:
+    ///   - queue paused now (whether by manual, scheduler, or override) → play
+    ///   - queue running now → pause
+    /// This is more honest than "show pause when scheduler is the blocker
+    /// even though clicking starts" — under the override semantics the
+    /// click always flips the current state, so the icon always reflects
+    /// the inverse.
     private var iconName: String {
-        if schedulerPaused { return "pause.fill" }
-        if manuallyPaused { return "play.fill" }
-        return "pause.fill"
+        isPaused ? "play.fill" : "pause.fill"
     }
 
-    /// Any paused state → the click tries to start indexing. If the user
-    /// manually paused, resume that. If only the scheduler is holding,
-    /// force-resume to override its pause (the user wanted manual control
-    /// even when the scheduler says no).
+    /// Tap is a one-shot override toggle: whatever the queue is doing
+    /// right now, the user wants the opposite, until the scheduler's
+    /// next decision transition. Backend handles the override semantics
+    /// (manual_pause / manual_resume route through `_user_override`),
+    /// so the frontend just needs to call the existing pause/resume
+    /// endpoints based on what's currently happening.
     private func handleTap() async {
         if isPaused {
-            if manuallyPaused {
-                await model.toggleQueuePause()
-            } else {
-                await model.forceResumeQueue()
-            }
+            await model.forceResumeQueue()
         } else {
             await model.toggleQueuePause()
         }

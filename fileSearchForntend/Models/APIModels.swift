@@ -666,6 +666,13 @@ struct QueueStatusResponse: Codable {
     let waiting: Int
     let processing: Int
     let failingRules: [String]
+    /// One-shot user override on top of the scheduler decision (backend
+    /// v0.8.8+). nil = no override / scheduler in control. true = user
+    /// forced "run now" (may run even while scheduler_paused). false =
+    /// user forced "pause now". Auto-cleared on next scheduler
+    /// transition. The button uses this so we can label correctly when
+    /// the override is in effect.
+    let userOverride: Bool?
 
     enum CodingKeys: String, CodingKey {
         case paused
@@ -676,6 +683,7 @@ struct QueueStatusResponse: Codable {
         case waiting
         case processing
         case failingRules = "failing_rules"
+        case userOverride = "user_override"
     }
 
     init(from decoder: Decoder) throws {
@@ -688,6 +696,7 @@ struct QueueStatusResponse: Codable {
         waiting = try container.decode(Int.self, forKey: .waiting)
         processing = try container.decode(Int.self, forKey: .processing)
         failingRules = (try? container.decode([String].self, forKey: .failingRules)) ?? []
+        userOverride = try? container.decodeIfPresent(Bool.self, forKey: .userOverride)
     }
 }
 
