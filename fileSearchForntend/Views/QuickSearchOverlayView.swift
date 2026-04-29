@@ -795,10 +795,17 @@ private class QuickLookHelper: NSObject, QLPreviewPanelDataSource, QLPreviewPane
 
 struct PopupSearchFieldView: View {
     @Environment(AppModel.self) private var model
+    @Environment(CosmaManager.self) private var cosmaManager
     @FocusState.Binding var isFocused: Bool
     @Binding var selectedSuggestionIndex: Int
     var onEmptySubmit: () -> Void = {}
     @State private var backspaceMonitor: Any?
+
+    // Mirror of HomeView.aiReady — search is a no-op if either the
+    // bootstrap files aren't on disk or the embedder hasn't loaded into
+    // memory yet. Without this gate, the popup overlay let users submit
+    // queries during cold-start and they came back empty.
+    private var aiReady: Bool { cosmaManager.bootstrapReady && model.embedderReady }
 
     /// Matches the outer overlay's definition: user is composing an @folder
     /// mention iff the last whitespace-separated word starts with '@' and
@@ -827,10 +834,12 @@ struct PopupSearchFieldView: View {
                         }
                     }
 
-                    TextField("Search files or type @folder...", text: $model.popupSearchText)
+                    TextField(aiReady ? "Search files or type @folder..." : "Setting up AI models — search paused", text: $model.popupSearchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .focused($isFocused)
+                        .disabled(!aiReady)
+                        .opacity(aiReady ? 1 : 0.55)
                         .onSubmit {
                             handleEnterKey()
                         }

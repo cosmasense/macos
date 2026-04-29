@@ -23,13 +23,27 @@ class UpdatesStream: NSObject {
     private let maxReconnectAttempts = 5
     private var reconnectTimer: Timer?
     private var session: URLSession?
-    private var eventBuffer = ""
+    // SSE byte buffer — touched only from the URLSession delegate queue,
+    // which is a serial OperationQueue we own (see init). Marking it
+    // `nonisolated(unsafe)` lets the delegate methods run off-main without
+    // hopping to @MainActor for every byte received. Before this change,
+    // every `didReceive data:` callback dispatched onto the main actor
+    // and ran the full SSE parse + JSON decode there — during a discovery
+    // sweep that can be thousands of events per second, the UI thread
+    // stalled and the whole app appeared frozen.
+    private nonisolated(unsafe) var eventBuffer = ""
     private let maxBufferSize = 1_000_000  // 1MB safety limit
 
-    var onEvent: ((BackendUpdateEvent) -> Void)?
-    var onStateChange: ((State) -> Void)?
+    // Closures are assigned once during `configureStreams` (MainActor) and
+    // then invoked from the SSE delegate queue. Mark as `nonisolated(unsafe)`
+    // so the delegate callbacks can read them without hopping to MainActor
+    // for every event. The closures themselves are responsible for
+    // re-entering MainActor before mutating any UI state — see
+    // `AppModel.configureStreams`.
+    nonisolated(unsafe) var onEvent: ((BackendUpdateEvent) -> Void)?
+    nonisolated(unsafe) var onStateChange: ((State) -> Void)?
 
-    private let jsonDecoder: JSONDecoder = {
+    nonisolated private let jsonDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
@@ -40,7 +54,14 @@ class UpdatesStream: NSObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = .infinity
         config.timeoutIntervalForResource = .infinity
-        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        // Dedicated serial queue for SSE delegate callbacks. Serial so
+        // `eventBuffer` can be touched without a lock; off-main so SSE
+        // parsing/decoding doesn't compete with view updates.
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        delegateQueue.qualityOfService = .utility
+        delegateQueue.name = "com.filesearch.UpdatesStream.sse"
+        session = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
     }
 
     func connect(to baseURL: URL) {
@@ -93,7 +114,11 @@ class UpdatesStream: NSObject {
         dataTask?.resume()
     }
 
-    private func handleReceivedData(_ data: Data) {
+    /// Parse one or more SSE chunks. Runs on the URLSession delegate queue
+    /// (background, serial), NOT on the main actor — see the
+    /// `eventBuffer` comment for context. Only the final `onEvent` hop
+    /// crosses to MainActor (handled by AppModel.configureStreams).
+    nonisolated private func handleReceivedData(_ data: Data) {
         guard let text = String(data: data, encoding: .utf8) else { return }
 
         eventBuffer += text
@@ -122,7 +147,7 @@ class UpdatesStream: NSObject {
         }
     }
 
-    private func parseAndEmitEvent(_ eventText: String) {
+    nonisolated private func parseAndEmitEvent(_ eventText: String) {
         // SSE lines can be:
         // data: {json}
         // event: event_name
@@ -203,9 +228,10 @@ extension UpdatesStream: URLSessionDataDelegate {
     }
 
     nonisolated func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        Task { @MainActor in
-            self.handleReceivedData(data)
-        }
+        // We're already on the dedicated serial delegate queue (see init).
+        // Parse + decode here; only the resolved BackendUpdateEvent crosses
+        // to the main actor, via `onEvent`'s callback in AppModel.
+        handleReceivedData(data)
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

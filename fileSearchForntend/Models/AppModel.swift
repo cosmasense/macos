@@ -226,6 +226,19 @@ class AppModel {
         let detail: String
     }
 
+    // MARK: - Embedder Readiness
+    //
+    // `bootstrapReady` (on CosmaManager) only tells us the *files* needed
+    // to run AI are present on disk. It does NOT guarantee the embedder
+    // has been loaded into memory — that load happens lazily on first use
+    // and can take ~2-5s on cold start. Searching during that window
+    // returned 503 / no-results, which the user observed as "search just
+    // doesn't work right after launch." Track the live readiness flag
+    // from /api/status/ so views can disable the search bar until it's
+    // actually safe to query.
+    var embedderReady: Bool = false
+    @ObservationIgnored private var embedderPollTask: Task<Void, Never>?
+
     // MARK: - Queue State
 
     var queueStatus: QueueStatusResponse?
@@ -266,6 +279,7 @@ class AppModel {
     /// Connects SSE stream and fetches initial data.
     func connectToBackend() {
         configureStreams()
+        startEmbedderReadinessPolling()
         Task { [weak self] in
             await self?.refreshWatchedFolders()
             await self?.refreshFileStats()
@@ -274,8 +288,37 @@ class AppModel {
         }
     }
 
+    /// Poll /api/status/ until the backend reports `embedder_ready=true`,
+    /// then stop. Cheap (one HTTP GET every 2s, only while not ready) and
+    /// scoped to the post-launch window where the embedder model is
+    /// loading. Without this, search-bar disabled state never flipped on
+    /// after the bootstrap files were already present on disk — there
+    /// was no other signal that the in-memory model had finished loading.
+    private func startEmbedderReadinessPolling() {
+        embedderPollTask?.cancel()
+        embedderPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    let status = try await self.apiClient.fetchStatus()
+                    let ready = status.embedderReady ?? false
+                    if ready != self.embedderReady {
+                        self.embedderReady = ready
+                    }
+                    if ready { return }
+                } catch {
+                    // Backend not reachable yet (cold start) — keep retrying
+                    // silently. The connection-state machinery surfaces a
+                    // separate error to the UI if the backend stays down.
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
     deinit {
         updatesStream.disconnect()
+        embedderPollTask?.cancel()
     }
 
     // MARK: - Backend Connection

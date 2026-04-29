@@ -19,7 +19,14 @@ struct HomeView: View {
     // results, and triggering a new index when the summarizer isn't ready
     // just queues thousands of files to fail. Better to show a clear
     // "still setting up" state than to let the user kick off no-ops.
-    private var aiReady: Bool { cosmaManager.bootstrapReady }
+    //
+    // Two gates: bootstrapReady (model FILES exist on disk) AND
+    // embedderReady (the embedder has actually been loaded into memory
+    // and can answer queries). Bootstrap-only was insufficient because
+    // the embedder load happens lazily on the backend's first use and
+    // takes 2-5s after launch — search submitted in that window came
+    // back with no results, which read to users as "search is broken."
+    private var aiReady: Bool { cosmaManager.bootstrapReady && model.embedderReady }
 
     private var isActive: Bool {
         searchFieldFocused || !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
