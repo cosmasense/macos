@@ -28,6 +28,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set after teardown completes — tells applicationShouldTerminate to
     /// return .terminateNow instead of re-entering the quit dialog.
     private var readyToTerminate = false
+    /// One-shot bypass for the quit confirmation dialog. Set by
+    /// `CosmaManager.relaunchApp` (auto-update flow) so the user
+    /// doesn't get prompted "are you sure?" when the app is already
+    /// in the middle of programmatically restarting itself for an
+    /// update. Cleared inside `applicationShouldTerminate` after we
+    /// honor it once, so a follow-up manual Cmd+Q still gets the
+    /// usual confirmation.
+    static var bypassQuitConfirmationOnce: Bool = false
     /// The shutdown progress window shown during backend teardown.
     private var shutdownWindow: NSWindow?
     /// The quit confirmation window (non-modal so Cmd+Q still works).
@@ -144,6 +152,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let now = Date()
         let interval = now.timeIntervalSince(lastQuitAttemptTime)
         lastQuitAttemptTime = now
+
+        // One-shot bypass set by relaunchApp — restart-for-update
+        // initiates a quit programmatically and shouldn't surprise the
+        // user with an "are you sure?" dialog mid-flow. Consume the
+        // flag so the next manual Cmd+Q still confirms.
+        if Self.bypassQuitConfirmationOnce {
+            Self.bypassQuitConfirmationOnce = false
+            dismissQuitConfirmation()
+            beginGracefulShutdown()
+            return .terminateCancel
+        }
 
         let suppressed = UserDefaults.standard.bool(forKey: Self.suppressQuitConfirmationKey)
         if suppressed || interval < 0.8 {

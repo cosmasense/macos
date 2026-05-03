@@ -526,10 +526,6 @@ struct SearchResultGridCell: View {
     @State private var showStats = false
     @Environment(AppModel.self) private var model
 
-    private var displayTitle: String {
-        (result.file.title?.isEmpty == false ? result.file.title : nil) ?? result.file.filename
-    }
-
     var body: some View {
         VStack(spacing: 4) {
             ZStack(alignment: .bottomTrailing) {
@@ -545,7 +541,12 @@ struct SearchResultGridCell: View {
             }
             .frame(width: 100, height: 96, alignment: .center)
 
-            Text(displayTitle)
+            // Filename instead of LLM-generated title — matches list view
+            // semantics so users can scan grid + list interchangeably and
+            // recognize files by their on-disk name. The LLM title can be
+            // creative ("Field Trip Memories") but the user usually
+            // searches for "IMG_1234.JPG" and wants that exact label.
+            Text(result.file.filename)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)

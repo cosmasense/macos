@@ -335,6 +335,29 @@ class CosmaManager {
 
     // MARK: - Cosma Installation
 
+    /// URL of the cosmasense Metal fork wheel of llama-cpp-python. We
+    /// install this alongside cosma via `--with` because upstream
+    /// abetlen/llama-cpp-python on PyPI does not yet ship
+    /// `Qwen3VLChatHandler` (open feature request — see
+    /// github.com/abetlen/llama-cpp-python/issues/2080). Without the
+    /// fork wheel in cosma's tool venv, the backend's vision summarizer
+    /// has no handler class for Qwen3-VL and image summaries fall back
+    /// to the parser-metadata placeholder (the "JPEG image file: WxH
+    /// pixels…" string).
+    ///
+    /// `[tool.uv.sources]` in cosma-backend's pyproject.toml pins the
+    /// same wheel for local dev, but that section is uv-only metadata
+    /// and is stripped when the package is published to PyPI — so end
+    /// users on `uv tool install cosma` need the URL passed in
+    /// explicitly via `--with`.
+    private static let cosmaSenseForkWheelURL = "https://github.com/cosmasense/llama-cpp-python/releases/download/v0.3.32-metal/llama_cpp_python-0.3.32-cp313-cp313-macosx_11_0_arm64.whl"
+
+    /// Pin the tool venv to Python 3.13 so the cp313 wheel above
+    /// matches. uv defaults to the latest installed Python anyway, but
+    /// being explicit avoids a stock-PyPI fallback if the user happens
+    /// to have only 3.12 around.
+    private static let cosmaToolPythonVersion = "3.13"
+
     private func ensureCosma(uvPath: String) async throws {
         setupStage = .checkingCosma
 
@@ -344,7 +367,14 @@ class CosmaManager {
         }
 
         setupStage = .installingCosma
-        try await runProcess(executablePath: uvPath, arguments: ["tool", "install", "cosma"])
+        try await runProcess(
+            executablePath: uvPath,
+            arguments: [
+                "tool", "install", "cosma",
+                "--python", Self.cosmaToolPythonVersion,
+                "--with", Self.cosmaSenseForkWheelURL,
+            ]
+        )
 
         guard await findExecutable(name: "cosma") != nil else {
             throw CosmaError.installFailed("cosma not found after installation")
@@ -570,6 +600,13 @@ class CosmaManager {
                 // "Update downloaded — restarting…" banner never goes
                 // away even though the restart already happened.
                 refreshUpdateStatus()
+                // Vision self-heal: kick off in the background so we
+                // don't block the .running transition. If the user is
+                // on stock-PyPI llama-cpp-python (no Qwen3VLChatHandler),
+                // this will reinstall cosma with --with <fork-wheel>
+                // and restart the backend. Idempotent + per-version
+                // marker so it only ever runs once per release.
+                Task { await self.runVisionSelfHealIfNeeded() }
                 return
             }
         }
@@ -589,11 +626,22 @@ class CosmaManager {
     /// exits.
     ///
     /// Sequence:
-    ///   1. SIGTERM → give Quart's `after_serving` hook up to 6 s to run
-    ///      (needed so Ollama models are unloaded via keep_alive=0 and GPU is
-    ///      released — otherwise Ollama's model stays pinned in GPU after
-    ///      quit, making the machine laggy).
+    ///   1. SIGTERM → give Quart's `after_serving` hook up to 5 s to run
+    ///      (Ollama models are unloaded via keep_alive=0, SSE streams are
+    ///      torn down, joblib workers are killed). 5 s tracks uvicorn's
+    ///      `timeout_graceful_shutdown` plus a small safety buffer.
     ///   2. SIGKILL if still alive → wait up to 0.5 s.
+    ///
+    /// Wall-clock optimization: we drive the wait off `RunLoop.current.run`
+    /// instead of `usleep`. Critical because `readPipeAsync` parses the
+    /// backend's "Shutdown complete" log line on a background queue, then
+    /// dispatches `Task { @MainActor in shutdownCompleteSeen = true }` to
+    /// set the short-circuit flag. With `usleep`, the MainActor is busy-
+    /// spinning and that dispatched task can never run — so the loop
+    /// always burns the full timeout regardless of how fast the backend
+    /// actually exits. `RunLoop.run(until:)` ticks the main run loop each
+    /// iteration, which lets the pipe-handler's MainActor hop fire and
+    /// shortcuts us out of the wait the moment the backend says it's done.
     func stopServer() {
         guard ownsProcess, let process = serverProcess else { return }
 
@@ -614,36 +662,41 @@ class CosmaManager {
             shutdownCompleteSeen = false
             process.terminate()
 
-            // Window is 12 s (> uvicorn's 10 s graceful-shutdown budget) so
-            // the backend gets a full chance to exit cleanly. We short-
-            // circuit as soon as we see "Shutdown complete" on stdout —
-            // that's the backend's final log line, so anything after it
-            // is wasted wall-clock time.
-            let softDeadline = Date().addingTimeInterval(12.0)
+            // Window is 5 s (matches uvicorn's reduced 3 s graceful-
+            // shutdown budget + ~2 s safety for after_serving teardown).
+            // We short-circuit as soon as we see "Shutdown complete" on
+            // stdout — anything after that is wasted wall-clock time.
+            let softDeadline = Date().addingTimeInterval(5.0)
+            let stopStart = Date()
             while process.isRunning && Date() < softDeadline {
                 if shutdownCompleteSeen {
                     // Give the process one more tick to actually exit after
                     // it printed the line, then stop waiting.
-                    usleep(100_000)
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
                     break
                 }
-                usleep(50_000)  // 50 ms
+                // 50 ms tick. RunLoop.run drains pending dispatched blocks
+                // (including the pipe handler's Task that sets
+                // shutdownCompleteSeen), so the short-circuit actually fires.
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
             }
+
+            let elapsed = Date().timeIntervalSince(stopStart)
 
             // Step 2: SIGKILL (force) if still alive
             if process.isRunning {
-                appendLog("[CosmaManager] Backend did not exit in 12s, sending SIGKILL")
+                appendLog("[CosmaManager] Backend did not exit in 5s, sending SIGKILL")
                 kill(pid, SIGKILL)
                 let hardDeadline = Date().addingTimeInterval(0.5)
                 while process.isRunning && Date() < hardDeadline {
-                    usleep(50_000)
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
                 }
             }
 
             if process.isRunning {
                 appendLog("[CosmaManager] Backend pid \(pid) still running after SIGKILL")
             } else {
-                appendLog("[CosmaManager] Backend pid \(pid) terminated cleanly")
+                appendLog(String(format: "[CosmaManager] Backend pid %d terminated cleanly in %.2fs", pid, elapsed))
             }
         }
 
@@ -933,6 +986,10 @@ class CosmaManager {
     /// downloaded — the next launch's `getInstalledVersion()` picks up the
     /// new bits and the backend spawns against the new version.
     ///
+    /// Sets `AppDelegate.bypassQuitConfirmationOnce` so the user isn't
+    /// prompted with "are you sure?" for a quit they just programmatically
+    /// initiated themselves by clicking "Restart."
+    ///
     /// Robust against the rare case where `Bundle.main.bundleURL` points
     /// at a non-bundle (Xcode test runners) by falling back to a plain
     /// terminate so the user at least quits cleanly.
@@ -955,11 +1012,13 @@ class CosmaManager {
                     // terminate. The reaper in startManagedBackend handles
                     // the overlap, but the small delay smooths the UX.
                     try? await Task.sleep(for: .milliseconds(400))
+                    AppDelegate.bypassQuitConfirmationOnce = true
                     NSApp.terminate(nil)
                 }
             }
         } else {
             appendLog("[CosmaManager] Not running from a .app bundle — terminating without relaunch")
+            AppDelegate.bypassQuitConfirmationOnce = true
             NSApp.terminate(nil)
         }
     }
@@ -1296,6 +1355,100 @@ class CosmaManager {
         }
     }
 
+    // MARK: - Vision Self-Heal
+
+    /// Last cosma version we ran the vision self-heal reinstall against.
+    /// We only do the (heavy) reinstall once per version; if a future
+    /// release happens to also have vision broken on the user's Python
+    /// for some other reason, the marker advances and we try again.
+    /// Stored as a string in UserDefaults for cross-launch persistence.
+    private var visionSelfHealLastVersion: String? {
+        get { UserDefaults.standard.string(forKey: "cosmaVisionSelfHealVersion") }
+        set { UserDefaults.standard.set(newValue, forKey: "cosmaVisionSelfHealVersion") }
+    }
+
+    /// Probe `/api/status/vision`, and if the backend reports the
+    /// Qwen3-VL chat handler isn't loaded — meaning the cosma tool
+    /// venv has stock-PyPI llama-cpp-python instead of the cosmasense
+    /// fork — run a one-shot `uv tool install --reinstall cosma --with
+    /// <fork-wheel>` to pull the fork wheel in, then restart the
+    /// backend so the new venv contents take effect.
+    ///
+    /// Idempotent: tracks the cosma version we last self-healed for
+    /// in UserDefaults and skips if we've already tried this release.
+    /// If the endpoint is missing (older backend without the route)
+    /// or any probe step throws, we silently bail — a missing endpoint
+    /// is the same shape as "frontend was newer than backend during a
+    /// rollout" and we shouldn't loop-reinstall on that.
+    func runVisionSelfHealIfNeeded() async {
+        // Bail early if we don't own the process — the user is on the
+        // dev backend or attached to an external one and the reinstall
+        // wouldn't apply to what's actually running.
+        guard ownsProcess else { return }
+        guard let installedNow = installedVersion else { return }
+        if visionSelfHealLastVersion == installedNow {
+            return
+        }
+
+        let visionAvailable: Bool?
+        do {
+            visionAvailable = try await APIClient.shared.fetchVisionAvailable()
+        } catch {
+            // Older backend without /api/status/vision returns 404 →
+            // surfaces as a decoding/HTTP error here. Don't self-heal
+            // on a missing endpoint.
+            appendLog("[CosmaManager] Vision probe skipped: \(error.localizedDescription)")
+            return
+        }
+
+        guard let available = visionAvailable else { return }
+        if available {
+            // Mark this version as healthy so the next launch doesn't
+            // re-probe — `fetchVisionAvailable` is cheap, but writing
+            // the marker keeps the log clean across restarts.
+            visionSelfHealLastVersion = installedNow
+            return
+        }
+
+        appendLog("""
+        [CosmaManager] Vision self-heal: backend reports vision unavailable for \
+        cosma v\(installedNow). Reinstalling with the cosmasense fork wheel \
+        so Qwen3VLChatHandler is in the venv. This takes ~30 s and only runs once.
+        """)
+
+        guard let uvPath = await findExecutable(name: "uv") else {
+            appendLog("[CosmaManager] Vision self-heal aborted: uv not on PATH")
+            return
+        }
+
+        do {
+            let output = try await runProcess(
+                executablePath: uvPath,
+                arguments: [
+                    "tool", "install", "--reinstall", "cosma",
+                    "--python", Self.cosmaToolPythonVersion,
+                    "--with", Self.cosmaSenseForkWheelURL,
+                ]
+            )
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                appendLog("[CosmaManager] Vision self-heal install output: \(trimmed)")
+            }
+        } catch {
+            appendLog("[CosmaManager] Vision self-heal install FAILED: \(error.localizedDescription). Vision will stay off until the user reinstalls manually.")
+            return
+        }
+
+        // Mark BEFORE the restart — if the restart races us, we still
+        // don't want to loop-reinstall on the next launch.
+        visionSelfHealLastVersion = installedNow
+
+        appendLog("[CosmaManager] Vision self-heal: restarting backend to load the fork.")
+        isInternalRestartInFlight = true
+        await restartServer()
+        isInternalRestartInFlight = false
+    }
+
     private func getInstalledVersion() async -> String? {
         guard let cosmaPath = await findExecutable(name: "cosma") else { return nil }
         do {
@@ -1329,8 +1482,18 @@ class CosmaManager {
     }
 
     private func fetchLatestPyPIVersion() async throws -> String {
-        let url = URL(string: "https://pypi.org/pypi/cosma/json")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        // Bypass URLSession's default URL cache. PyPI's JSON endpoint
+        // serves a `Cache-Control` header that lets URLSession reuse
+        // a stale response for hours — without this, the first launch
+        // after a `v*` tag push keeps seeing the previous version
+        // ("cosma is up to date (vN-1)") long after PyPI itself has
+        // already published vN, so the auto-upgrade silently misses
+        // the release.
+        var request = URLRequest(url: URL(string: "https://pypi.org/pypi/cosma/json")!)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, _) = try await URLSession.shared.data(for: request)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let info = json?["info"] as? [String: Any],
               let version = info["version"] as? String else {

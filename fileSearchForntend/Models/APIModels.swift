@@ -335,6 +335,25 @@ struct ModelTestResponse: Codable {
     let detail: String
 }
 
+/// Response from GET /api/status/vision. Reports whether the LlamaCpp
+/// summarizer's chat handler is loaded — i.e. whether image files are
+/// summarized from pixels rather than from the parser placeholder.
+/// Drives `CosmaManager.runVisionSelfHealIfNeeded` which reinstalls
+/// cosma with the cosmasense fork wheel when this comes back false.
+struct VisionStatusResponse: Codable {
+    let visionAvailable: Bool
+    let handlerLoaded: Bool
+    let requiredHandler: String
+    let provider: String
+
+    enum CodingKeys: String, CodingKey {
+        case visionAvailable = "vision_available"
+        case handlerLoaded = "handler_loaded"
+        case requiredHandler = "required_handler"
+        case provider
+    }
+}
+
 // MARK: - Backend Update Events (for SSE)
 
 /// Backend SSE event structure

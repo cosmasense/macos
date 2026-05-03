@@ -116,6 +116,21 @@ final class APIClient: @unchecked Sendable {
         return try handleResponse(data: data, response: response)
     }
 
+    /// Probe whether the backend's vision summarizer chat handler is
+    /// loaded. Returns true iff Qwen3VLChatHandler is present in the
+    /// llama-cpp-python build cosma is running against. Throws on 404
+    /// (older backend without the route) or any transport error;
+    /// CosmaManager treats either case as "skip self-heal."
+    func fetchVisionAvailable() async throws -> Bool {
+        let url = baseURL.appendingPathComponent("/api/status/vision")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await healthSession.data(for: request)
+        let parsed: VisionStatusResponse = try handleResponse(data: data, response: response)
+        return parsed.visionAvailable
+    }
+
     // MARK: - Watch Jobs (formerly Watched Directories)
 
     func fetchWatchJobs() async throws -> JobsListResponse {
