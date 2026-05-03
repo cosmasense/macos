@@ -74,8 +74,13 @@ struct SettingsView: View {
     private func settingsPage<Content: View>(title: String?, @ViewBuilder _ content: () -> Content) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
-                if case .available(let installed, let latest) = cosmaManager.updateStatus {
-                    UpdateBanner(installed: installed, latest: latest, cosmaManager: cosmaManager)
+                switch cosmaManager.updateStatus {
+                case .downloadedPendingRestart(let running, let downloaded):
+                    UpdateBanner(running: running, downloaded: downloaded, downloading: false, cosmaManager: cosmaManager)
+                case .downloading(let running, let target):
+                    UpdateBanner(running: running, downloaded: target, downloading: true, cosmaManager: cosmaManager)
+                default:
+                    EmptyView()
                 }
                 if let title {
                     Text(title)
@@ -111,36 +116,45 @@ struct SettingsSectionHeader: View {
 // MARK: - Update Banner
 
 private struct UpdateBanner: View {
-    let installed: String
-    let latest: String
+    let running: String
+    let downloaded: String
+    let downloading: Bool
     let cosmaManager: CosmaManager
 
     var body: some View {
         HStack {
-            Image(systemName: "arrow.up.circle.fill")
-                .foregroundStyle(.white)
+            if downloading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            } else {
+                Image(systemName: "arrow.up.circle.fill")
+                    .foregroundStyle(.white)
+            }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Cosma Update Available")
+                Text(downloading ? "Downloading Cosma Update" : "Cosma Update Ready")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("v\(installed) \u{2192} v\(latest)")
+                Text("v\(running) \u{2192} v\(downloaded)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.8))
             }
             Spacer()
-            Button("Update Now") {
-                Task { await cosmaManager.performUpdate() }
-            }
-            .buttonStyle(.bordered)
-            .tint(.white)
-            .controlSize(.small)
+            if !downloading {
+                Button("Restart") {
+                    cosmaManager.relaunchApp()
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+                .controlSize(.small)
 
-            Button("Dismiss") {
-                cosmaManager.dismissUpdate()
+                Button("Dismiss") {
+                    cosmaManager.dismissUpdate()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.8))
+                .controlSize(.small)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.8))
-            .controlSize(.small)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.brandBlue))

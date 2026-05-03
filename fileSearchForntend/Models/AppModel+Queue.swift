@@ -192,6 +192,52 @@ extension AppModel {
         updateFolderProgressFromQueue(forFilePath: filePath)
     }
 
+    /// Batched version of ``trackQueueItemAdded`` for QUEUE_BATCH_ADDED
+    /// SSE events that carry hundreds of paths in a single payload.
+    ///
+    /// The per-path version mutates ``watchedFolders[i].totalFileCount``
+    /// once *per path*, so a single 500-path SSE event triggered 500
+    /// SwiftUI invalidations of the watched-folders array. During a
+    /// fresh-folder discovery sweep the backend coalesces ~5 events/s,
+    /// each ~400 paths — that's 2k @Observable mutations/sec landing on
+    /// the main run loop. We measured a 150 s main-thread hang from
+    /// this in practice (see temp/log.md, lines 1075→1907).
+    ///
+    /// This batched path: group paths by owning folder, mutate each
+    /// folder's counters exactly once, then refresh progress once per
+    /// folder. One 500-path event now produces O(folders) mutations
+    /// instead of O(paths).
+    internal func trackQueueItemsAddedBatch(filePaths: [String]) {
+        guard !filePaths.isEmpty else { return }
+        let now = Date()
+        expireOldProgressItems(now: now)
+
+        var deltaByFolderIndex: [Int: Int] = [:]
+        for fp in filePaths {
+            queueProgressItems[fp] = (addedAt: now, completed: false)
+            let normalized = (fp as NSString).standardizingPath
+            if let idx = watchedFolders.firstIndex(where: { normalized.hasPrefix($0.path) }) {
+                deltaByFolderIndex[idx, default: 0] += 1
+            }
+        }
+
+        for (idx, delta) in deltaByFolderIndex {
+            watchedFolders[idx].totalFileCount += delta
+            // One progress update per folder per batch.
+            let total = watchedFolders[idx].totalFileCount
+            let completed = watchedFolders[idx].indexedFileCount
+            if total > 0 {
+                watchedFolders[idx].progress = min(1.0, Double(completed) / Double(total))
+            }
+            watchedFolders[idx].lastModified = now
+            if watchedFolders[idx].progress >= 1.0 {
+                watchedFolders[idx].status = .complete
+            } else if watchedFolders[idx].status != .paused {
+                watchedFolders[idx].status = .indexing
+            }
+        }
+    }
+
     /// Tracks when a queue item completes (success or failure)
     internal func trackQueueItemCompleted(filePath: String) {
         let now = Date()

@@ -239,6 +239,22 @@ struct StatusResponse: Codable {
     }
 }
 
+/// Returned from `GET /api/status/version`. Used at app launch to confirm
+/// that the running backend speaks an API contract this frontend
+/// understands. See `BackendCompatibility` for the matching policy and
+/// `cosma_backend/__init__.py` for the bump procedure.
+struct BackendVersionResponse: Codable {
+    let backendVersion: String
+    let apiVersion: Int
+    let minFrontendApiVersion: Int
+
+    enum CodingKeys: String, CodingKey {
+        case backendVersion = "backend_version"
+        case apiVersion = "api_version"
+        case minFrontendApiVersion = "min_frontend_api_version"
+    }
+}
+
 /// Response from POST /api/settings/test_model.
 /// Indicates whether the configured summarizer model is reachable without loading it.
 struct ModelTestResponse: Codable {
@@ -673,6 +689,11 @@ struct QueueStatusResponse: Codable {
     /// transition. The button uses this so we can label correctly when
     /// the override is in effect.
     let userOverride: Bool?
+    /// True for ~10s after every /api/search/ hit. The queue is paused
+    /// so the embedder/LLM can serve the user query without contention.
+    /// UI: render a distinct "paused for search" reason badge.
+    /// Defaults to false on older backends that don't emit this field.
+    let searchPreempted: Bool
 
     enum CodingKeys: String, CodingKey {
         case paused
@@ -684,6 +705,7 @@ struct QueueStatusResponse: Codable {
         case processing
         case failingRules = "failing_rules"
         case userOverride = "user_override"
+        case searchPreempted = "search_preempted"
     }
 
     init(from decoder: Decoder) throws {
@@ -697,6 +719,7 @@ struct QueueStatusResponse: Codable {
         processing = try container.decode(Int.self, forKey: .processing)
         failingRules = (try? container.decode([String].self, forKey: .failingRules)) ?? []
         userOverride = try? container.decodeIfPresent(Bool.self, forKey: .userOverride)
+        searchPreempted = (try? container.decodeIfPresent(Bool.self, forKey: .searchPreempted)) ?? false
     }
 }
 
@@ -917,9 +940,26 @@ struct BackendSettingsResponse: Codable {
 
 struct SummarizerConfigSettingsResponse: Codable {
     let idleUnloadSeconds: Int
+    /// Cap every file at exactly one chunk's worth of summarize work.
+    /// Trades long-doc coverage for throughput. Backend default false.
+    let fastMode: Bool
+    /// Wall-clock budget per file for the summarize stage; remaining
+    /// chunks are skipped after this with a "[partial: ...]"
+    /// annotation in the summary. 0 = unlimited.
+    let summarizeBudgetSeconds: Double
 
     enum CodingKeys: String, CodingKey {
         case idleUnloadSeconds = "idle_unload_seconds"
+        case fastMode = "fast_mode"
+        case summarizeBudgetSeconds = "summarize_budget_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        idleUnloadSeconds = try c.decode(Int.self, forKey: .idleUnloadSeconds)
+        // Default-on-missing so older backends round-trip cleanly.
+        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) ?? false
+        summarizeBudgetSeconds = (try? c.decodeIfPresent(Double.self, forKey: .summarizeBudgetSeconds)) ?? 60.0
     }
 }
 
@@ -929,6 +969,62 @@ struct BackendSettings: Codable, Equatable {
     var embedder: EmbedderSettings
     var parser: ParserSettings
     var summarizer: SummarizerSettings
+    /// Queue knobs (concurrency, search-preempt window, indexing
+    /// grace period). Optional so older backends without queue
+    /// settings still decode. Mostly read-only from the UI for now;
+    /// surfacing them in Advanced settings would let power users
+    /// tune for their hardware.
+    var queue: QueueSettings?
+
+    enum CodingKeys: String, CodingKey {
+        case embedder, parser, summarizer, queue
+    }
+}
+
+struct QueueSettings: Codable, Equatable {
+    var cooldownSeconds: Int
+    var initialCooldownSeconds: Int
+    var maxConcurrency: Int
+    var maxRetries: Int
+    var fileProcessingTimeout: Int
+    var gpuMemoryCap: Double
+    var parseConcurrency: Int
+    var summarizeConcurrency: Int
+    var embedConcurrency: Int
+    var indexingStartGraceSeconds: Double
+    var searchPreemptSeconds: Double
+
+    enum CodingKeys: String, CodingKey {
+        case cooldownSeconds = "cooldown_seconds"
+        case initialCooldownSeconds = "initial_cooldown_seconds"
+        case maxConcurrency = "max_concurrency"
+        case maxRetries = "max_retries"
+        case fileProcessingTimeout = "file_processing_timeout"
+        case gpuMemoryCap = "gpu_memory_cap"
+        case parseConcurrency = "parse_concurrency"
+        case summarizeConcurrency = "summarize_concurrency"
+        case embedConcurrency = "embed_concurrency"
+        case indexingStartGraceSeconds = "indexing_start_grace_seconds"
+        case searchPreemptSeconds = "search_preempt_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Provide sensible defaults so a backend missing any new knob
+        // round-trips. This is the same forward-compat pattern used
+        // by QueueStatusResponse for `searchPreempted`.
+        cooldownSeconds = (try? c.decodeIfPresent(Int.self, forKey: .cooldownSeconds)) ?? 60
+        initialCooldownSeconds = (try? c.decodeIfPresent(Int.self, forKey: .initialCooldownSeconds)) ?? 5
+        maxConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .maxConcurrency)) ?? 6
+        maxRetries = (try? c.decodeIfPresent(Int.self, forKey: .maxRetries)) ?? 3
+        fileProcessingTimeout = (try? c.decodeIfPresent(Int.self, forKey: .fileProcessingTimeout)) ?? 300
+        gpuMemoryCap = (try? c.decodeIfPresent(Double.self, forKey: .gpuMemoryCap)) ?? 0.75
+        parseConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .parseConcurrency)) ?? 4
+        summarizeConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .summarizeConcurrency)) ?? 1
+        embedConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .embedConcurrency)) ?? 1
+        indexingStartGraceSeconds = (try? c.decodeIfPresent(Double.self, forKey: .indexingStartGraceSeconds)) ?? 5.0
+        searchPreemptSeconds = (try? c.decodeIfPresent(Double.self, forKey: .searchPreemptSeconds)) ?? 10.0
+    }
 }
 
 struct EmbedderSettings: Codable, Equatable {
@@ -980,6 +1076,15 @@ struct SummarizerSettings: Codable, Equatable {
     var ollama: OllamaSettings
     var online: OnlineSettings
     var provider: String
+    /// Cap every file at exactly one chunk's worth of summarize work.
+    /// Trades long-doc coverage for throughput. Backend default false.
+    /// Decoded with default fallback so the frontend stays compatible
+    /// with backends that pre-date this knob.
+    var fastMode: Bool
+    /// Wall-clock budget for the summarize stage per file. After this,
+    /// remaining chunks are skipped and the existing partial summary
+    /// is finalized with a "[partial: ...]" annotation. 0 = unlimited.
+    var summarizeBudgetSeconds: Double
 
     enum CodingKeys: String, CodingKey {
         case chunkOverlapTokens = "chunk_overlap_tokens"
@@ -988,6 +1093,21 @@ struct SummarizerSettings: Codable, Equatable {
         case ollama
         case online
         case provider
+        case fastMode = "fast_mode"
+        case summarizeBudgetSeconds = "summarize_budget_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chunkOverlapTokens = try c.decode(Int.self, forKey: .chunkOverlapTokens)
+        llamacpp = try c.decode(LlamaCppSettings.self, forKey: .llamacpp)
+        maxTokensPerRequest = try c.decode(Int.self, forKey: .maxTokensPerRequest)
+        ollama = try c.decode(OllamaSettings.self, forKey: .ollama)
+        online = try c.decode(OnlineSettings.self, forKey: .online)
+        provider = try c.decode(String.self, forKey: .provider)
+        // Default-on-missing so older backends round-trip cleanly.
+        fastMode = (try? c.decodeIfPresent(Bool.self, forKey: .fastMode)) ?? false
+        summarizeBudgetSeconds = (try? c.decodeIfPresent(Double.self, forKey: .summarizeBudgetSeconds)) ?? 60.0
     }
 }
 
@@ -1039,11 +1159,41 @@ struct QueueConfigResponse: Codable {
     let cooldownSeconds: Int
     let maxConcurrency: Int
     let maxRetries: Int
+    /// Per-stage concurrency knobs (added 2026-05). Defaults match
+    /// backend defaults so the UI shows sensible values when the
+    /// backend is older than these fields.
+    let parseConcurrency: Int
+    let summarizeConcurrency: Int
+    let embedConcurrency: Int
+    /// Search-typing nudge window. Indexing pauses for this long
+    /// after every search keystroke so the embedder/LLM gets
+    /// uncontended hardware. Default 10 s.
+    let searchPreemptSeconds: Double
+    /// Hold-off after model load before indexing starts. Lets a
+    /// search at app launch hit a quiet GPU. Default 5 s.
+    let indexingStartGraceSeconds: Double
 
     enum CodingKeys: String, CodingKey {
         case cooldownSeconds = "cooldown_seconds"
         case maxConcurrency = "max_concurrency"
         case maxRetries = "max_retries"
+        case parseConcurrency = "parse_concurrency"
+        case summarizeConcurrency = "summarize_concurrency"
+        case embedConcurrency = "embed_concurrency"
+        case searchPreemptSeconds = "search_preempt_seconds"
+        case indexingStartGraceSeconds = "indexing_start_grace_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cooldownSeconds = try c.decode(Int.self, forKey: .cooldownSeconds)
+        maxConcurrency = try c.decode(Int.self, forKey: .maxConcurrency)
+        maxRetries = try c.decode(Int.self, forKey: .maxRetries)
+        parseConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .parseConcurrency)) ?? 4
+        summarizeConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .summarizeConcurrency)) ?? 1
+        embedConcurrency = (try? c.decodeIfPresent(Int.self, forKey: .embedConcurrency)) ?? 1
+        searchPreemptSeconds = (try? c.decodeIfPresent(Double.self, forKey: .searchPreemptSeconds)) ?? 10.0
+        indexingStartGraceSeconds = (try? c.decodeIfPresent(Double.self, forKey: .indexingStartGraceSeconds)) ?? 5.0
     }
 }
 

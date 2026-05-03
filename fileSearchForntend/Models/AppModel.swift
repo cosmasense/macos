@@ -101,6 +101,25 @@ class AppModel {
     nonisolated static let searchCacheTTL: TimeInterval = 5 * 60  // 5 minutes
     nonisolated static let searchCacheMaxEntries: Int = 50
 
+    /// Debounced /api/search/typing dispatcher. Each keystroke calls
+    /// `notifySearchTyping()`, which (re)schedules a 200ms timer; when
+    /// that timer fires we hit the backend so it pauses indexing and
+    /// cancels in-flight tasks. Guarantees we don't burn an HTTP call
+    /// per character, and guarantees the GPU/CPU is freed before the
+    /// user hits Enter.
+    @ObservationIgnored private var searchTypingNudgeTask: Task<Void, Never>?
+    nonisolated static let searchTypingDebounceInterval: Duration = .milliseconds(200)
+
+    /// Call from any onChange handler attached to a search field. Idempotent.
+    func notifySearchTyping() {
+        searchTypingNudgeTask?.cancel()
+        searchTypingNudgeTask = Task { [apiClient] in
+            try? await Task.sleep(for: Self.searchTypingDebounceInterval)
+            if Task.isCancelled { return }
+            await apiClient.searchTypingNudge()
+        }
+    }
+
     // MARK: - Popup Search State (Quick Search Overlay)
 
     var popupSearchText: String = ""
@@ -239,6 +258,16 @@ class AppModel {
     var embedderReady: Bool = false
     @ObservationIgnored private var embedderPollTask: Task<Void, Never>?
 
+    // MARK: - Backend version handshake
+    //
+    // Populated once on connectToBackend() and on every reconnect. When
+    // `backendIncompatibleMessage` is non-nil, the UI must refuse to issue
+    // search/index/queue requests — they would either silently misbehave
+    // or hit endpoints that don't exist on the running backend. See
+    // BackendCompatibility.swift.
+    var backendVersion: BackendVersionResponse?
+    var backendIncompatibleMessage: String?
+
     // MARK: - Queue State
 
     var queueStatus: QueueStatusResponse?
@@ -281,10 +310,30 @@ class AppModel {
         configureStreams()
         startEmbedderReadinessPolling()
         Task { [weak self] in
+            // Run the version handshake first so a mismatch surfaces in
+            // the UI before any feature work fires off requests against
+            // an incompatible backend.
+            await self?.refreshBackendVersion()
             await self?.refreshWatchedFolders()
             await self?.refreshFileStats()
             await self?.refreshFilterConfig()
             await self?.refreshBackendSettings()
+        }
+    }
+
+    /// Probe `/api/status/version` and populate `backendVersion` /
+    /// `backendIncompatibleMessage`. Idempotent. Called from
+    /// `connectToBackend` and exposed for manual retry from a "Retry
+    /// connection" button.
+    func refreshBackendVersion() async {
+        let result = await BackendCompatibility.check(using: apiClient)
+        switch result {
+        case let .compatible(version):
+            self.backendVersion = version
+            self.backendIncompatibleMessage = nil
+        case .backendTooNew, .backendTooOld, .probeFailed:
+            self.backendVersion = nil
+            self.backendIncompatibleMessage = result.userFacingMessage
         }
     }
 
@@ -515,13 +564,12 @@ class AppModel {
             // Coalesced burst from the backend during bulk discovery —
             // see indexing_queue._added_flush_loop. One SSE event with
             // up to ~500 paths instead of 500 individual ADDED events.
-            // Iterating here is cheap because trackQueueItemAdded only
-            // mutates an @ObservationIgnored dict; folder-level state
-            // changes are debounced by the backend's flush interval.
+            // Use the batch tracker so we mutate each watched folder's
+            // counters exactly once instead of N times — the per-path
+            // loop produced a 150 s main-thread hang during a fresh
+            // discovery sweep (see temp/log.md).
             if let paths = event.data.paths {
-                for fp in paths {
-                    trackQueueItemAdded(filePath: fp)
-                }
+                trackQueueItemsAddedBatch(filePaths: paths)
             }
 
         case .queueItemUpdated, .queueItemProcessing:

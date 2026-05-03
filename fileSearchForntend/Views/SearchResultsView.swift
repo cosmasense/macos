@@ -34,9 +34,29 @@ struct SearchResultsView: View {
     @State private var selectedResultID: String?
     @FocusState private var resultsKeyFocus: Bool
     @AppStorage("searchResultViewMode") private var viewModeRaw: String = SearchResultViewMode.list.rawValue
+    /// Live column count for the grid view, recomputed from the
+    /// container's width whenever it changes. Drives up/down arrow
+    /// navigation in grid mode so a single arrow press jumps a whole
+    /// row instead of advancing one cell.
+    @State private var gridColumnCount: Int = 4
 
     private var viewMode: SearchResultViewMode {
         get { SearchResultViewMode(rawValue: viewModeRaw) ?? .list }
+    }
+
+    // Grid layout constants — kept in sync with ResultsGridView's
+    // GridItem so the column count we compute here actually matches
+    // the column count SwiftUI ends up rendering.
+    fileprivate static let gridMinCellWidth: CGFloat = 130
+    fileprivate static let gridSpacing: CGFloat = 14
+    fileprivate static let gridHorizontalPadding: CGFloat = 4
+
+    /// Mirrors GridItem.adaptive's column-count formula:
+    /// floor((W + spacing) / (minimum + spacing)).
+    fileprivate static func columnCount(for width: CGFloat) -> Int {
+        let usable = max(0, width - 2 * gridHorizontalPadding)
+        let count = Int(floor((usable + gridSpacing) / (gridMinCellWidth + gridSpacing)))
+        return max(1, count)
     }
 
     /// Filters search results based on file existence and user-configured filter patterns.
@@ -88,6 +108,9 @@ struct SearchResultsView: View {
     }
 
     private func previewResult(_ result: SearchResultItem) {
+        // Single-URL fallback — used by context-menu "Quick Look".
+        // Multi-item navigation is set up in previewSelectedResult so
+        // arrowing inside Quick Look walks the full result list.
         do {
             try model.withSecurityScopedAccess(for: result.file.filePath) {
                 let url = URL(fileURLWithPath: result.file.filePath)
@@ -110,9 +133,47 @@ struct SearchResultsView: View {
         openResult(result)
     }
 
+    /// Quick Look the currently-selected result. Hands the entire
+    /// filtered result list to the panel so its built-in left/right
+    /// arrows walk the search results — Finder semantics. Selection in
+    /// the underlying list/grid follows the panel via the
+    /// onIndexChanged callback.
     private func previewSelectedResult() {
-        guard let result = selectedResult else { return }
-        previewResult(result)
+        guard let result = selectedResult,
+              let selectedIndex = filteredResults.firstIndex(where: { $0.id == result.id })
+        else { return }
+
+        let urls = filteredResults.map { URL(fileURLWithPath: $0.file.filePath) }
+        let ids = filteredResults.map { $0.id }
+        let selectionBinding = $selectedResultID
+
+        do {
+            // Wrap only the initial file in security-scoped access so
+            // the bookmark prompt fires once (on first preview); QL's
+            // navigation between items relies on FDA being granted, so
+            // we don't try to scope every URL up front. Files outside
+            // any bookmarked folder will still preview correctly because
+            // the app is unsandboxed.
+            try model.withSecurityScopedAccess(for: result.file.filePath) {
+                QuickLookPreviewCoordinator.shared.present(
+                    urls: urls,
+                    selectedIndex: selectedIndex,
+                    onIndexChanged: { newIndex in
+                        guard newIndex >= 0, newIndex < ids.count else { return }
+                        selectionBinding.wrappedValue = ids[newIndex]
+                    }
+                )
+            }
+        } catch AppModel.BookmarkError.userCancelled {
+            print("User cancelled file access permission")
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Cannot Preview File"
+            alert.informativeText = "Unable to access this file. Please grant access to the containing folder."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
     
     private func pruneSelectionIfNeeded() {
@@ -127,6 +188,16 @@ struct SearchResultsView: View {
         return GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Track container width → recompute grid column count.
+                    // Hidden/zero-size — purely an observer.
+                    Color.clear
+                        .frame(height: 0)
+                        .onAppear {
+                            gridColumnCount = Self.columnCount(for: geometry.size.width)
+                        }
+                        .onChange(of: geometry.size.width) { _, newWidth in
+                            gridColumnCount = Self.columnCount(for: newWidth)
+                        }
                     if model.isSearching {
                         LoadingStateView()
                             .frame(maxWidth: .infinity)
@@ -189,11 +260,26 @@ struct SearchResultsView: View {
         .focusEffectDisabled()
         .focused($resultsKeyFocus)
         .onKeyPress(.downArrow) {
-            moveSelection(1)
+            // List: next item. Grid: jump down one full row.
+            moveSelection(by: viewMode == .grid ? gridColumnCount : 1)
             return filteredResults.isEmpty ? .ignored : .handled
         }
         .onKeyPress(.upArrow) {
-            moveSelection(-1)
+            moveSelection(by: viewMode == .grid ? -gridColumnCount : -1)
+            return filteredResults.isEmpty ? .ignored : .handled
+        }
+        .onKeyPress(.leftArrow) {
+            // Only meaningful in grid mode — list rows are full-width
+            // so left/right have no spatial meaning. Ignored in list
+            // so left/right could one day be repurposed for tabbing
+            // between panes without reworking this code.
+            guard viewMode == .grid else { return .ignored }
+            moveSelection(by: -1)
+            return filteredResults.isEmpty ? .ignored : .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard viewMode == .grid else { return .ignored }
+            moveSelection(by: 1)
             return filteredResults.isEmpty ? .ignored : .handled
         }
         .onKeyPress(.space) {
@@ -209,15 +295,24 @@ struct SearchResultsView: View {
         }
     }
     
-    private func moveSelection(_ delta: Int) {
+    /// Move the selection by `delta` items in the flat result array.
+    /// Grid mode passes ±columnCount for vertical moves and ±1 for
+    /// horizontal; list mode passes ±1. Clamps at the bounds rather
+    /// than ignoring out-of-range moves so up at the top row in grid
+    /// mode lands on row 0 instead of feeling stuck.
+    private func moveSelection(by delta: Int) {
         guard !filteredResults.isEmpty else { return }
         if selectedResultID == nil {
             selectedResultID = filteredResults.first?.id
             return
         }
-        if let index = filteredResults.firstIndex(where: { $0.id == selectedResultID }),
-           filteredResults.indices.contains(index + delta) {
-            selectedResultID = filteredResults[index + delta].id
+        guard let index = filteredResults.firstIndex(where: { $0.id == selectedResultID }) else {
+            selectedResultID = filteredResults.first?.id
+            return
+        }
+        let newIndex = max(0, min(filteredResults.count - 1, index + delta))
+        if newIndex != index {
+            selectedResultID = filteredResults[newIndex].id
         }
     }
 }
@@ -470,9 +565,16 @@ struct SearchResultGridCell: View {
         .onHover { hovering in
             isHovered = hovering
         }
+        // Finder semantics: single click selects, double click opens,
+        // right-click → context menu, Space → Quick Look. Both
+        // gestures registered together — SwiftUI fires the single-tap
+        // closure on the first click of a double too, but onSelect is
+        // idempotent so the redundant call is harmless.
+        .onTapGesture(count: 2) {
+            onOpen()
+        }
         .onTapGesture {
             onSelect()
-            onPreview()
         }
         .contextMenu {
             Button("Open") { onOpen() }
@@ -508,6 +610,14 @@ struct SearchResultRow: View {
         return (parent as NSString).lastPathComponent
     }
 
+    /// Backend annotates partial summaries with "[partial: ...]" when
+    /// the file's summarize budget elapsed before all chunks were
+    /// covered (or fast-mode capped at one chunk). Surfaced as a
+    /// small chip so users know the result was indexed by head only.
+    private var isPartialCoverage: Bool {
+        (result.file.summary ?? "").contains("[partial:")
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
@@ -522,11 +632,22 @@ struct SearchResultRow: View {
             .frame(width: 72, height: 72)
 
             VStack(alignment: .leading, spacing: 2) {
-                // Title (filename)
-                Text(result.file.filename)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                // Title (filename) + optional partial-coverage chip
+                HStack(spacing: 6) {
+                    Text(result.file.filename)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if isPartialCoverage {
+                        Text("partial")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.18), in: Capsule())
+                            .foregroundStyle(.orange)
+                            .help("This file's summary was generated from a partial pass — long content was truncated to fit the per-file budget. Search still works but the summary may not cover the whole document.")
+                    }
+                }
 
                 // Spotlight-style metadata: type · size · date · 📁 parent
                 HStack(spacing: 6) {
@@ -571,9 +692,16 @@ struct SearchResultRow: View {
         .onHover { hovering in
             isHovered = hovering
         }
+        // Finder semantics: single click selects, double click opens,
+        // right-click → context menu, Space → Quick Look. Both
+        // gestures registered together — SwiftUI fires the single-tap
+        // closure on the first click of a double too, but onSelect is
+        // idempotent so the redundant call is harmless.
+        .onTapGesture(count: 2) {
+            onOpen()
+        }
         .onTapGesture {
             onSelect()
-            onPreview()
         }
         // Drag originates from anywhere on the row, but the drag image
         // shows only the file thumbnail — the row's text/paths are
@@ -847,26 +975,29 @@ private final class QuickLookPreviewCoordinator: NSObject, QLPreviewPanelDataSou
     static let shared = QuickLookPreviewCoordinator()
     private var urls: [URL] = []
     private var currentIndex: Int = 0
+    /// Fired whenever Quick Look's panel switches items (user pressed
+    /// the panel's built-in left/right arrows). Lets the host view sync
+    /// its underlying selection so closing Quick Look leaves the row /
+    /// cell that was last previewed selected — the same behavior Finder
+    /// has when you arrow through Quick Look there.
+    private var indexChangedHandler: ((Int) -> Void)?
+    private var indexObservation: NSKeyValueObservation?
 
     func present(url: URL) {
         urls = [url]
         currentIndex = 0
+        indexChangedHandler = nil
         showPanel()
     }
 
     /// Present Quick Look with multiple URLs (all search results).
-    /// `selectedIndex` is the initially focused item.
-    func present(urls: [URL], selectedIndex: Int) {
+    /// `selectedIndex` is the initially focused item. `onIndexChanged`
+    /// fires every time the user navigates within the panel.
+    func present(urls: [URL], selectedIndex: Int, onIndexChanged: ((Int) -> Void)? = nil) {
         self.urls = urls
-        self.currentIndex = min(selectedIndex, urls.count - 1)
+        self.currentIndex = max(0, min(selectedIndex, urls.count - 1))
+        self.indexChangedHandler = onIndexChanged
         showPanel()
-    }
-
-    /// Update the selected item without reopening the panel.
-    func updateSelection(index: Int) {
-        guard index >= 0, index < urls.count else { return }
-        currentIndex = index
-        QLPreviewPanel.shared()?.reloadData()
     }
 
     private func showPanel() {
@@ -879,6 +1010,23 @@ private final class QuickLookPreviewCoordinator: NSObject, QLPreviewPanelDataSou
         panel.dataSource = self
         panel.currentPreviewItemIndex = currentIndex
         panel.makeKeyAndOrderFront(nil)
+
+        // Replace any prior observation — a fresh present() may have a
+        // different urls array and handler.
+        indexObservation?.invalidate()
+        indexObservation = panel.observe(
+            \.currentPreviewItemIndex,
+            options: [.new]
+        ) { [weak self] panel, _ in
+            guard let self else { return }
+            let idx = panel.currentPreviewItemIndex
+            self.currentIndex = idx
+            // KVO fires on the panel's queue; bounce to main so the
+            // host view's @State mutation stays on the main actor.
+            DispatchQueue.main.async {
+                self.indexChangedHandler?(idx)
+            }
+        }
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {

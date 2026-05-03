@@ -56,6 +56,28 @@ struct HomeView: View {
 
             // Main content — all elements stay in tree for smooth animation
             VStack(spacing: 0) {
+                // Backend version-handshake banner. Only shown when
+                // BackendCompatibility.check returned a mismatch
+                // (frontend/backend api_version drift). Hard error —
+                // the user can't do anything from here until the app
+                // and the backend agree on the wire contract.
+                if let msg = model.backendIncompatibleMessage {
+                    BackendIncompatibleBanner(message: msg)
+                        // Clear two pieces of top chrome:
+                        //   1. The hidden title-bar zone (~28pt, where
+                        //      the traffic-lights live) — without this
+                        //      the banner draws over the close/min/max
+                        //      buttons.
+                        //   2. ContentView's floating action-button row
+                        //      (top padding 12pt + ~46pt button) on the
+                        //      trailing side. 64pt of clearance keeps
+                        //      the banner squarely below both, with a
+                        //      bit of breathing room.
+                        .padding(.horizontal, 40)
+                        .padding(.top, 64)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 // Top spacer: shrinks when active, pushes content down when idle
                 Spacer()
                     .frame(maxHeight: isActive ? 60 : 84)
@@ -76,25 +98,19 @@ struct HomeView: View {
 
                 // Search bar — disabled until AI models are ready so the
                 // user can't kick off useless queries against an unready
-                // pipeline. Overlay shows why.
+                // pipeline. The "models loading" message is rendered as
+                // the field's placeholder text (see SearchFieldView), not
+                // as an overlay above it; the placeholder transitions
+                // back to the normal search prompt the moment
+                // `aiReadyForSearch` flips true. This matches
+                // PopupSearchFieldView, which has done it this way from
+                // the start.
                 SearchFieldView(isFocused: $searchFieldFocused)
                     .frame(minWidth: 400, maxWidth: isActive ? 680 : 520)
                     .padding(.horizontal, 40)
                     .padding(.bottom, 14)
                     .disabled(!aiReady)
                     .opacity(aiReady ? 1 : 0.55)
-                    .overlay(alignment: .center) {
-                        if !aiReady {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text("Setting up AI models — search paused")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(.thinMaterial, in: Capsule())
-                        }
-                    }
 
                 // Below search: results or chips/recent
                 if hasResults {
@@ -161,6 +177,12 @@ struct HomeView: View {
             HomeKeyCaptureView(
                 isSearchFocused: searchFieldFocused,
                 aiReady: aiReady,
+                // Once results are on screen, stop hijacking keystrokes
+                // into the search field. Space, arrows, and Return belong
+                // to the results view (Quick Look + grid/list navigation),
+                // and silently re-typing into the search bar would also
+                // re-trigger a search the user didn't ask for.
+                hasResults: hasResults,
                 onType: { chars in
                     // Focus first, then append on the next runloop tick.
                     // When SwiftUI focuses an NSTextField it auto-selects
@@ -202,6 +224,10 @@ struct HomeView: View {
 private struct HomeKeyCaptureView: NSViewRepresentable {
     let isSearchFocused: Bool
     let aiReady: Bool
+    /// True when search results / loading / error are currently on screen.
+    /// Skips type-capture so the results view can own arrows / space /
+    /// return for navigation and Quick Look.
+    let hasResults: Bool
     let onType: (String) -> Void
     let onEscape: () -> Void
 
@@ -250,9 +276,13 @@ private struct HomeKeyCaptureView: NSViewRepresentable {
                 }
 
                 // Only auto-capture typing when the field isn't already
-                // focused (otherwise the TextField handles it) and when AI
-                // is ready (no point starting a search we can't run).
-                guard !p.isSearchFocused, p.aiReady else { return event }
+                // focused (otherwise the TextField handles it), when AI
+                // is ready (no point starting a search we can't run),
+                // and when no results are showing (results-view owns
+                // space / arrows / return once the user has hits on
+                // screen — re-routing them into the field would also
+                // re-trigger a search).
+                guard !p.isSearchFocused, p.aiReady, !p.hasResults else { return event }
 
                 // Skip modified key combos (Cmd-Q, Cmd-W, etc.) — those
                 // belong to menus/system shortcuts, not to the search field.
@@ -303,6 +333,16 @@ struct SearchFieldView: View {
         return String(lastWord).hasPrefix("@")
     }
 
+    /// String shown inside the field when there's no user input. Drives
+    /// the animated swap: when this value changes, SwiftUI removes the
+    /// old Text and inserts a new one, and the .transition on that Text
+    /// scrolls the old line off and the new one in.
+    private var placeholderText: String {
+        model.aiReadyForSearch
+            ? "Search files or type @folder..."
+            : "Setting up AI models — search paused"
+    }
+
     var body: some View {
         @Bindable var model = model
 
@@ -326,29 +366,67 @@ struct SearchFieldView: View {
                         }
                     }
 
-                    // Text field with keyboard handling
-                    TextField("Search files or type @folder...", text: $model.searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .focused($isFocused)
-                        .onSubmit {
-                            handleEnterKey()
+                    // Text field with custom animated placeholder.
+                    //
+                    // SwiftUI's native TextField placeholder is rendered
+                    // by AppKit and can't be animated, so we pass "" for
+                    // the prompt and overlay a regular Text view that
+                    // SwiftUI can transition. Keying the Text on its
+                    // string value forces a fresh insert/remove pair on
+                    // every change, and the asymmetric move-edge
+                    // transition makes the old line scroll off to the
+                    // left while the new one scrolls in from the right
+                    // — a smooth swap that signals "the model just
+                    // finished loading" without any popping.
+                    ZStack(alignment: .leading) {
+                        if model.searchText.isEmpty {
+                            Text(placeholderText)
+                                .font(.system(size: 15))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .id(placeholderText)
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .trailing)
+                                        .combined(with: .opacity),
+                                    removal: .move(edge: .leading)
+                                        .combined(with: .opacity),
+                                ))
+                                .allowsHitTesting(false)
                         }
-                        .onChange(of: model.searchText) { oldValue, newValue in
-                            handleTextChange(oldValue: oldValue, newValue: newValue)
-                        }
-                        .onKeyPress(.tab) {
-                            handleTabKey()
-                            return .handled
-                        }
-                        .onKeyPress(.upArrow) {
-                            handleUpArrow()
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) {
-                            handleDownArrow()
-                            return .handled
-                        }
+                        TextField("", text: $model.searchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 15))
+                            .focused($isFocused)
+                            .onSubmit {
+                                handleEnterKey()
+                            }
+                            .onChange(of: model.searchText) { oldValue, newValue in
+                                handleTextChange(oldValue: oldValue, newValue: newValue)
+                                // Tell the backend the user is typing so it
+                                // pauses indexing + cancels in-flight work.
+                                // Debounced server-side, idempotent.
+                                model.notifySearchTyping()
+                            }
+                            .onKeyPress(.tab) {
+                                handleTabKey()
+                                return .handled
+                            }
+                            .onKeyPress(.upArrow) {
+                                handleUpArrow()
+                                return .handled
+                            }
+                            .onKeyPress(.downArrow) {
+                                handleDownArrow()
+                                return .handled
+                            }
+                    }
+                    // clipped() so the slide-out doesn't leak into the
+                    // search-icon area on the left of the bar.
+                    .clipped()
+                    .animation(
+                        .spring(response: 0.55, dampingFraction: 0.85),
+                        value: placeholderText,
+                    )
                 }
                 .frame(minHeight: 30)
 
@@ -883,6 +961,45 @@ private struct FolderFilterChip: View {
             .foregroundStyle(isActive ? .white : .primary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Backend Incompatibility Banner
+
+/// Hard-error banner shown when the frontend's pinned backend
+/// api_version disagrees with what's actually running. Replaces the
+/// previous "search just doesn't work and the error is mysterious"
+/// behavior with a clear message that names the version mismatch.
+/// See BackendCompatibility.swift.
+struct BackendIncompatibleBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Backend incompatible")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.red.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
 }
 

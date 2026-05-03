@@ -839,30 +839,63 @@ struct PopupSearchFieldView: View {
                         }
                     }
 
-                    TextField(aiReady ? "Search files or type @folder..." : "Setting up AI models — search paused", text: $model.popupSearchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .focused($isFocused)
-                        .disabled(!aiReady)
-                        .opacity(aiReady ? 1 : 0.55)
-                        .onSubmit {
-                            handleEnterKey()
+                    // Animated placeholder swap — see equivalent block in
+                    // HomeView.SearchFieldView for the full rationale.
+                    // Native TextField placeholder is unanimatable so we
+                    // overlay our own Text and key it on the string so
+                    // SwiftUI runs the asymmetric move-edge transition
+                    // when the loading hint flips to the search prompt.
+                    ZStack(alignment: .leading) {
+                        if model.popupSearchText.isEmpty {
+                            Text(aiReady
+                                 ? "Search files or type @folder..."
+                                 : "Setting up AI models — search paused")
+                                .font(.system(size: 15))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .id(aiReady)
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .trailing)
+                                        .combined(with: .opacity),
+                                    removal: .move(edge: .leading)
+                                        .combined(with: .opacity),
+                                ))
+                                .allowsHitTesting(false)
                         }
-                        .onChange(of: model.popupSearchText) { oldValue, newValue in
-                            handleTextChange(oldValue: oldValue, newValue: newValue)
-                        }
-                        .onKeyPress(.tab) {
-                            handleTabKey()
-                            return .handled
-                        }
-                        .onKeyPress(.upArrow) {
-                            handleUpArrow()
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) {
-                            handleDownArrow()
-                            return .handled
-                        }
+                        TextField("", text: $model.popupSearchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 15))
+                            .focused($isFocused)
+                            .disabled(!aiReady)
+                            .opacity(aiReady ? 1 : 0.55)
+                            .onSubmit {
+                                handleEnterKey()
+                            }
+                            .onChange(of: model.popupSearchText) { oldValue, newValue in
+                                handleTextChange(oldValue: oldValue, newValue: newValue)
+                                // Debounced backend nudge: pauses indexing
+                                // and cancels in-flight tasks so the GPU/CPU
+                                // is free for the user's query.
+                                model.notifySearchTyping()
+                            }
+                            .onKeyPress(.tab) {
+                                handleTabKey()
+                                return .handled
+                            }
+                            .onKeyPress(.upArrow) {
+                                handleUpArrow()
+                                return .handled
+                            }
+                            .onKeyPress(.downArrow) {
+                                handleDownArrow()
+                                return .handled
+                            }
+                    }
+                    .clipped()
+                    .animation(
+                        .spring(response: 0.55, dampingFraction: 0.85),
+                        value: aiReady,
+                    )
                 }
                 .frame(minHeight: 30)
 

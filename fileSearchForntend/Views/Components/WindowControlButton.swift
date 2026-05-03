@@ -34,6 +34,11 @@ struct WindowControlButton: View {
                         .strokeBorder(Color.white.opacity(isHovering ? 0.45 : 0.25), lineWidth: 0.6)
                 )
                 .scaleEffect(isHovering ? 1.06 : 1)
+                // Hit-test the full circle, not just the SF Symbol glyph,
+                // so a click anywhere on the round button triggers the
+                // action — matches user expectation for a button-shaped
+                // control rather than only the icon strokes.
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }

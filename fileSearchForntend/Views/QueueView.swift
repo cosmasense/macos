@@ -771,6 +771,28 @@ struct QueuePauseButton: View {
 /// scheduler is blocking indexing. Inline label names the single failing
 /// rule (e.g., "Battery Level"); when multiple rules fail it collapses to
 /// "N scheduling" so the chip stays compact. Click to see the full list.
+/// Shown for the brief window after a search: the backend has
+/// preempted the indexing queue so the embedder/LLM gets uncontended
+/// hardware. Auto-clears (no action needed).
+struct SearchPreemptChip: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass.circle.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text("Paused for search")
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .foregroundStyle(.blue)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.blue.opacity(0.15), in: Capsule())
+        .help("Indexing is paused for a few seconds so search has uncontended GPU/CPU. Resumes automatically.")
+    }
+}
+
+
 struct SchedulerWarningChip: View {
     let failingRules: [String]
     @State private var showDetails: Bool = false

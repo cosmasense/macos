@@ -8,7 +8,14 @@
 
 import Foundation
 
-class APIClient {
+// `@unchecked Sendable` lets call sites pass APIClient into
+// `Task.detached { ... }` (and similar) so backend calls never inherit
+// the caller's actor — particularly @MainActor on AppModel. The class
+// is safe to share across threads in practice: the only mutable
+// property is `baseURL`, which is only written on app launch / from
+// the connection-config flow before any concurrent reads happen.
+// URLSession is already documented as thread-safe.
+final class APIClient: @unchecked Sendable {
     static let shared = APIClient()
 
     private var baseURL: URL
@@ -97,6 +104,18 @@ class APIClient {
         return try handleResponse(data: data, response: response)
     }
 
+    /// Fetch the backend's version handshake. Used at startup to refuse
+    /// to operate against a backend whose API contract this build doesn't
+    /// understand — see BackendCompatibility.
+    func fetchBackendVersion() async throws -> BackendVersionResponse {
+        let url = baseURL.appendingPathComponent("/api/status/version")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await healthSession.data(for: request)
+        return try handleResponse(data: data, response: response)
+    }
+
     // MARK: - Watch Jobs (formerly Watched Directories)
 
     func fetchWatchJobs() async throws -> JobsListResponse {
@@ -145,6 +164,31 @@ class APIClient {
             limit: limit
         )
         return try await post(url: url, body: request)
+    }
+
+    /// Tells the backend the user is actively interacting with the
+    /// search bar so it pauses indexing dispatch AND cancels any
+    /// in-flight indexing tasks. Use this on every keystroke, ideally
+    /// debounced (~200 ms), so the GPU/CPU is free the moment the user
+    /// hits Enter. The endpoint is idempotent — spam-safe.
+    /// Errors are swallowed (this is fire-and-forget telemetry, the
+    /// search itself does the same preempt as a fallback).
+    @discardableResult
+    func searchTypingNudge() async -> Bool {
+        let url = baseURL.appendingPathComponent("/api/search/typing")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        do {
+            let (_, response) = try await healthSession.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                return true
+            }
+        } catch {
+            // intentional: typing nudge is best-effort
+        }
+        return false
     }
 
     // MARK: - Files

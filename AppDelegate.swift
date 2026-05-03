@@ -488,9 +488,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sbc.ownsProcess = cm.ownsProcess
         sbc.backendStatusText = cm.stageDescription
 
-        if case .available(_, let latest) = cm.updateStatus {
-            sbc.updateAvailableText = "Update available: v\(latest)"
-        } else {
+        switch cm.updateStatus {
+        case .downloadedPendingRestart(_, let downloaded):
+            sbc.updateAvailableText = "Restart to apply v\(downloaded)"
+        case .downloading(_, let target):
+            sbc.updateAvailableText = "Downloading v\(target)…"
+        default:
             sbc.updateAvailableText = nil
         }
     }

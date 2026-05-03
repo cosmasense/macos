@@ -65,6 +65,54 @@ struct IndexingSettingsSection: View {
                         Text("Set to 0 to keep models loaded permanently.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+
+                        Divider()
+
+                        // Fast mode: cap each file at 1 chunk for
+                        // throughput. Files end with a "[partial: ...]"
+                        // note in the summary. Useful for first-pass
+                        // indexing of a large corpus or low-end Macs.
+                        FastModeToggleRow(
+                            isOn: settings.summarizer?.fastMode ?? false,
+                        )
+
+                        StepperRow(
+                            label: "Summarize budget per file (seconds)",
+                            value: Int(settings.summarizer?.summarizeBudgetSeconds ?? 60),
+                            range: 0...600,
+                            step: 5,
+                            path: "summarizer.summarize_budget_seconds"
+                        )
+
+                        Text("After this many seconds the summarizer stops dispatching new chunks for the file and finalizes with whatever it has. 0 = unlimited.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+
+                        Divider()
+
+                        // Per-stage concurrency knobs (read-only
+                        // info — stage parallelism is generally not
+                        // user-tunable without risking GPU contention).
+                        InfoRow(
+                            label: "Parse concurrency",
+                            value: "\(settings.queue.parseConcurrency)",
+                        )
+                        InfoRow(
+                            label: "Summarize concurrency",
+                            value: "\(settings.queue.summarizeConcurrency)",
+                        )
+                        InfoRow(
+                            label: "Embed concurrency",
+                            value: "\(settings.queue.embedConcurrency)",
+                        )
+                        InfoRow(
+                            label: "Search-preempt window",
+                            value: String(format: "%.0fs", settings.queue.searchPreemptSeconds),
+                        )
+                        InfoRow(
+                            label: "Indexing start grace",
+                            value: String(format: "%.0fs", settings.queue.indexingStartGraceSeconds),
+                        )
                     } else {
                         HStack {
                             ProgressView().controlSize(.small)
@@ -405,6 +453,65 @@ private struct StepperRow: View {
         }
         .onChange(of: value) { _, newVal in
             localValue = newVal
+        }
+    }
+}
+
+// MARK: - Fast Mode Toggle
+
+/// Boolean setting bound to `summarizer.fast_mode` on the backend.
+/// Round-trips through the same updateBackendSetting path as
+/// numeric stepper rows; explanatory subtitle hangs underneath.
+private struct FastModeToggleRow: View {
+    @Environment(AppModel.self) private var model
+    let isOn: Bool
+    @State private var localValue: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Fast mode")
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Toggle("", isOn: $localValue)
+                    .labelsHidden()
+                    .onChange(of: localValue) { oldVal, newVal in
+                        guard oldVal != newVal else { return }
+                        Task {
+                            await model.updateBackendSetting(
+                                path: "summarizer.fast_mode",
+                                value: .bool(newVal),
+                            )
+                        }
+                    }
+            }
+            Text("Cap each file at one chunk. Trades long-document coverage for throughput. Files end with a partial-coverage note.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .onAppear { localValue = isOn }
+        .onChange(of: isOn) { _, newVal in localValue = newVal }
+    }
+}
+
+// MARK: - Info Row (read-only)
+
+/// Read-only label + value pair. Used for queue knobs that are
+/// driven from settings.toml or computed from hardware (e.g. n_ctx)
+/// and aren't intended to be user-editable from the GUI.
+private struct InfoRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(.secondary)
         }
     }
 }

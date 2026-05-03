@@ -28,6 +28,25 @@ struct ContentView: View {
             HomeView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Full-window tap catcher that dismisses any open popover.
+            // Sits between HomeView and the popover VStack so taps on the
+            // buttons/popover (above it in z-order) still hit them, while
+            // taps on the title-bar/header area or any other empty surface
+            // dismiss. NSEvent-based ClickOutsideDismissMonitor below
+            // handles bounds outside the SwiftUI hit-test area; this layer
+            // covers the spot the AppKit-level monitor misses (the
+            // title-bar drag region absorbs leftMouseDown before the local
+            // monitor sees it).
+            if showFoldersPopover || showProcessingPopover {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showFoldersPopover = false
+                        showProcessingPopover = false
+                    }
+                    .transition(.identity)
+            }
+
             // Floating action buttons + inline dropdown panels
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(alignment: .center, spacing: 8) {
@@ -199,9 +218,11 @@ struct DropTargetOverlay: View {
 // MARK: - Click-Outside Dismiss Monitor
 
 /// Installs an NSEvent local monitor that dismisses the popover when the
-/// user clicks outside its bounds. The monitor observes events passively —
-/// it never consumes them — so drag-out gestures on views behind the
-/// popover (e.g. dragging a search result to Finder) keep working.
+/// user clicks outside its bounds *or* presses Esc. The mouse monitor
+/// observes events passively — it never consumes them — so drag-out
+/// gestures on views behind the popover (e.g. dragging a search result to
+/// Finder) keep working. The Esc monitor consumes the event so the search
+/// field's own Esc handler doesn't also clear the query.
 private struct ClickOutsideDismissMonitor: NSViewRepresentable {
     let isActive: Bool
     let onOutsideClick: () -> Void
@@ -234,24 +255,28 @@ private struct ClickOutsideDismissMonitor: NSViewRepresentable {
     final class Coordinator {
         weak var hostView: NSView?
         var onOutsideClick: () -> Void
-        private var monitor: Any?
+        private var mouseMonitor: Any?
+        private var keyMonitor: Any?
 
         init(onOutsideClick: @escaping () -> Void) {
             self.onOutsideClick = onOutsideClick
         }
 
         deinit {
-            // Defensive: clean up the monitor even if SwiftUI never calls
+            // Defensive: clean up monitors even if SwiftUI never calls
             // dismantleNSView (e.g., the parent View disappears without a
             // tidy teardown path).
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
+            if let mouseMonitor {
+                NSEvent.removeMonitor(mouseMonitor)
+            }
+            if let keyMonitor {
+                NSEvent.removeMonitor(keyMonitor)
             }
         }
 
         func syncMonitor(isActive: Bool) {
-            if isActive, monitor == nil {
-                let token = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            if isActive, mouseMonitor == nil {
+                let mouseToken = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                     guard
                         let self,
                         let host = self.hostView,
@@ -265,10 +290,32 @@ private struct ClickOutsideDismissMonitor: NSViewRepresentable {
                     }
                     return event
                 }
-                self.monitor = token
-            } else if !isActive, let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
+                self.mouseMonitor = mouseToken
+            } else if !isActive, let mouseMonitor {
+                NSEvent.removeMonitor(mouseMonitor)
+                self.mouseMonitor = nil
+            }
+
+            if isActive, keyMonitor == nil {
+                // Esc (keyCode 53) closes the popover. Consumed so it
+                // doesn't also bubble up to HomeView's Esc handler, which
+                // would clear the search query as a side effect.
+                let keyToken = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard
+                        let self,
+                        let host = self.hostView,
+                        let window = host.window,
+                        event.window === window,
+                        event.keyCode == 53
+                    else { return event }
+
+                    self.onOutsideClick()
+                    return nil
+                }
+                self.keyMonitor = keyToken
+            } else if !isActive, let keyMonitor {
+                NSEvent.removeMonitor(keyMonitor)
+                self.keyMonitor = nil
             }
         }
     }
@@ -543,8 +590,7 @@ struct CompactFolderRow: View {
                 .foregroundStyle(.green)
                 .font(.system(size: 14))
         case .indexing:
-            ProgressView()
-                .controlSize(.small)
+            RotatingIndexingIcon()
         case .error:
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.red)
@@ -558,6 +604,28 @@ struct CompactFolderRow: View {
                 .foregroundStyle(.secondary)
                 .font(.system(size: 14))
         }
+    }
+}
+
+// MARK: - Rotating Indexing Icon
+
+/// Small spinning icon shown next to a folder row while it's actively
+/// indexing. Native ProgressView animates fine on macOS but reads as a
+/// static asterisk at small sizes, so we drive the rotation explicitly
+/// to make "this folder is working" obvious.
+private struct RotatingIndexingIcon: View {
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Image(systemName: "arrow.2.circlepath")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.brandBlue)
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
     }
 }
 

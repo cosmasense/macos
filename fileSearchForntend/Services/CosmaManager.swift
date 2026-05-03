@@ -5,6 +5,7 @@
 //  Manages the cosma backend lifecycle: auto-install, run, update.
 //
 
+import AppKit
 import Foundation
 
 @MainActor
@@ -31,8 +32,12 @@ class CosmaManager {
     enum UpdateStatus: Equatable {
         case idle
         case checking
-        case available(installed: String, latest: String)
-        case updating
+        /// A newer version was found and is being downloaded in the background.
+        case downloading(running: String, target: String)
+        /// A newer version has been installed on disk; the running backend is
+        /// still on the old version. The user must relaunch the app to pick
+        /// up the new bits.
+        case downloadedPendingRestart(running: String, downloaded: String)
         case upToDate
         case failed(String)
     }
@@ -43,6 +48,13 @@ class CosmaManager {
     var updateStatus: UpdateStatus = .idle
     var installedVersion: String?
     var latestVersion: String?
+    /// Version the *currently running* backend was launched with. Snapshotted
+    /// at the moment the server transitions to `.running`, so even if
+    /// `installedVersion` is later updated by a background `uv tool upgrade`,
+    /// we still know what's actually executing in-process. Differs from
+    /// `installedVersion` only between an upgrade landing on disk and the
+    /// user relaunching the app.
+    var runningVersion: String?
     var serverLog: String = ""
 
     // Bootstrap (llama.cpp + whisper.cpp model download) state.
@@ -140,6 +152,7 @@ class CosmaManager {
             ownsProcess = false
             setupStage = .running
             installedVersion = await getInstalledVersion()
+            runningVersion = installedVersion
             scheduleUpdateChecks()
             return
         }
@@ -508,6 +521,13 @@ class CosmaManager {
             if await isBackendReachable() {
                 setupStage = .running
                 restartCount = 0
+                // Snapshot the on-disk version we just spawned. Used later to
+                // detect when a background `uv tool upgrade` has installed a
+                // newer version that the running process hasn't picked up.
+                if installedVersion == nil {
+                    installedVersion = await getInstalledVersion()
+                }
+                runningVersion = installedVersion
                 return
             }
         }
@@ -594,11 +614,25 @@ class CosmaManager {
 
     // MARK: - Update Checks
 
-    /// On every app launch, make sure the installed `cosma` tool matches
-    /// the latest published version on PyPI. Non-fatal: if PyPI is slow or
-    /// the upgrade itself errors, we log and continue with what's installed.
-    /// Bounded to ~8s so a flaky network can't block startup.
+    /// Single in-flight upgrade guard. Both the launch-time background
+    /// upgrade and the periodic 6h check funnel through `upgradeCosmaIfNeeded`;
+    /// without this guard the two paths could race and run two `uv tool
+    /// upgrade` invocations concurrently against the same tool dir.
+    @ObservationIgnored private var upgradeInFlight: Bool = false
+
+    /// Check PyPI for a newer cosma release and, if found, download/install
+    /// it via `uv tool upgrade`. The currently-running backend keeps using
+    /// the previous version until the user relaunches the app — at that
+    /// point `runningVersion` < `installedVersion` and we surface a
+    /// "Restart to apply update" banner.
+    ///
+    /// Non-fatal: PyPI failures, network issues, or upgrade errors only
+    /// log and leave existing state intact.
     private func upgradeCosmaIfNeeded() async {
+        guard !upgradeInFlight else { return }
+        upgradeInFlight = true
+        defer { upgradeInFlight = false }
+
         guard let uvPath = await findExecutable(name: "uv") else { return }
         let installed = await getInstalledVersion()
         installedVersion = installed
@@ -615,10 +649,48 @@ class CosmaManager {
 
         if let installed, installed == latest {
             appendLog("[CosmaManager] cosma is up to date (v\(installed))")
+            refreshUpdateStatus()
             return
         }
 
+        // The user previously dismissed this exact version — respect that
+        // and don't redownload until something newer ships.
+        if dismissedVersion == latest {
+            appendLog("[CosmaManager] cosma v\(latest) available but dismissed by user")
+            return
+        }
+
+        // Compatibility clamp. The backend's `api_version` is bumped only
+        // on breaking wire-format changes (see cosma_backend/__init__.py),
+        // and this Swift build is pinned against a specific
+        // `kRequiredBackendApiVersion`. PyPI doesn't expose api_version
+        // directly, so we use a conservative proxy: only auto-upgrade
+        // within the same MAJOR.MINOR series as what's running. A
+        // major-or-minor bump must come with a coordinated frontend
+        // release; we refuse to auto-pull forward past it. Without this,
+        // an `uv tool upgrade --no-cache` could land the backend on an
+        // api_version this app can't decode and the user sees the dreaded
+        // "API issue" mid-session. The user explicitly asked for this gate
+        // when the auto-upgrade caused issues with new ProcessingStatus
+        // enum values.
+        let baseline = installed ?? runningVersion
+        if !BackendCompatibility.shouldAutoUpgrade(
+            runningVersion: baseline, latestVersion: latest,
+        ) {
+            appendLog("""
+            [CosmaManager] Auto-upgrade clamped: cosma v\(latest) is \
+            outside the compatible range for this app build (running \
+            \(baseline ?? "unknown")). Bundle a matching frontend release \
+            to upgrade past this point.
+            """)
+            return
+        }
+
+        let runningAtUpgradeStart = runningVersion ?? installed
         appendLog("[CosmaManager] Upgrading cosma: \(installed ?? "?") → \(latest)")
+        if let running = runningAtUpgradeStart {
+            updateStatus = .downloading(running: running, target: latest)
+        }
         do {
             try await withTimeout(seconds: 120) {
                 try await self.runProcess(
@@ -628,9 +700,36 @@ class CosmaManager {
             }
             installedVersion = await getInstalledVersion()
             appendLog("[CosmaManager] Upgrade complete (now v\(installedVersion ?? "?"))")
+            refreshUpdateStatus()
         } catch {
             appendLog("[CosmaManager] Auto-upgrade failed — continuing with old version: \(error.localizedDescription)")
+            updateStatus = .failed(error.localizedDescription)
         }
+    }
+
+    /// Recompute `updateStatus` from the latest `runningVersion` /
+    /// `installedVersion` pair. Idempotent — call after any version-related
+    /// change.
+    private func refreshUpdateStatus() {
+        guard let installed = installedVersion else {
+            updateStatus = .idle
+            return
+        }
+        guard let running = runningVersion else {
+            // No backend running yet (early launch). Nothing to compare —
+            // when the backend comes up it will use `installed` directly.
+            updateStatus = .upToDate
+            return
+        }
+        if running == installed {
+            updateStatus = .upToDate
+            return
+        }
+        if dismissedVersion == installed {
+            updateStatus = .upToDate
+            return
+        }
+        updateStatus = .downloadedPendingRestart(running: running, downloaded: installed)
     }
 
     /// Background variant of `upgradeCosmaIfNeeded` that runs *after* the
@@ -669,64 +768,73 @@ class CosmaManager {
         }
     }
 
+    /// Check PyPI for a newer release and, if found, download it. If a new
+    /// version is already on disk but pending restart, this is a no-op
+    /// re-render. Safe to call manually from the "Check for Updates"
+    /// button or from the periodic timer.
     func checkForUpdates() async {
+        // Already pending restart — no need to recheck; the user just
+        // needs to relaunch.
+        if case .downloadedPendingRestart = updateStatus { return }
+        if case .downloading = updateStatus { return }
+
         updateStatus = .checking
 
         do {
             let latest = try await fetchLatestPyPIVersion()
             latestVersion = latest
-            let installed = installedVersion ?? "unknown"
-
-            if installed != "unknown" && installed != latest {
-                if dismissedVersion == latest {
-                    updateStatus = .upToDate
-                } else {
-                    updateStatus = .available(installed: installed, latest: latest)
-                }
-            } else {
-                updateStatus = .upToDate
-            }
+            await upgradeCosmaIfNeeded()
+            // upgradeCosmaIfNeeded sets updateStatus on its own (downloading
+            // / pendingRestart / upToDate / failed), so nothing more to do.
+            _ = latest
         } catch {
             updateStatus = .failed(error.localizedDescription)
         }
     }
 
-    func performUpdate() async {
-        guard let uvPath = await findExecutable(name: "uv") else {
-            updateStatus = .failed("uv not found")
-            return
-        }
-
-        updateStatus = .updating
-
-        let wasRunning = ownsProcess && (serverProcess?.isRunning == true)
-        if wasRunning {
-            stopServer()
-            try? await Task.sleep(for: .seconds(1))
-        }
-
-        do {
-            try await runProcess(executablePath: uvPath, arguments: ["tool", "upgrade", "cosma", "--no-cache"])
-            installedVersion = await getInstalledVersion()
-            updateStatus = .upToDate
-            dismissedVersion = nil
-
-            if wasRunning {
-                try await relaunchLastProcess()
-            }
-        } catch {
-            updateStatus = .failed(error.localizedDescription)
-            if wasRunning {
-                try? await relaunchLastProcess()
-            }
-        }
-    }
-
+    /// User hit "Dismiss" on the restart banner. Suppress notifications for
+    /// this specific downloaded version until something newer ships.
     func dismissUpdate() {
-        if case .available(_, let latest) = updateStatus {
-            dismissedVersion = latest
+        if case .downloadedPendingRestart(_, let downloaded) = updateStatus {
+            dismissedVersion = downloaded
         }
         updateStatus = .upToDate
+    }
+
+    /// Relaunch the .app bundle and exit the current process. Called from
+    /// the "Restart" banner button after a new backend version has been
+    /// downloaded — the next launch's `getInstalledVersion()` picks up the
+    /// new bits and the backend spawns against the new version.
+    ///
+    /// Robust against the rare case where `Bundle.main.bundleURL` points
+    /// at a non-bundle (Xcode test runners) by falling back to a plain
+    /// terminate so the user at least quits cleanly.
+    func relaunchApp() {
+        let bundleURL = Bundle.main.bundleURL
+        let isAppBundle = bundleURL.pathExtension == "app"
+
+        if isAppBundle {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { [weak self] _, error in
+                Task { @MainActor [weak self] in
+                    if let error {
+                        self?.appendLog("[CosmaManager] Relaunch failed: \(error.localizedDescription)")
+                        self?.updateStatus = .failed("Relaunch failed: \(error.localizedDescription)")
+                        return
+                    }
+                    // Give the new instance a beat to start its CosmaManager
+                    // and reap our soon-to-be-orphaned backend before we
+                    // terminate. The reaper in startManagedBackend handles
+                    // the overlap, but the small delay smooths the UX.
+                    try? await Task.sleep(for: .milliseconds(400))
+                    NSApp.terminate(nil)
+                }
+            }
+        } else {
+            appendLog("[CosmaManager] Not running from a .app bundle — terminating without relaunch")
+            NSApp.terminate(nil)
+        }
     }
 
     private func scheduleUpdateChecks() {
@@ -756,6 +864,8 @@ class CosmaManager {
                     self.setupStage = .running
                     self.restartCount = 0
                     self.ownsProcess = false  // we didn't start it
+                    self.installedVersion = await self.getInstalledVersion()
+                    self.runningVersion = self.installedVersion
                     self.appendLog("[CosmaManager] Backend recovered externally — attached")
                     self.scheduleUpdateChecks()
                     return
