@@ -56,6 +56,77 @@ struct FileResponse: Codable, Identifiable, Hashable {
     }
 }
 
+/// Full debug-level snapshot of one indexed file: every files-table
+/// column the backend exposes plus keywords and embedding presence.
+/// Backs the "Stats for Nerds" panel — used to triage bad search hits
+/// (especially images, where the LLM-generated summary is the only
+/// signal the embedder ever sees) without having to crack open SQLite.
+///
+/// `found = false` is returned when the path isn't in the index;
+/// every other field is nil in that case. The Swift call site handles
+/// that uniform "not indexed" shape rather than parsing HTTP statuses.
+struct FileDetailsResponse: Codable {
+    let found: Bool
+    let filePath: String
+    let fileId: Int?
+    let filename: String?
+    let fileExtension: String?
+    let fileSize: Int?
+    /// Unix epoch seconds. The backend stores filesystem timestamps as
+    /// integers, not ISO strings, so they come through as Int — convert
+    /// at the view layer.
+    let created: Int?
+    let modified: Int?
+    let accessed: Int?
+    let contentType: String?
+    let contentHash: String?
+    let parsedAt: Int?
+    let title: String?
+    let summary: String?
+    let summarizedAt: Int?
+    let embeddedAt: Int?
+    /// One of DISCOVERED / PARSED / SUMMARIZED / COMPLETE / FAILED.
+    let status: String?
+    let processingError: String?
+    let owner: String?
+    let permissions: String?
+    let createdAt: Int?
+    let updatedAt: Int?
+    let keywords: [String]
+    let hasEmbedding: Bool
+    let embeddingModel: String?
+    let embeddingDimensions: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case found
+        case filePath = "file_path"
+        case fileId = "file_id"
+        case filename
+        case fileExtension = "extension"
+        case fileSize = "file_size"
+        case created
+        case modified
+        case accessed
+        case contentType = "content_type"
+        case contentHash = "content_hash"
+        case parsedAt = "parsed_at"
+        case title
+        case summary
+        case summarizedAt = "summarized_at"
+        case embeddedAt = "embedded_at"
+        case status
+        case processingError = "processing_error"
+        case owner
+        case permissions
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case keywords
+        case hasEmbedding = "has_embedding"
+        case embeddingModel = "embedding_model"
+        case embeddingDimensions = "embedding_dimensions"
+    }
+}
+
 struct FileStatsResponse: Codable {
     let totalFiles: Int
     let totalSize: Int

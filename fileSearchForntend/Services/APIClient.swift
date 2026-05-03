@@ -203,6 +203,23 @@ final class APIClient: @unchecked Sendable {
         return try await get(url: url)
     }
 
+    /// Pull every column the backend has for one file, plus its
+    /// keywords and embedding metadata. Powers the "Stats for Nerds"
+    /// panel — designed to expose why a search hit looks wrong (no
+    /// embedding row, FAILED status, empty summary, etc.) without
+    /// asking the user to look at the SQLite file.
+    func fetchFileDetails(path: String) async throws -> FileDetailsResponse {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/files/details"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = components.url else {
+            throw APIError.invalidURL
+        }
+        return try await get(url: url)
+    }
+
     // MARK: - Filter Configuration
 
     func fetchFilterConfig() async throws -> FilterConfigResponse {

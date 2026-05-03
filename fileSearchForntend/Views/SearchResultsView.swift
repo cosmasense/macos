@@ -523,6 +523,7 @@ struct SearchResultGridCell: View {
     let onOpen: () -> Void
     let onPreview: () -> Void
     @State private var isHovered = false
+    @State private var showStats = false
     @Environment(AppModel.self) private var model
 
     private var displayTitle: String {
@@ -582,6 +583,16 @@ struct SearchResultGridCell: View {
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
             }
+            Divider()
+            // Pulls full DB record + LLM summary + embedding metadata
+            // for this file. Useful when an image (or any other) hit
+            // looks wrong and you want to see what the indexer
+            // actually wrote without dropping into sqlite.
+            Button("Stats for Nerds…") { showStats = true }
+        }
+        .sheet(isPresented: $showStats) {
+            StatsForNerdsView(filePath: result.file.filePath)
+                .environment(model)
         }
         .onDrag {
             let url = URL(fileURLWithPath: result.file.filePath)
@@ -603,6 +614,7 @@ struct SearchResultRow: View {
     let onPreview: () -> Void
     @State private var isHovered = false
     @State private var metadata: FileMetadata = .empty
+    @State private var showStats = false
     @Environment(AppModel.self) private var model
 
     private var parentFolderName: String {
@@ -725,6 +737,12 @@ struct SearchResultRow: View {
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: result.file.filePath)])
             }
+            Divider()
+            Button("Stats for Nerds…") { showStats = true }
+        }
+        .sheet(isPresented: $showStats) {
+            StatsForNerdsView(filePath: result.file.filePath)
+                .environment(model)
         }
     }
 
