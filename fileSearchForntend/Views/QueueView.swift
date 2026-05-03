@@ -161,7 +161,13 @@ struct QueueContentView: View {
 
     /// Current queue ordered for visibility: things that are actively running
     /// bubble to the top, cooling_down (debounce window after a file change)
-    /// sinks to the bottom.
+    /// sinks to the bottom. Within each status group, items are shown in
+    /// **enqueue order** (oldest first) so the UI matches the actual
+    /// processing order — when the next worker frees up, it picks the
+    /// item displayed at the top of the WAITING group, not some random
+    /// alphabetical pick. The previous filename tiebreaker made the list
+    /// appear to "jump around" because the next file processed was rarely
+    /// the next one in the visible list.
     private var sortedQueueItems: [QueueItemResponse] {
         func rank(_ status: String) -> Int {
             switch status {
@@ -174,7 +180,13 @@ struct QueueContentView: View {
         return model.queueItems.sorted { a, b in
             let ra = rank(a.status), rb = rank(b.status)
             if ra != rb { return ra < rb }
-            // Stable tiebreaker by filename so the order doesn't jump around
+            // FIFO tiebreaker: oldest enqueue wins. Backend's
+            // `_processing_loop` walks `self._items.values()` in dict
+            // insertion order and claims the first WAITING items it
+            // sees, so this ordering is what actually drives processing.
+            // Final tiebreaker on file_path keeps the sort stable when
+            // two items happened to land in the same millisecond.
+            if a.enqueuedAt != b.enqueuedAt { return a.enqueuedAt < b.enqueuedAt }
             return a.filePath < b.filePath
         }
     }

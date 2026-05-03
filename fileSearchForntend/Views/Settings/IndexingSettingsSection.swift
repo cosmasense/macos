@@ -36,13 +36,27 @@ struct IndexingSettingsSection: View {
                             path: "queue.cooldown_seconds"
                         )
 
+                        // Parse concurrency is the only concurrency knob
+                        // that meaningfully changes throughput on a single-
+                        // GPU Mac. Summarize and embed are hardware-locked
+                        // at 1 (Metal LLM context, single MPS device) and
+                        // shown read-only below for context. The legacy
+                        // global "Max Concurrency" was removed because it
+                        // was a footgun: setting it lower than the per-
+                        // stage sum silently throttled parse without any
+                        // hint in the UI. The backend now derives the
+                        // global cap from the per-stage caps automatically.
                         StepperRow(
-                            label: "Max Concurrency",
-                            value: settings.queue.maxConcurrency,
+                            label: "Parse Concurrency",
+                            value: settings.queue.parseConcurrency,
                             range: 1...8,
                             step: 1,
-                            path: "queue.max_concurrency"
+                            path: "queue.parse_concurrency"
                         )
+
+                        Text("How many files can be parsed in parallel (PDF text extraction, Spotlight, OCR fallback). CPU + I/O bound, so 4–6 is the sweet spot on M-series Macs. Goes higher with more cores; lower to save battery.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
 
                         StepperRow(
                             label: "Max Retries",
@@ -90,20 +104,20 @@ struct IndexingSettingsSection: View {
 
                         Divider()
 
-                        // Per-stage concurrency knobs (read-only
-                        // info — stage parallelism is generally not
-                        // user-tunable without risking GPU contention).
-                        InfoRow(
-                            label: "Parse concurrency",
-                            value: "\(settings.queue.parseConcurrency)",
-                        )
+                        // Hardware-locked stage caps. Showing them read-
+                        // only (with the "(Hardware-limited)" suffix) is
+                        // intentional: a user cranking summarize to 2
+                        // would either OOM the unified memory or just
+                        // serialize internally inside Metal — no win,
+                        // possible crash. Same idea for embed on a
+                        // single MPS device.
                         InfoRow(
                             label: "Summarize concurrency",
-                            value: "\(settings.queue.summarizeConcurrency)",
+                            value: "\(settings.queue.summarizeConcurrency) (Hardware-limited)",
                         )
                         InfoRow(
                             label: "Embed concurrency",
-                            value: "\(settings.queue.embedConcurrency)",
+                            value: "\(settings.queue.embedConcurrency) (Hardware-limited)",
                         )
                         InfoRow(
                             label: "Search-preempt window",
