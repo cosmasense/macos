@@ -195,7 +195,14 @@ struct fileSearchForntendApp: App {
                 }
 
                 // Backend went down → go back to setup view.
-                if isBackendConnected {
+                // EXCEPT during an in-process backend restart (e.g. the
+                // catch-up upgrade restart): we know a relaunch is in
+                // flight, so keep ContentView visible. The friendly
+                // "Update downloaded — restarting backend automatically…"
+                // banner already explains what's happening; tearing
+                // ContentView down to BackendConnectionView for ~5s
+                // would feel like a crash for no reason.
+                if isBackendConnected, !cosmaManager.isInternalRestartInFlight {
                     switch newStage {
                     case .stopped, .failed:
                         withAnimation(.easeInOut(duration: 0.3)) {

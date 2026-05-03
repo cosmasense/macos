@@ -115,6 +115,16 @@ class CosmaManager {
     /// then races our own relaunch and fights for port 60534. Cleared
     /// once the relaunch is in flight (or if no relaunch is coming).
     @ObservationIgnored private var intentionalStop: Bool = false
+
+    /// Observable: true while we're performing an in-process backend
+    /// restart that the frontend should NOT react to (e.g. the catch-up
+    /// upgrade restart). The setupStage observer in fileSearchForntendApp
+    /// uses this to keep `isBackendConnected = true` across the brief
+    /// .running → .stopped → .running cycle, so the user doesn't see
+    /// ContentView tear down to BackendConnectionView for a few seconds
+    /// while we relaunch with the new binary. Only the BACKEND restarts
+    /// — the frontend stays put.
+    var isInternalRestartInFlight: Bool = false
     /// Single-instance guard. Set true on entry to `startManagedBackend`,
     /// cleared on exit. Prevents two concurrent calls (e.g. an Xcode
     /// hot-reload firing while a previous launch attempt is still
@@ -757,7 +767,18 @@ class CosmaManager {
                 paired baseline v\(BackendCompatibility.kPairedBackendVersion); \
                 relaunching with v\(installedNow) so the version handshake stops failing.
                 """)
+                // Tell the frontend to ignore the upcoming
+                // .running → .stopped → .running cycle. Only the
+                // backend is restarting; users keep seeing ContentView
+                // (which already shows the friendly "Update downloaded
+                // — restarting backend automatically…" banner). Without
+                // this, the observer in fileSearchForntendApp tears
+                // ContentView down for ~5s and shows
+                // BackendConnectionView, which feels like the whole app
+                // crashed.
+                isInternalRestartInFlight = true
                 await restartServer()
+                isInternalRestartInFlight = false
             }
         } catch {
             appendLog("[CosmaManager] Auto-upgrade failed — continuing with old version: \(error.localizedDescription)")
