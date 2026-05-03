@@ -36,6 +36,33 @@ struct HomeView: View {
         !model.searchResults.isEmpty || model.isSearching || model.searchError != nil
     }
 
+    /// Friendly "an upgrade is in flight" copy to show in place of the
+    /// red incompatibility banner. Returns nil when no upgrade is
+    /// active — let the caller fall through to the normal incompatible
+    /// banner (or no banner at all). Keyed off both the version
+    /// handshake state AND CosmaManager's update progress so the
+    /// friendly banner only appears when we both know the backend is
+    /// "wrong" AND know we have a fix queued.
+    private var pendingUpdateBannerCopy: String? {
+        // Only swap in the friendly banner when the handshake itself is
+        // unhappy. If the backend is fine, no banner is needed at all.
+        guard model.backendIncompatibleMessage != nil else { return nil }
+        switch cosmaManager.updateStatus {
+        case .checking:
+            // Just kicked off a PyPI check. We expect it to land on
+            // either .downloading or .upToDate within a few seconds.
+            // While it's running, show the friendly banner so the user
+            // doesn't see the red "Backend incompatible" flash.
+            return "Checking for an update — please wait, the app will restart automatically."
+        case let .downloading(_, target):
+            return "Downloading update v\(target) — please wait, the app will restart automatically."
+        case let .downloadedPendingRestart(_, downloaded):
+            return "Update v\(downloaded) downloaded — restarting backend automatically…"
+        case .idle, .upToDate, .failed:
+            return nil
+        }
+    }
+
     var body: some View {
         ZStack {
             // Background — glass with a Light-only tint. The app pins
@@ -61,7 +88,22 @@ struct HomeView: View {
                 // (frontend/backend api_version drift). Hard error —
                 // the user can't do anything from here until the app
                 // and the backend agree on the wire contract.
-                if let msg = model.backendIncompatibleMessage {
+                // Three-way version banner. We pick exactly one:
+                //   * Update in flight → friendly "Updating, please wait"
+                //     banner. Used when the version handshake failed but
+                //     we know an upgrade is downloading or already on
+                //     disk waiting for restart. CosmaManager runs a
+                //     catch-up restart automatically, so the user just
+                //     needs to know "we're handling it" — not see a
+                //     scary red error.
+                //   * Genuine incompatibility → red BackendIncompatibleBanner.
+                //   * Otherwise → no banner.
+                if let pendingUpdate = pendingUpdateBannerCopy {
+                    UpdateInProgressBanner(message: pendingUpdate)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 64)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                } else if let msg = model.backendIncompatibleMessage {
                     BackendIncompatibleBanner(message: msg)
                         // Clear two pieces of top chrome:
                         //   1. The hidden title-bar zone (~28pt, where
@@ -961,6 +1003,53 @@ private struct FolderFilterChip: View {
             .foregroundStyle(isActive ? .white : .primary)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Update In-Progress Banner
+
+/// Friendly banner shown in place of the red "Backend incompatible"
+/// banner when we detect a mismatch *and* know an upgrade is being
+/// downloaded or has already been downloaded and is waiting for the
+/// catch-up restart in CosmaManager. Tells the user "we're handling
+/// it" instead of alarming them with a hard-error red banner during
+/// what is, in practice, a self-healing situation.
+struct UpdateInProgressBanner: View {
+    let message: String
+    @State private var spin: Double = 0
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.brandBlue)
+                .rotationEffect(.degrees(spin))
+                .onAppear {
+                    withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                        spin = 360
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Update available")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.brandBlue)
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.brandBlue.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.brandBlue.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
 }
 

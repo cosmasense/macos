@@ -326,6 +326,13 @@ class AppModel {
     /// `connectToBackend` and exposed for manual retry from a "Retry
     /// connection" button.
     func refreshBackendVersion() async {
+        // Clear any stale failure message before the new probe so a
+        // catch-up restart (CosmaManager kills the old backend, spawns
+        // the new one, this method re-fires) doesn't briefly show the
+        // previous run's red banner during the in-flight probe. The
+        // result will repopulate the message if the new probe also
+        // fails.
+        self.backendIncompatibleMessage = nil
         let result = await BackendCompatibility.check(using: apiClient)
         switch result {
         case let .compatible(version):

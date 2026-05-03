@@ -524,10 +524,18 @@ class CosmaManager {
                 // Snapshot the on-disk version we just spawned. Used later to
                 // detect when a background `uv tool upgrade` has installed a
                 // newer version that the running process hasn't picked up.
-                if installedVersion == nil {
-                    installedVersion = await getInstalledVersion()
-                }
+                // We re-query installedVersion here (not just on first launch)
+                // because a catch-up restart after an upgrade needs the
+                // fresh on-disk version, not the stale one from the
+                // previous launch's snapshot.
+                installedVersion = await getInstalledVersion()
                 runningVersion = installedVersion
+                // Recompute updateStatus now that running == installed
+                // again. Without this, .downloadedPendingRestart from
+                // the upgrade we just applied lingers, and the friendly
+                // "Update downloaded — restarting…" banner never goes
+                // away even though the restart already happened.
+                refreshUpdateStatus()
                 return
             }
         }
@@ -701,6 +709,29 @@ class CosmaManager {
             installedVersion = await getInstalledVersion()
             appendLog("[CosmaManager] Upgrade complete (now v\(installedVersion ?? "?"))")
             refreshUpdateStatus()
+
+            // Catch-up restart: if the running backend is older than this
+            // frontend's paired baseline, the version handshake will have
+            // already failed (404 if older than the version that added
+            // /api/status/version) and the user is staring at a "Backend
+            // incompatible" banner. Don't make them quit + reopen — kill
+            // the old backend and relaunch from the new install in the
+            // same session. Only triggers when the upgrade actually
+            // crossed the baseline, so we don't churn-restart for normal
+            // patch updates (those keep the "Restart to apply" semantics).
+            if let installedNow = installedVersion,
+               let runningNow = runningVersion,
+               BackendCompatibility.compareSemver(runningNow, BackendCompatibility.kPairedBackendVersion) < 0,
+               BackendCompatibility.compareSemver(installedNow, BackendCompatibility.kPairedBackendVersion) >= 0,
+               BackendCompatibility.compareSemver(installedNow, runningNow) > 0,
+               ownsProcess {
+                appendLog("""
+                [CosmaManager] Catch-up restart: running v\(runningNow) is below \
+                paired baseline v\(BackendCompatibility.kPairedBackendVersion); \
+                relaunching with v\(installedNow) so the version handshake stops failing.
+                """)
+                await restartServer()
+            }
         } catch {
             appendLog("[CosmaManager] Auto-upgrade failed — continuing with old version: \(error.localizedDescription)")
             updateStatus = .failed(error.localizedDescription)
@@ -744,12 +775,13 @@ class CosmaManager {
     /// before the new one is spawned, so there's no chance of two
     /// backends overlapping after an upgrade lands.
     private func upgradeCosmaInBackground() async {
-        // Small delay so we don't fight the just-started backend for I/O
-        // bandwidth (the backend spends its first few seconds loading
-        // SQLite + the embedder model). 3s is short enough that a user
-        // who quits-and-relaunches in under a minute still gets the new
-        // version on the second launch.
-        try? await Task.sleep(for: .seconds(3))
+        // No artificial delay. The PyPI check and `uv tool upgrade`
+        // are network-bound (HTTPS + wheel download), so they don't
+        // contend with the just-launched backend's local model load.
+        // Starting immediately means a stale-frontend user sees the
+        // friendly "Updating…" banner replace the red "Backend
+        // incompatible" banner within a second instead of staring at
+        // the red one for a few seconds while we did nothing.
         await upgradeCosmaIfNeeded()
     }
 
