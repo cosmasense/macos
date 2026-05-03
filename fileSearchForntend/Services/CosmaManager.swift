@@ -742,14 +742,47 @@ class CosmaManager {
             updateStatus = .downloading(running: running, target: latest)
         }
         do {
-            try await withTimeout(seconds: 120) {
+            // Capture uv's own output so a silent no-op ("nothing
+            // changed because resolver picked the same version") leaves
+            // a paper trail in the log instead of looking like a
+            // success. The upgradeCosmaIfNeeded tail used to discard
+            // this output, which made it impossible to debug "PyPI has
+            // 1.0.2, my install stays on 1.0.1" reports.
+            let uvOutput = try await withTimeout(seconds: 120) {
                 try await self.runProcess(
                     executablePath: uvPath,
                     arguments: ["tool", "upgrade", "cosma", "--no-cache"]
                 )
             }
+            // Trim — uv's output ends with a stray newline which makes
+            // the log noisier than it needs to be.
+            let trimmedOutput = uvOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedOutput.isEmpty {
+                appendLog("[CosmaManager] uv tool upgrade output: \(trimmedOutput)")
+            } else {
+                appendLog("[CosmaManager] uv tool upgrade returned with no output (resolver was a no-op?)")
+            }
             installedVersion = await getInstalledVersion()
             appendLog("[CosmaManager] Upgrade complete (now v\(installedVersion ?? "?"))")
+            // Sanity: the resolver no-op case. uv exited 0 + said
+            // nothing, and the on-disk version didn't move. The user's
+            // "PyPI shows 1.0.2 but I'm on 1.0.1" report — there's
+            // nothing more we can do automatically; flag it so the
+            // user knows to investigate manually.
+            if let target = latestVersion,
+               let landed = installedVersion,
+               BackendCompatibility.compareSemver(landed, target) < 0 {
+                appendLog("""
+                [CosmaManager] WARNING: uv tool upgrade exited 0 but \
+                installed version stayed at v\(landed) while PyPI's \
+                latest is v\(target). This is a uv resolver edge case \
+                (cached index, pinned constraint, marker mismatch). \
+                Try: `uv tool upgrade cosma --no-cache --reinstall` \
+                in a terminal — the --reinstall flag forces uv to \
+                rebuild the env from scratch instead of asking the \
+                resolver politely.
+                """)
+            }
             refreshUpdateStatus()
 
             // Catch-up restart: if the running backend is older than this

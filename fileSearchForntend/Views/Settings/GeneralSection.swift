@@ -443,12 +443,25 @@ private struct UpdateCheckStatusRow: View {
         .font(.system(size: 11))
     }
 
+    /// True when PyPI's latest is newer than what's installed — even
+    /// if `updateStatus` says `.upToDate`. This is the smoking gun for
+    /// "uv tool upgrade returned 0 but didn't actually upgrade", which
+    /// happens occasionally with version-resolution edge cases. We
+    /// surface it so the user sees the real situation instead of a
+    /// green "you're on the latest" lie.
+    private var pypiAheadOfInstalled: Bool {
+        guard let installed = installedVersion,
+              let latest = latestVersion,
+              compareSemver(installed, latest) < 0 else { return false }
+        return true
+    }
+
     private var icon: String {
         switch status {
         case .checking, .downloading:
             return "arrow.triangle.2.circlepath"
         case .upToDate:
-            return "checkmark.circle.fill"
+            return pypiAheadOfInstalled ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
         case .downloadedPendingRestart:
             return "arrow.down.circle.fill"
         case .failed:
@@ -463,7 +476,9 @@ private struct UpdateCheckStatusRow: View {
         case .checking, .downloading:
             return .secondary
         case .upToDate:
-            return .green
+            // Green only when truly current. PyPI ahead → orange so
+            // the user can tell something's off at a glance.
+            return pypiAheadOfInstalled ? .orange : .green
         case .downloadedPendingRestart:
             return .blue
         case .failed:
@@ -480,6 +495,20 @@ private struct UpdateCheckStatusRow: View {
         case let .downloading(_, target):
             return "Downloading v\(target)…"
         case .upToDate:
+            // The runtime says we're up to date, but cross-check
+            // against latestVersion before claiming it. Otherwise we
+            // print "v1.0.1 is the latest" while PyPI is serving
+            // v1.0.2 because uv tool upgrade silently no-op'd.
+            if let installed = installedVersion,
+               let latest = latestVersion,
+               compareSemver(installed, latest) < 0 {
+                return (
+                    "PyPI has v\(latest), but auto-upgrade left you on " +
+                    "v\(installed). Try `uv tool upgrade cosma --no-cache` " +
+                    "in a terminal — it'll print why uv decided not to " +
+                    "move forward."
+                )
+            }
             if let v = installedVersion {
                 return "Up to date — v\(v) is the latest."
             }
@@ -498,6 +527,31 @@ private struct UpdateCheckStatusRow: View {
             }
             return "—"
         }
+    }
+
+    /// Element-wise semver comparison up to three components.
+    /// Returns -1 / 0 / 1 like strcmp; missing components count as 0
+    /// and any non-numeric tail is stripped. Mirrors
+    /// BackendCompatibility.compareSemver but we keep a private copy
+    /// here rather than depending on that file's internals from a
+    /// view.
+    private func compareSemver(_ a: String, _ b: String) -> Int {
+        func parts(_ s: String) -> [Int] {
+            s.split(separator: ".")
+                .prefix(3)
+                .map { component -> Int in
+                    let digits = component.prefix { $0.isNumber }
+                    return Int(digits) ?? 0
+                }
+        }
+        let pa = parts(a), pb = parts(b)
+        for i in 0..<3 {
+            let av = i < pa.count ? pa[i] : 0
+            let bv = i < pb.count ? pb[i] : 0
+            if av < bv { return -1 }
+            if av > bv { return 1 }
+        }
+        return 0
     }
 
     /// "checked just now" / "checked 3m ago". Shown next to terminal

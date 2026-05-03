@@ -357,18 +357,28 @@ struct fileSearchForntendApp: App {
         }
     }
 
-    /// Animates the main window to a new size while keeping the center point
-    /// constant (so it grows outward instead of jumping anchored to the top-left).
+    /// Resizes the main window to `newSize` and parks it at the center
+    /// of whichever screen currently contains the window (or the main
+    /// screen as a fallback). Called once on launch — without this, the
+    /// SwiftUI WindowGroup honors NSWindow's frame autosave and the app
+    /// reopens wherever the user previously dragged it. We want every
+    /// fresh launch to land in the middle of the screen.
     private func recenterMainWindowToSize(_ newSize: NSSize) {
         DispatchQueue.main.async {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
                 return
             }
-            let oldFrame = window.frame
-            let oldCenter = NSPoint(x: oldFrame.midX, y: oldFrame.midY)
+            // Anchor to the screen the window currently overlaps (multi-
+            // monitor setups: don't yank a window from the side display
+            // onto the main one). Fall back to NSScreen.main, then to
+            // any available screen, before giving up.
+            let screen = window.screen
+                ?? NSScreen.main
+                ?? NSScreen.screens.first
+            guard let screenFrame = screen?.visibleFrame else { return }
             let newOrigin = NSPoint(
-                x: oldCenter.x - newSize.width / 2,
-                y: oldCenter.y - newSize.height / 2
+                x: screenFrame.midX - newSize.width / 2,
+                y: screenFrame.midY - newSize.height / 2
             )
             let newFrame = NSRect(origin: newOrigin, size: newSize)
             window.setFrame(newFrame, display: true, animate: true)
