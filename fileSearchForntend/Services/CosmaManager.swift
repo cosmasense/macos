@@ -107,6 +107,14 @@ class CosmaManager {
     @ObservationIgnored private var restartCount = 0
     @ObservationIgnored private let maxRestarts = 3
     @ObservationIgnored private var recoveryPollTask: Task<Void, Never>?
+    /// True while `stopServer` (or any caller routed through it, like the
+    /// catch-up upgrade restart) is intentionally killing the backend.
+    /// The terminationHandler installed in `launchBackendProcess` checks
+    /// this and skips its auto-restart branch when it's set — otherwise
+    /// SIGTERM (exit code 15) looks like a crash to the reaper, which
+    /// then races our own relaunch and fights for port 60534. Cleared
+    /// once the relaunch is in flight (or if no relaunch is coming).
+    @ObservationIgnored private var intentionalStop: Bool = false
     /// Single-instance guard. Set true on entry to `startManagedBackend`,
     /// cleared on exit. Prevents two concurrent calls (e.g. an Xcode
     /// hot-reload firing while a previous launch attempt is still
@@ -489,10 +497,17 @@ class CosmaManager {
         readPipeAsync(stdout)
         readPipeAsync(stderr)
 
-        // Crash detection with auto-restart
+        // Crash detection with auto-restart. Skipped entirely when the
+        // exit was an intentional stop (stopServer set the flag) — the
+        // caller is already managing the lifecycle, and racing them
+        // here spawns a duplicate backend that fights for port 60534.
         process.terminationHandler = { [weak self] proc in
             Task { @MainActor [weak self] in
                 guard let self = self, self.ownsProcess else { return }
+                if self.intentionalStop {
+                    self.appendLog("[CosmaManager] Process exited (intentional stop) — not restarting from terminationHandler")
+                    return
+                }
                 let code = proc.terminationStatus
                 if code != 0 && self.restartCount < self.maxRestarts {
                     self.restartCount += 1
@@ -521,6 +536,10 @@ class CosmaManager {
             if await isBackendReachable() {
                 setupStage = .running
                 restartCount = 0
+                // Reset the intentional-stop guard now that the next
+                // generation backend is live. Future crashes from THIS
+                // process should be auto-restarted by the reaper.
+                intentionalStop = false
                 // Snapshot the on-disk version we just spawned. Used later to
                 // detect when a background `uv tool upgrade` has installed a
                 // newer version that the running process hasn't picked up.
@@ -562,6 +581,14 @@ class CosmaManager {
     ///   2. SIGKILL if still alive → wait up to 0.5 s.
     func stopServer() {
         guard ownsProcess, let process = serverProcess else { return }
+
+        // Mark this as an intentional kill so the terminationHandler
+        // installed in launchBackendProcess doesn't see the SIGTERM
+        // (exit code 15), think the process crashed, and race our own
+        // relaunch (or the caller's). Cleared by the next launch
+        // (launchBackendProcess) or, in dead-end paths where no
+        // relaunch is coming, by the calling site.
+        intentionalStop = true
 
         if process.isRunning {
             let pid = process.processIdentifier
