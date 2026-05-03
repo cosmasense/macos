@@ -48,6 +48,11 @@ class CosmaManager {
     var updateStatus: UpdateStatus = .idle
     var installedVersion: String?
     var latestVersion: String?
+    /// Wall-clock timestamp of the most recent completed update check
+    /// (success or failure). Drives the "checked just now / 2m ago"
+    /// hint shown next to the Settings → Check for Updates button so
+    /// the user can confirm the click actually did something.
+    var lastUpdateCheckAt: Date?
     /// Version the *currently running* backend was launched with. Snapshotted
     /// at the moment the server transitions to `.running`, so even if
     /// `installedVersion` is later updated by a background `uv tool upgrade`,
@@ -855,8 +860,14 @@ class CosmaManager {
     func checkForUpdates() async {
         // Already pending restart — no need to recheck; the user just
         // needs to relaunch.
-        if case .downloadedPendingRestart = updateStatus { return }
-        if case .downloading = updateStatus { return }
+        if case .downloadedPendingRestart = updateStatus {
+            lastUpdateCheckAt = Date()
+            return
+        }
+        if case .downloading = updateStatus {
+            lastUpdateCheckAt = Date()
+            return
+        }
 
         updateStatus = .checking
 
@@ -870,6 +881,9 @@ class CosmaManager {
         } catch {
             updateStatus = .failed(error.localizedDescription)
         }
+        // Stamp completion regardless of outcome so the UI can show
+        // "checked just now" even on a failed check.
+        lastUpdateCheckAt = Date()
     }
 
     /// User hit "Dismiss" on the restart banner. Suppress notifications for

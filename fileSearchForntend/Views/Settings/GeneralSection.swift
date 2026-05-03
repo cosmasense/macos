@@ -21,6 +21,17 @@ struct GeneralSection: View {
     @State private var showingLogs = false
     @State private var dialogsReset = false
 
+    /// True while a PyPI check (or a triggered download) is running.
+    /// Used to swap the button label for a spinner + disable re-clicks.
+    private var isCheckInFlight: Bool {
+        switch cosmaManager.updateStatus {
+        case .checking, .downloading:
+            return true
+        case .idle, .upToDate, .downloadedPendingRestart, .failed:
+            return false
+        }
+    }
+
     enum ConnectionTestState: Equatable {
         case idle
         case testing
@@ -128,26 +139,54 @@ struct GeneralSection: View {
                     }
 
                     if cosmaManager.isRunning {
-                        HStack(spacing: 8) {
-                            if cosmaManager.ownsProcess {
-                                Button("Restart") {
-                                    Task { await cosmaManager.restartServer() }
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                if cosmaManager.ownsProcess {
+                                    Button("Restart") {
+                                        Task { await cosmaManager.restartServer() }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    Button("Stop") {
+                                        cosmaManager.stopServer()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+
+                                Button {
+                                    Task { await cosmaManager.checkForUpdates() }
+                                } label: {
+                                    if isCheckInFlight {
+                                        HStack(spacing: 6) {
+                                            ProgressView().controlSize(.mini)
+                                            Text("Checking…")
+                                        }
+                                    } else {
+                                        Text("Check for Updates")
+                                    }
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
-
-                                Button("Stop") {
-                                    cosmaManager.stopServer()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                // Block rapid re-clicks while a check
+                                // (or its triggered download) is in
+                                // flight — without this the user can
+                                // queue four PyPI hits in a row.
+                                .disabled(isCheckInFlight)
                             }
 
-                            Button("Check for Updates") {
-                                Task { await cosmaManager.checkForUpdates() }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            // Inline result for the check, so the user
+                            // can tell whether the click did anything.
+                            // Was previously silent — `updateStatus`
+                            // mutated but nothing on the page reflected
+                            // it, so the button felt broken.
+                            UpdateCheckStatusRow(
+                                status: cosmaManager.updateStatus,
+                                installedVersion: cosmaManager.installedVersion,
+                                latestVersion: cosmaManager.latestVersion,
+                                lastCheckedAt: cosmaManager.lastUpdateCheckAt
+                            )
                         }
                     }
 
@@ -373,5 +412,109 @@ struct StatusText: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(color)
+    }
+}
+
+// MARK: - Update Check Status Row
+
+/// Inline result line shown next to the "Check for Updates" button.
+/// Reflects CosmaManager.updateStatus + lastCheckedAt so the user
+/// can tell that a click actually did something — and what it found.
+private struct UpdateCheckStatusRow: View {
+    let status: CosmaManager.UpdateStatus
+    let installedVersion: String?
+    let latestVersion: String?
+    let lastCheckedAt: Date?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            Text(message)
+                .foregroundStyle(.primary)
+            if let stamp = checkedStamp {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(stamp)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11))
+    }
+
+    private var icon: String {
+        switch status {
+        case .checking, .downloading:
+            return "arrow.triangle.2.circlepath"
+        case .upToDate:
+            return "checkmark.circle.fill"
+        case .downloadedPendingRestart:
+            return "arrow.down.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        case .idle:
+            return "questionmark.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .checking, .downloading:
+            return .secondary
+        case .upToDate:
+            return .green
+        case .downloadedPendingRestart:
+            return .blue
+        case .failed:
+            return .red
+        case .idle:
+            return .secondary
+        }
+    }
+
+    private var message: String {
+        switch status {
+        case .checking:
+            return "Contacting PyPI…"
+        case let .downloading(_, target):
+            return "Downloading v\(target)…"
+        case .upToDate:
+            if let v = installedVersion {
+                return "Up to date — v\(v) is the latest."
+            }
+            return "Up to date."
+        case let .downloadedPendingRestart(running, downloaded):
+            return "Update v\(downloaded) downloaded — restart to apply (currently running v\(running))."
+        case let .failed(reason):
+            return "Check failed: \(reason)"
+        case .idle:
+            // Pre-first-click state. Only happens before the user has
+            // clicked the button at all — once they have, the status
+            // moves to .checking and stays in a populated state from
+            // then on.
+            if lastCheckedAt == nil {
+                return "Click \"Check for Updates\" to look for a new release."
+            }
+            return "—"
+        }
+    }
+
+    /// "checked just now" / "checked 3m ago". Shown next to terminal
+    /// states (upToDate, downloadedPendingRestart, failed) so the user
+    /// can tell the click went through and how fresh the result is.
+    private var checkedStamp: String? {
+        guard let when = lastCheckedAt else { return nil }
+        // Don't bother stamping while a check is mid-flight — the
+        // spinner already conveys "happening right now".
+        switch status {
+        case .checking, .downloading:
+            return nil
+        default:
+            break
+        }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return "checked \(f.localizedString(for: when, relativeTo: Date()))"
     }
 }
