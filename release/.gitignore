@@ -1,0 +1,5 @@
+# Per-release artifacts written by release/scripts/publish.sh.
+# Each run leaves a versioned subdir with the .xcarchive, exported
+# .app, .zip, ExportOptions.plist, and notarization staple staging.
+# None of it should end up in git.
+build/

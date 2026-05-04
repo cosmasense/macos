@@ -149,11 +149,16 @@ class AppModel {
     var blacklistInclude: [String] = []
     var whitelistInclude: [String] = []
     var whitelistExclude: [String] = []
+    /// v3 third tier: files matching these get an embedding from
+    /// filename + metadata only — no LLM summary. Status =
+    /// INDEXED_PARTIAL on the backend.
+    var metadataOnlyPatterns: [String] = []
     var savedFilterMode: String = "blacklist"
     var savedBlacklistExclude: [String] = []
     var savedBlacklistInclude: [String] = []
     var savedWhitelistInclude: [String] = []
     var savedWhitelistExclude: [String] = []
+    var savedMetadataOnlyPatterns: [String] = []
     var isLoadingFilterConfig: Bool = false
     var filterConfigError: String?
 
@@ -173,7 +178,8 @@ class AppModel {
         blacklistExclude != savedBlacklistExclude ||
         blacklistInclude != savedBlacklistInclude ||
         whitelistInclude != savedWhitelistInclude ||
-        whitelistExclude != savedWhitelistExclude
+        whitelistExclude != savedWhitelistExclude ||
+        metadataOnlyPatterns != savedMetadataOnlyPatterns
     }
 
     /// Filter patterns for UI display
@@ -278,6 +284,10 @@ class AppModel {
     var schedulerConfig: SchedulerResponse?
     var failedFiles: [ProcessedFileItem] = []
     var recentFiles: [ProcessedFileItem] = []
+    /// Files with status=INDEXED_PARTIAL — embedded by filename
+    /// only (no LLM summary) because the user's filter classified
+    /// them as metadata-only.
+    var partialFiles: [ProcessedFileItem] = []
     @ObservationIgnored var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
 
     // MARK: - Services
@@ -469,6 +479,8 @@ class AppModel {
 
         case .directoryProcessingStarted:
             if let dirPath = path {
+                let displayName = (dirPath as NSString).lastPathComponent
+                NotificationManager.shared.notifyIndexingStarted(folderName: displayName)
                 upsertFolder(forDirectory: dirPath) { folder in
                     folder.status = .indexing
                     folder.progress = 0.05
@@ -497,6 +509,17 @@ class AppModel {
                         folder.indexedFileCount = folder.totalFileCount
                         folder.progress = 1.0
                         folder.lastModified = Date()
+                    }
+                    // Notify only when *all* watched folders have settled
+                    // back to .complete — otherwise a multi-folder index
+                    // run would post one "Indexing complete" banner per
+                    // folder, which is noisy. Counts are stamped on the
+                    // mutated folder above, so they're already up-to-date
+                    // when we sum them.
+                    let allDone = watchedFolders.allSatisfy { $0.status == .complete }
+                    if allDone {
+                        let totalIndexed = watchedFolders.reduce(0) { $0 + $1.indexedFileCount }
+                        NotificationManager.shared.notifyIndexingComplete(filesIndexed: totalIndexed)
                     }
                 }
             }
@@ -598,6 +621,7 @@ class AppModel {
             }
 
         case .queuePaused:
+            NotificationManager.shared.notifyIndexingPaused(reason: "manually paused")
             for i in watchedFolders.indices where watchedFolders[i].status == .indexing {
                 watchedFolders[i].status = .paused
             }
@@ -612,6 +636,7 @@ class AppModel {
             }
 
         case .schedulerPaused:
+            NotificationManager.shared.notifyIndexingPaused(reason: "scheduler rule active")
             for i in watchedFolders.indices where watchedFolders[i].status == .indexing {
                 watchedFolders[i].status = .paused
             }

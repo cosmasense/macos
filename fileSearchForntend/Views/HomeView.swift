@@ -416,10 +416,9 @@ struct SearchFieldView: View {
                     // SwiftUI can transition. Keying the Text on its
                     // string value forces a fresh insert/remove pair on
                     // every change, and the asymmetric move-edge
-                    // transition makes the old line scroll off to the
-                    // left while the new one scrolls in from the right
-                    // — a smooth swap that signals "the model just
-                    // finished loading" without any popping.
+                    // transition makes the old line slide UP off the
+                    // top while the new one slides UP from below —
+                    // Apple-Intelligence-style vertical rotating text.
                     ZStack(alignment: .leading) {
                         if model.searchText.isEmpty {
                             Text(placeholderText)
@@ -428,9 +427,9 @@ struct SearchFieldView: View {
                                 .lineLimit(1)
                                 .id(placeholderText)
                                 .transition(.asymmetric(
-                                    insertion: .move(edge: .trailing)
+                                    insertion: .move(edge: .bottom)
                                         .combined(with: .opacity),
-                                    removal: .move(edge: .leading)
+                                    removal: .move(edge: .top)
                                         .combined(with: .opacity),
                                 ))
                                 .allowsHitTesting(false)
@@ -585,6 +584,14 @@ struct SearchFieldView: View {
             selectFolder(suggestions[selectedSuggestionIndex])
         } else if !model.searchText.isEmpty || !model.searchTokens.isEmpty {
             model.performSearch()
+            // Hand keyboard focus to the results pane so space (Quick
+            // Look) and arrows (selection) operate on the results
+            // instead of being swallowed by the still-focused text
+            // field. Without this blur, hitting space after Enter
+            // appended a literal space to the query and re-ran the
+            // search; arrow keys moved the caret in an empty field.
+            isFocused = false
+            NSApp.keyWindow?.makeFirstResponder(nil)
         } else {
             // Empty field + no tokens: treat Return like Esc — reset to the
             // idle home state and blur the search field.

@@ -15,6 +15,7 @@ struct fileSearchForntendApp: App {
     @State private var coordinator = AppCoordinator()
     @State private var overlayController = QuickSearchOverlayController()
     @State private var cosmaManager = CosmaManager()
+    @State private var sparkleUpdater = SparkleUpdaterController()
     @State private var hotkeyMonitoringEnabled = true
     @State private var isBackendConnected = false
     @State private var hasFullDiskAccess = true // optimistic, checked on appear
@@ -32,13 +33,14 @@ struct fileSearchForntendApp: App {
                     }
                     .environment(cosmaManager)
                     // Flex-fill so the wizard's VisualEffectView background
-                    // always covers the entire NSWindow contentView. A fixed
-                    // .frame(width:height:) bounds the backing glass to the
-                    // child's size, which lets the window's transparent edges
-                    // show through as dark/blurry strips whenever the window
-                    // ends up wider than the child (defaultSize is 720 but
-                    // the wizard used to cap at 620).
-                    .frame(minWidth: 620, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+                    // always covers the entire NSWindow contentView. Use
+                    // the SAME minimums as the running ContentView (720×560)
+                    // so the user doesn't see the window snap to a different
+                    // size when transitioning out of the wizard.
+                    .frame(minWidth: 720, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+                    .onAppear {
+                        recenterMainWindowToSize(NSSize(width: 720, height: 560))
+                    }
                 } else if isBackendConnected {
                     ContentView()
                         .environment(appModel)
@@ -123,6 +125,9 @@ struct fileSearchForntendApp: App {
                     .environment(appModel)
                     .environment(cosmaManager)
                     .frame(minWidth: 720, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+                    .onAppear {
+                        recenterMainWindowToSize(NSSize(width: 720, height: 560))
+                    }
                 }
             }
             .preferredColorScheme(.light)
@@ -134,9 +139,27 @@ struct fileSearchForntendApp: App {
                 appDelegate.appModel = appModel
                 appDelegate.cosmaManager = cosmaManager
 
+                // Wire Sparkle. The updater needs CosmaManager so it
+                // can stop the backend before relaunching the .app
+                // (otherwise the swapped-in build comes up fighting an
+                // orphaned :60534). We start the updater unconditionally
+                // here — even on first-run setup — because Sparkle's
+                // scheduled-check loop is silent until it actually
+                // finds something, and we want it primed for the next
+                // wake regardless of which UI branch the user lands on.
+                sparkleUpdater.cosmaManager = cosmaManager
+                sparkleUpdater.startUpdater()
+
                 // Check Full Disk Access before proceeding
                 hasFullDiskAccess = checkFullDiskAccessPermission()
                 guard hasFullDiskAccess else { return }
+
+                // Notification permission is best-effort. Triggering
+                // the prompt on first launch (after FDA, so the system
+                // has already shown its critical permission dialog) is
+                // less disruptive than asking inside the wizard or
+                // mid-search. NotificationManager is no-op if denied.
+                Task { await NotificationManager.shared.requestAuthorizationIfNeeded() }
 
                 // If we think we're connected but the backend isn't running
                 // (e.g., window reopened after backend died), reset to setup view.
@@ -242,6 +265,18 @@ struct fileSearchForntendApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 560)
         .commands {
+            // Replace the default "About" / Settings group with a
+            // "Check for Updates…" entry — standard macOS placement is
+            // in the application menu, right under About. CommandGroup
+            // .appInfo is the correct anchor so it lands above
+            // Preferences.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    sparkleUpdater.checkForUpdates(userInitiated: true)
+                }
+                .disabled(sparkleUpdater.isCheckInFlight)
+            }
+
             CommandMenu("Quick Search") {
                 if overlayTriggerMode == "dualCommand" {
                     Button(coordinator.isOverlayVisible ? "Hide Quick Search" : "Show Quick Search (Both \u{2318} Keys)") {
@@ -263,6 +298,7 @@ struct fileSearchForntendApp: App {
             SettingsView()
                 .environment(appModel)
                 .environment(cosmaManager)
+                .environment(sparkleUpdater)
                 .environment(\.controlHotkeyMonitoring, { enabled in
                     setHotkeyMonitoring(enabled: enabled)
                 })

@@ -40,6 +40,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var shutdownWindow: NSWindow?
     /// The quit confirmation window (non-modal so Cmd+Q still works).
     private var quitConfirmationWindow: NSWindow?
+    /// Floating "update ready, restart now?" prompt. Surfaced once per
+    /// downloaded version so the user finds out about the pending
+    /// restart even if they never open Settings to see the banner.
+    private var restartPromptWindow: NSWindow?
+    /// The downloaded version we last asked about, so a refresh that
+    /// re-fires the same status (no version change) doesn't pop the
+    /// dialog twice.
+    private var promptedRestartVersion: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 App delegate initialized - hotkey monitor will stay alive")
@@ -323,17 +331,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingView = NSHostingView(rootView: ShutdownView())
         hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
+        // Borderless rather than [.titled, .fullSizeContentView]: a
+        // titled-but-transparent window composites the rounded glass
+        // through a 1pt rectangular GPU layer at the window edge,
+        // which on Retina displays leaves a thin black stroke around
+        // the corners (the "GPU rendering issue" the user noticed).
+        // Borderless skips that frame entirely — same approach the
+        // quit confirmation panel uses, which has no such artifact.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.isOpaque = false
-        window.title = ""
+        window.hasShadow = true
         window.contentView = hostingView
         window.center()
         window.level = .floating
@@ -501,7 +515,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - CosmaManager Sync
 
     func syncStatusBarWithCosmaManager() {
-        guard let cm = cosmaManager, let sbc = statusBarController else { return }
+        guard let cm = cosmaManager else { return }
+
+        // Surface a "Update Ready" popup the first time we land on
+        // .downloadedPendingRestart for a given downloaded version.
+        // The Settings banner alone wasn't catching users who never
+        // opened Settings.
+        if case .downloadedPendingRestart(let running, let downloaded) = cm.updateStatus {
+            if promptedRestartVersion != downloaded {
+                promptedRestartVersion = downloaded
+                showRestartPrompt(running: running, downloaded: downloaded)
+            }
+        } else if case .upToDate = cm.updateStatus {
+            // After dismissUpdate the running/downloaded versions match
+            // and we should be ready to surface the next pending one
+            // (whenever it lands) without comparing to the stale value.
+            promptedRestartVersion = nil
+        }
+
+        guard let sbc = statusBarController else { return }
         sbc.isManagedMode = cm.isManaged
         sbc.backendIsRunning = cm.isRunning
         sbc.ownsProcess = cm.ownsProcess
@@ -515,6 +547,59 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             sbc.updateAvailableText = nil
         }
+    }
+
+    // MARK: - Restart-for-update Prompt
+
+    private func showRestartPrompt(running: String, downloaded: String) {
+        // If a prompt is already on screen for this version, leave it
+        // be — the status sync handler can fire repeatedly.
+        if restartPromptWindow != nil { return }
+
+        let width: CGFloat = 380
+        let height: CGFloat = 220
+
+        let view = RestartForUpdatePromptView(
+            runningVersion: running,
+            downloadedVersion: downloaded,
+            onRestart: { [weak self] in
+                self?.dismissRestartPrompt()
+                self?.cosmaManager?.relaunchApp()
+            },
+            onLater: { [weak self] in
+                self?.dismissRestartPrompt()
+                // User said "Later" — keep the Settings banner around
+                // (don't call dismissUpdate, that suppresses *all*
+                // future surfacing for this version). The popup just
+                // doesn't reappear until a newer version lands.
+            }
+        )
+
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.contentView = hostingView
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        restartPromptWindow = window
+    }
+
+    private func dismissRestartPrompt() {
+        restartPromptWindow?.close()
+        restartPromptWindow = nil
     }
 
     // MARK: - Overlay Management (Direct Control)

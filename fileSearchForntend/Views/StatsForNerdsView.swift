@@ -21,6 +21,18 @@ struct StatsForNerdsView: View {
     @State private var details: FileDetailsResponse?
     @State private var loadError: String?
     @State private var isLoading: Bool = true
+    /// Visual state for the in-flight Reindex button. `.idle` is the
+    /// default; the button flips to `.queued` once the backend
+    /// accepts the reindex request, to give the user instant
+    /// feedback even though the actual re-processing is async.
+    @State private var reindexState: ReindexState = .idle
+
+    private enum ReindexState: Equatable {
+        case idle
+        case requesting
+        case queued
+        case failed(String)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,6 +78,7 @@ struct StatsForNerdsView: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            reindexButton
             Button {
                 dismiss()
             } label: {
@@ -78,6 +91,85 @@ struct StatsForNerdsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// Triggers a backend `/api/queue/reindex` for this file: deletes
+    /// the existing DB row and re-enqueues the path. Useful when
+    /// iterating on parser/summarizer logic — no need to clear the
+    /// whole watched folder or restart the backend.
+    private var reindexButton: some View {
+        let label: String
+        let icon: String
+        let disabled: Bool
+        switch reindexState {
+        case .idle:
+            label = "Reindex"
+            icon = "arrow.counterclockwise"
+            disabled = false
+        case .requesting:
+            label = "Queuing…"
+            icon = "arrow.counterclockwise"
+            disabled = true
+        case .queued:
+            label = "Queued"
+            icon = "checkmark.circle"
+            disabled = true
+        case .failed:
+            label = "Retry"
+            icon = "exclamationmark.triangle"
+            disabled = false
+        }
+        return Button {
+            Task { await reindex() }
+        } label: {
+            Label(label, systemImage: icon)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(disabled)
+        .help(reindexHelpText)
+    }
+
+    private var reindexHelpText: String {
+        switch reindexState {
+        case .idle:
+            return "Delete this file's DB row and re-enqueue it for processing."
+        case .requesting:
+            return "Sending reindex request to the backend…"
+        case .queued:
+            return "Reindex queued. Watch the queue for updates."
+        case .failed(let msg):
+            return "Reindex failed: \(msg)"
+        }
+    }
+
+    private func reindex() async {
+        reindexState = .requesting
+        do {
+            let response = try await model.apiClient.reindexFile(filePath: filePath)
+            if response.success {
+                reindexState = .queued
+                // Auto-reset to idle after a short delay so the user
+                // can hit it again without dismissing the panel.
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    if case .queued = reindexState {
+                        reindexState = .idle
+                    }
+                }
+                // Refresh details after the backend has had a moment
+                // to drop the old row + enqueue the new one.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    await load()
+                }
+            } else {
+                reindexState = .failed(response.message)
+            }
+        } catch {
+            reindexState = .failed(error.localizedDescription)
+        }
     }
 
     // MARK: - States
@@ -343,12 +435,17 @@ struct StatsForNerdsView: View {
         let color: Color = {
             switch status.uppercased() {
             case "COMPLETE": return .green
+            case "INDEXED_PARTIAL": return .orange
             case "FAILED": return .red
             case "DISCOVERED", "PARSED", "SUMMARIZED": return .brandBlue
             default: return .gray
             }
         }()
-        Text(status)
+        // Friendlier label for the new partial status.
+        let label = status.uppercased() == "INDEXED_PARTIAL"
+            ? "PARTIAL"
+            : status
+        Text(label)
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		DC02D5AF2EDF6FF300F3AC36 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC02D5AE2EDF6FF300F3AC36 /* AppDelegate.swift */; };
+		DCD424C22FA91FC200BD6D56 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = DCD424C12FA91FC200BD6D56 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DCD424C22FA91FC200BD6D56 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			);
 			name = fileSearchForntend;
 			packageProductDependencies = (
+				DCD424C12FA91FC200BD6D56 /* Sparkle */,
 			);
 			productName = fileSearchForntend;
 			productReference = E92786502EA592F3009D648F /* Cosma Sense.app */;
@@ -100,6 +103,9 @@
 			);
 			mainGroup = E92786472EA592F3009D648F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DCD424C02FA91FC200BD6D56 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E92786512EA592F3009D648F /* Products */;
 			projectDirPath = "";
@@ -281,14 +287,13 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Cosma Sense";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "Ethan-Pan.fileSearchForntend";
 				PRODUCT_NAME = "Cosma Sense";
 				REGISTER_APP_GROUPS = YES;
@@ -326,14 +331,13 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Cosma Sense";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.7;
 				PRODUCT_BUNDLE_IDENTIFIER = "Ethan-Pan.fileSearchForntend";
 				PRODUCT_NAME = "Cosma Sense";
 				REGISTER_APP_GROUPS = YES;
@@ -368,6 +372,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DCD424C02FA91FC200BD6D56 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DCD424C12FA91FC200BD6D56 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DCD424C02FA91FC200BD6D56 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E92786482EA592F3009D648F /* Project object */;
 }

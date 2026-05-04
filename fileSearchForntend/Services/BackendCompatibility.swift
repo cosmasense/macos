@@ -49,7 +49,7 @@ enum BackendCompatibility {
     /// existing users — the older "must match major.minor" rule would
     /// have stranded them on 0.8.x forever. Bump this in lockstep with
     /// every coordinated frontend release.
-    static let kPairedBackendVersion: String = "1.0.0"
+    static let kPairedBackendVersion: String = "1.0.7"
 
     enum CompatibilityResult {
         case compatible(BackendVersionResponse)

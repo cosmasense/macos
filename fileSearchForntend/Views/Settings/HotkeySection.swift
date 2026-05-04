@@ -101,107 +101,10 @@ struct HotkeySection: View {
                     Text(errorText).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
-
-            // Permissions Section
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Permissions")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-
-                // Full Disk Access — required for indexing all files
-                PermissionRow(
-                    title: "Full Disk Access",
-                    description: hasFullDiskAccess
-                        ? "Can index files across all folders"
-                        : "Required to index files and run the backend",
-                    isGranted: hasFullDiskAccess,
-                    action: { openFullDiskAccessPreferences() }
-                )
-            }
         }
         .onChange(of: hotkey) { _, newValue in
             triggerMode = newValue.isEmpty ? "dualCommand" : "hotkey"
         }
-        .onAppear {
-            checkPermissions()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            checkPermissions()
-        }
-    }
-
-    @State private var hasFullDiskAccess = false
-
-    private func checkPermissions() {
-        hasFullDiskAccess = checkFullDiskAccessPermission()
-    }
-}
-
-// MARK: - Permission Row
-
-private struct PermissionRow: View {
-    let title: String
-    let description: String
-    let isGranted: Bool?  // nil means we can't detect
-    let action: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Status indicator
-            Group {
-                if let granted = isGranted {
-                    Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(granted ? .green : .red)
-                } else {
-                    Image(systemName: "questionmark.circle.fill")
-                        .foregroundStyle(.orange)
-                }
-            }
-            .font(.system(size: 18))
-
-            // Info
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-
-                    if let granted = isGranted {
-                        Text(granted ? "Granted" : "Not Granted")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(granted ? .green : .red)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                (granted ? Color.green : Color.red).opacity(0.15),
-                                in: Capsule()
-                            )
-                    }
-                }
-
-                Text(description)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            // Action button
-            Button {
-                action()
-            } label: {
-                if let granted = isGranted, granted {
-                    Text("Open Settings")
-                } else {
-                    Text("Grant Access")
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -323,8 +226,3 @@ func checkFullDiskAccessPermission() -> Bool {
     return false
 }
 
-private func openFullDiskAccessPreferences() {
-    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-        NSWorkspace.shared.open(url)
-    }
-}

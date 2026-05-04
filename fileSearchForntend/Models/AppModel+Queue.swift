@@ -121,6 +121,18 @@ extension AppModel {
         }
     }
 
+    /// Fetches files indexed by filename only (INDEXED_PARTIAL).
+    /// Distinct from Failed: these aren't problems, they're files
+    /// the user opted into metadata-only via filter rules.
+    func refreshPartialFiles() async {
+        do {
+            let response = try await apiClient.fetchPartialFiles()
+            partialFiles = response.files
+        } catch {
+            queueError = queueErrorMessage(from: error)
+        }
+    }
+
     /// Re-queues a failed file for reprocessing
     func reindexFile(filePath: String) async {
         // Optimistic UI update

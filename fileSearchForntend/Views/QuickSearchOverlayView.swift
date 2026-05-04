@@ -37,6 +37,13 @@ struct QuickSearchOverlayView: View {
     }
 
     @FocusState private var isSearchFocused: Bool
+    // Focus target for the result grid. Activated whenever the user
+    // moves selection (mouse click, arrow key) so subsequent key
+    // events route to the panel-level .onKeyPress handlers below
+    // instead of being absorbed by an "unfocused" view tree (SwiftUI
+    // doesn't deliver onKeyPress unless *something* in the hierarchy
+    // is focused).
+    @FocusState private var isTileFocused: Bool
     @State private var debounceTask: Task<Void, Never>?
     @State private var isExpanded: Bool = false
     // Two-phase expand: `isExpanded` grows the panel background first,
@@ -50,6 +57,17 @@ struct QuickSearchOverlayView: View {
     // (rendered outside the clipped pill) shares the selection index with
     // the field's keyboard handlers (up/down/tab/enter).
     @State private var selectedSuggestionIndex: Int = 0
+    // Currently-selected file tile in the result grid. `nil` until the
+    // user clicks a tile or presses an arrow key after results render.
+    // Drives both the highlight state on each tile and the keyboard
+    // shortcuts (space → Quick Look, Return → open) attached at the
+    // panel level. Lives here (not on the tile) so arrow keys can move
+    // selection across tiles without the tiles having to coordinate.
+    @State private var selectedTileID: String?
+    // Tile grid is 4 columns wide — see contentArea LazyVGrid below.
+    // Keep this in sync with that layout so up/down arrow keys jump a
+    // full row's worth of cells instead of one cell.
+    private let tileGridColumnCount: Int = 4
     // Panel hugs the pill exactly — no transparent padding around the
     // glass background, otherwise the empty panel area reads as a dark
     // rectangle behind the pill on dim wallpapers.
@@ -189,17 +207,34 @@ struct QuickSearchOverlayView: View {
             }
         }
         .overlay {
+            // Two-layer stroke: a brighter inner highlight + a thin
+            // dark outline. Together they make the panel edge visible
+            // both on bright wallpapers (where pure-white-on-glass
+            // disappears) and on dark wallpapers. macOS Spotlight
+            // uses the same two-tone trick.
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
                 .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // SwiftUI shadows are clipped by the host layer's masksToBounds,
+        // so the AppKit panel's hasShadow does the heavy lifting (see
+        // NonActivatingPanel). These are an inner glow tint that
+        // survives the clip and adds depth at the edges.
         .shadow(
-            color: Color.black.opacity(isExpanded ? 0.18 : 0.08),
-            radius: isExpanded ? 14 : 12,
+            color: Color.black.opacity(isExpanded ? 0.22 : 0.12),
+            radius: isExpanded ? 18 : 14,
             x: 0,
-            y: isExpanded ? 6 : 4
+            y: isExpanded ? 8 : 5
         )
+        .focusable(true)
+        .focusEffectDisabled()
+        .focused($isTileFocused)
         .overlay {
             // Esc is the only thing that clears popup search state. The
             // hotkey just toggles visibility and preserves the previous
@@ -273,6 +308,72 @@ struct QuickSearchOverlayView: View {
             if !empty {
                 setExpanded(true)
             }
+        }
+        .onChange(of: filteredResults, initial: false) { _, newResults in
+            // Selection prune — drop the highlight if the result set
+            // no longer contains it (search refined, file removed,
+            // popup re-opened, etc.). Keeps the keyboard handlers
+            // from acting on a stale id.
+            if let id = selectedTileID,
+               !newResults.prefix(50).contains(where: { $0.id == id }) {
+                selectedTileID = nil
+            }
+        }
+        // Tile keyboard navigation — fires when the user has an
+        // active tile selection (or arrows from no-selection to land
+        // on the first tile). The handlers return .ignored when no
+        // results are showing or while the user is actively editing
+        // the @folder mention dropdown so those takes precedence.
+        .onKeyPress(.downArrow) {
+            guard !filteredResults.isEmpty, !isInFolderMention else { return .ignored }
+            moveTileSelection(by: tileGridColumnCount)
+            isSearchFocused = false
+            isTileFocused = true
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            guard !filteredResults.isEmpty, !isInFolderMention else { return .ignored }
+            // First arrow press from "no selection" should land on
+            // the first tile instead of trying to walk negative.
+            if selectedTileID == nil {
+                moveTileSelection(by: 0)
+                isSearchFocused = false
+                isTileFocused = true
+                return .handled
+            }
+            moveTileSelection(by: -tileGridColumnCount)
+            isSearchFocused = false
+            isTileFocused = true
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            guard !filteredResults.isEmpty, !isInFolderMention,
+                  selectedTileID != nil else { return .ignored }
+            moveTileSelection(by: -1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard !filteredResults.isEmpty, !isInFolderMention,
+                  selectedTileID != nil else { return .ignored }
+            moveTileSelection(by: 1)
+            return .handled
+        }
+        .onKeyPress(.space) {
+            // Only intercept space when the user has actually picked
+            // a tile to preview — otherwise let the search field
+            // append a literal space to its query.
+            guard selectedTileID != nil else { return .ignored }
+            previewSelectedTile()
+            return .handled
+        }
+        .onKeyPress(.return) {
+            // Enter on a selected tile opens it; without selection,
+            // fall through to the search field's own onSubmit so
+            // pressing Enter in the empty case still triggers a
+            // search.
+            guard selectedTileID != nil else { return .ignored }
+            openSelectedTile()
+            return .handled
         }
     }
 
@@ -406,13 +507,24 @@ struct QuickSearchOverlayView: View {
                     LazyVGrid(
                         columns: Array(
                             repeating: GridItem(.flexible(), spacing: 2, alignment: .top),
-                            count: 4
+                            count: tileGridColumnCount
                         ),
                         alignment: .center,
                         spacing: 6
                     ) {
                         ForEach(Array(filteredResults.prefix(50).enumerated()), id: \.element.id) { index, item in
-                            OverlayFileTile(result: item, appearIndex: index)
+                            OverlayFileTile(
+                                result: item,
+                                appearIndex: index,
+                                isSelected: selectedTileID == item.id,
+                                onSelect: {
+                                    selectedTileID = item.id
+                                    isSearchFocused = false
+                                    isTileFocused = true
+                                },
+                                onOpen: { openTile(item) },
+                                onPreview: { previewTile(item) }
+                            )
                         }
                     }
                     .padding(.horizontal, 4)
@@ -423,6 +535,69 @@ struct QuickSearchOverlayView: View {
         }
     }
 
+    // MARK: - Tile Selection Keyboard / Actions
+
+    /// Move tile selection by `delta` items in the flat result array.
+    /// 4-column LazyVGrid → ±tileGridColumnCount jumps a row,
+    /// ±1 walks horizontally. Selecting from `nil` lands on the
+    /// first tile rather than ignoring the keystroke.
+    private func moveTileSelection(by delta: Int) {
+        let displayed = Array(filteredResults.prefix(50))
+        guard !displayed.isEmpty else { return }
+        if selectedTileID == nil {
+            selectedTileID = displayed.first?.id
+            return
+        }
+        guard let index = displayed.firstIndex(where: { $0.id == selectedTileID }) else {
+            selectedTileID = displayed.first?.id
+            return
+        }
+        let newIndex = max(0, min(displayed.count - 1, index + delta))
+        if newIndex != index {
+            selectedTileID = displayed[newIndex].id
+        }
+    }
+
+    private func currentSelectedTile() -> SearchResultItem? {
+        let displayed = Array(filteredResults.prefix(50))
+        return displayed.first { $0.id == selectedTileID }
+    }
+
+    private func openTile(_ result: SearchResultItem) {
+        do {
+            try model.withSecurityScopedAccess(for: result.file.filePath) {
+                let url = URL(fileURLWithPath: result.file.filePath)
+                NSWorkspace.shared.open(url)
+            }
+        } catch AppModel.BookmarkError.userCancelled {
+            // User declined; no-op
+        } catch {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Cannot Open File"
+                alert.informativeText = "Unable to access this file. Please grant access when prompted."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
+
+    private func previewTile(_ result: SearchResultItem) {
+        let url = URL(fileURLWithPath: result.file.filePath)
+        QuickLookHelper.shared.preview(url: url)
+    }
+
+    private func openSelectedTile() {
+        guard let selected = currentSelectedTile() else { return }
+        openTile(selected)
+    }
+
+    private func previewSelectedTile() {
+        guard let selected = currentSelectedTile() else { return }
+        previewTile(selected)
+    }
+
 }
 
 // MARK: - Overlay Tile (Finder-style grid cell)
@@ -430,6 +605,10 @@ struct QuickSearchOverlayView: View {
 private struct OverlayFileTile: View {
     let result: SearchResultItem
     let appearIndex: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onOpen: () -> Void
+    let onPreview: () -> Void
     @Environment(AppModel.self) private var model
     @State private var thumbnail: NSImage?
     @State private var appeared: Bool = false
@@ -437,10 +616,6 @@ private struct OverlayFileTile: View {
     @State private var isHovered: Bool = false
     @State private var showDetail: Bool = false
     @State private var hoverTask: Task<Void, Never>?
-
-    private var displayTitle: String {
-        (result.file.title?.isEmpty == false ? result.file.title : nil) ?? result.file.filename
-    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -473,7 +648,12 @@ private struct OverlayFileTile: View {
             }
             .frame(width: 100, height: 96, alignment: .center)
 
-            Text(displayTitle)
+            // Show the on-disk filename, not the LLM-generated title.
+            // The LLM title is creative ("Field Trip Memories") but
+            // users searching the popup want to recognize files by
+            // their actual filename. Matches the main window's
+            // SearchResultGridCell.
+            Text(result.file.filename)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
@@ -488,9 +668,14 @@ private struct OverlayFileTile: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isHovered ? Color.brandBlue.opacity(0.22) : Color.clear)
+                .fill(
+                    isSelected
+                        ? Color.brandBlue.opacity(0.22)
+                        : (isHovered ? Color.brandBlue.opacity(0.22) : Color.clear)
+                )
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
         .onHover { hovering in
             isHovered = hovering
             hoverTask?.cancel()
@@ -516,21 +701,28 @@ private struct OverlayFileTile: View {
                 appeared = true
             }
         }
+        // Finder semantics: single click selects, double click opens
+        // in default app, right click → context menu, space (handled
+        // at the panel level on selectedTileID) → Quick Look.
+        // Previously single click opened Quick Look directly, which
+        // made it impossible to highlight a file without losing the
+        // search panel — every click left the panel in a "preview is
+        // showing on top of the popup" state.
         .onTapGesture(count: 2) {
-            openInDefaultApp()
+            onOpen()
         }
         .onTapGesture(count: 1) {
-            openInQuickLook()
+            onSelect()
         }
         .contextMenu {
             Button {
-                openInQuickLook()
+                onPreview()
             } label: {
                 Label("Quick Look", systemImage: "eye")
             }
 
             Button {
-                openInDefaultApp()
+                onOpen()
             } label: {
                 Label("Open", systemImage: "arrow.up.forward.app")
             }
@@ -689,10 +881,6 @@ private struct OverlayFileDetailCard: View {
     let result: SearchResultItem
     let thumbnail: NSImage?
 
-    private var displayTitle: String {
-        (result.file.title?.isEmpty == false ? result.file.title : nil) ?? result.file.filename
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
@@ -711,15 +899,18 @@ private struct OverlayFileDetailCard: View {
                 .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(displayTitle)
+                    Text(result.file.filename)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
-                    Text(result.file.filename)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if let title = result.file.title, !title.isEmpty,
+                       title != result.file.filename {
+                        Text(title)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
 
@@ -855,9 +1046,9 @@ struct PopupSearchFieldView: View {
                                 .lineLimit(1)
                                 .id(aiReady)
                                 .transition(.asymmetric(
-                                    insertion: .move(edge: .trailing)
+                                    insertion: .move(edge: .bottom)
                                         .combined(with: .opacity),
-                                    removal: .move(edge: .leading)
+                                    removal: .move(edge: .top)
                                         .combined(with: .opacity),
                                 ))
                                 .allowsHitTesting(false)
@@ -882,11 +1073,20 @@ struct PopupSearchFieldView: View {
                                 handleTabKey()
                                 return .handled
                             }
+                            // Arrow keys only consumed while the
+                            // user is composing an @folder mention
+                            // (so up/down walks the suggestion list).
+                            // Outside that, fall through to the
+                            // panel-level handlers in
+                            // QuickSearchOverlayView which move tile
+                            // selection across the result grid.
                             .onKeyPress(.upArrow) {
+                                guard isInFolderMention else { return .ignored }
                                 handleUpArrow()
                                 return .handled
                             }
                             .onKeyPress(.downArrow) {
+                                guard isInFolderMention else { return .ignored }
                                 handleDownArrow()
                                 return .handled
                             }
@@ -970,6 +1170,11 @@ struct PopupSearchFieldView: View {
             selectFolder(suggestions[selectedSuggestionIndex])
         } else if !model.popupSearchText.isEmpty || !model.popupSearchTokens.isEmpty {
             model.performPopupSearch()
+            // Drop search-field focus so space → Quick Look and arrow
+            // keys → tile selection on the results grid below. Mirror
+            // of HomeView's behavior; without this the space bar just
+            // appends a space to the query.
+            isFocused = false
         } else {
             // Empty field + no tokens: treat Return like Esc — clear popup
             // state and dismiss the overlay.

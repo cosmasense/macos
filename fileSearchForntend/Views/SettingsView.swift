@@ -11,6 +11,7 @@ import SwiftUI
 enum SettingsSection: String, CaseIterable, Identifiable {
     case shortcut = "Shortcut"
     case general = "General"
+    case permissions = "Permissions"
     case fileFilters = "File Filters"
     case feedback = "Feedback"
     case advanced = "Advanced"
@@ -21,6 +22,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .shortcut: return "command.square"
         case .general: return "gearshape"
+        case .permissions: return "lock.shield"
         case .fileFilters: return "line.3.horizontal.decrease.circle"
         case .feedback: return "bubble.left.and.bubble.right"
         case .advanced: return "slider.horizontal.3"
@@ -51,6 +53,11 @@ struct SettingsView: View {
             }
             .tabItem { Label(SettingsSection.general.rawValue, systemImage: SettingsSection.general.icon) }
 
+            settingsPage(title: "Permissions") {
+                PermissionsSettingsView()
+            }
+            .tabItem { Label(SettingsSection.permissions.rawValue, systemImage: SettingsSection.permissions.icon) }
+
             settingsPage(title: "File Filters") {
                 FileFilterSection()
             }
@@ -66,8 +73,13 @@ struct SettingsView: View {
             }
             .tabItem { Label(SettingsSection.advanced.rawValue, systemImage: SettingsSection.advanced.icon) }
         }
-        .frame(minWidth: 640, idealWidth: 680)
-        .frame(minHeight: 540, idealHeight: 600)
+        // Match the main window's footprint (720 x 560 default) so
+        // jumping between Settings ↔ main UI doesn't reflow the user's
+        // attention to a differently-sized rectangle. The window is
+        // also recentered on the active screen each time it opens.
+        .frame(minWidth: 720, idealWidth: 720)
+        .frame(minHeight: 560, idealHeight: 560)
+        .background(SettingsWindowConfigurator())
     }
 
     @ViewBuilder
@@ -158,6 +170,38 @@ private struct UpdateBanner: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.brandBlue))
+    }
+}
+
+// MARK: - Window Configurator
+
+/// Walks up to the hosting NSWindow and forces it to a 720x560 frame
+/// centered on whichever screen currently shows it. SwiftUI's Settings
+/// scene otherwise restores the user's last-dragged geometry, which
+/// can leave the window awkwardly small or off-center after a display
+/// change — and the app deliberately wants the same footprint as the
+/// main window so the two surfaces feel like one app.
+private struct SettingsWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            let target = NSSize(width: 720, height: 560)
+            // Anchor to the screen the window currently overlaps, so a
+            // multi-monitor user opening Settings on a side display
+            // doesn't get yanked back to the primary screen.
+            let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
+            guard let visibleFrame = screen?.visibleFrame else { return }
+            let origin = NSPoint(
+                x: visibleFrame.midX - target.width / 2,
+                y: visibleFrame.midY - target.height / 2
+            )
+            let frame = NSRect(origin: origin, size: target)
+            if window.frame != frame {
+                window.setFrame(frame, display: true, animate: false)
+            }
+        }
     }
 }
 

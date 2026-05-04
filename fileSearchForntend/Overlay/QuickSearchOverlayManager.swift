@@ -33,7 +33,14 @@ private final class NonActivatingPanel: NSPanel {
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        // AppKit-managed shadow: the window manager draws a soft drop
+        // shadow that follows the visible non-transparent pixels of
+        // the panel content. This is the only way to get a shadow that
+        // actually extends *outside* the panel's bounds — SwiftUI's
+        // .shadow inside the view is clipped by the host layer's
+        // `masksToBounds = true` (needed for the rounded corners), so
+        // the panel previously read as flat against bright wallpapers.
+        hasShadow = true
     }
 
     override var canBecomeKey: Bool { true }

@@ -1,0 +1,21 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Cosma Sense — Stable</title>
+        <link>https://cosmasense.github.io/appcast/stable.xml</link>
+        <description>Stable channel updates for Cosma Sense.</description>
+        <language>en</language>
+        <!--
+            Each release adds an <item>. The release script
+            (release/scripts/publish.sh) appends new entries; do not
+            edit by hand. Newest first.
+
+            Required pieces per item:
+              - sparkle:version            CFBundleVersion (build #)
+              - sparkle:shortVersionString CFBundleShortVersionString (1.2.3)
+              - sparkle:edSignature        EdDSA sig from sign_update
+              - length                     bytes of the .zip
+              - url                        public URL of the .zip
+        -->
+    </channel>
+</rss>

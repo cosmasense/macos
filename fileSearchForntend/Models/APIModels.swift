@@ -602,11 +602,15 @@ struct FilterConfigResponse: Codable {
     // Legacy fields (deprecated but kept for compatibility)
     let exclude: [String]
     let include: [String]
-    // Mode-specific pattern storage (NEW)
+    // Mode-specific pattern storage
     let blacklistExclude: [String]
     let blacklistInclude: [String]
     let whitelistInclude: [String]
     let whitelistExclude: [String]
+    // v3: third tier — files matching these are indexed by filename
+    // only (no LLM summary). Decoded as `[]` against an old backend
+    // that doesn't yet send the field.
+    let metadataOnlyPatterns: [String]
     let configPath: String
 
     enum CodingKeys: String, CodingKey {
@@ -618,7 +622,22 @@ struct FilterConfigResponse: Codable {
         case blacklistInclude = "blacklist_include"
         case whitelistInclude = "whitelist_include"
         case whitelistExclude = "whitelist_exclude"
+        case metadataOnlyPatterns = "metadata_only_patterns"
         case configPath = "config_path"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        mode = try c.decode(String.self, forKey: .mode)
+        exclude = try c.decodeIfPresent([String].self, forKey: .exclude) ?? []
+        include = try c.decodeIfPresent([String].self, forKey: .include) ?? []
+        blacklistExclude = try c.decodeIfPresent([String].self, forKey: .blacklistExclude) ?? []
+        blacklistInclude = try c.decodeIfPresent([String].self, forKey: .blacklistInclude) ?? []
+        whitelistInclude = try c.decodeIfPresent([String].self, forKey: .whitelistInclude) ?? []
+        whitelistExclude = try c.decodeIfPresent([String].self, forKey: .whitelistExclude) ?? []
+        metadataOnlyPatterns = try c.decodeIfPresent([String].self, forKey: .metadataOnlyPatterns) ?? []
+        configPath = try c.decodeIfPresent(String.self, forKey: .configPath) ?? ""
     }
 }
 
@@ -628,11 +647,13 @@ struct UpdateFilterConfigRequest: Codable {
     // Legacy fields (deprecated but kept for compatibility)
     let exclude: [String]?
     let include: [String]?
-    // Mode-specific pattern storage (NEW)
+    // Mode-specific pattern storage
     let blacklistExclude: [String]?
     let blacklistInclude: [String]?
     let whitelistInclude: [String]?
     let whitelistExclude: [String]?
+    // v3: metadata-only patterns
+    let metadataOnlyPatterns: [String]?
     // Control whether to apply changes immediately
     let applyImmediately: Bool
 
@@ -644,6 +665,7 @@ struct UpdateFilterConfigRequest: Codable {
         case blacklistInclude = "blacklist_include"
         case whitelistInclude = "whitelist_include"
         case whitelistExclude = "whitelist_exclude"
+        case metadataOnlyPatterns = "metadata_only_patterns"
         case applyImmediately = "apply_immediately"
     }
 }

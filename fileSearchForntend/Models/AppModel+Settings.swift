@@ -172,6 +172,7 @@ extension AppModel {
             blacklistInclude = config.blacklistInclude
             whitelistInclude = config.whitelistInclude
             whitelistExclude = config.whitelistExclude
+            metadataOnlyPatterns = config.metadataOnlyPatterns
             fileFilterEnabled = true
 
             // Save as "clean" state for dirty tracking
@@ -180,6 +181,7 @@ extension AppModel {
             savedBlacklistInclude = config.blacklistInclude
             savedWhitelistInclude = config.whitelistInclude
             savedWhitelistExclude = config.whitelistExclude
+            savedMetadataOnlyPatterns = config.metadataOnlyPatterns
         } catch let error as APIError {
             filterConfigError = error.localizedDescription
             #if DEBUG
@@ -257,6 +259,7 @@ extension AppModel {
                 blacklistInclude: blacklistInclude,
                 whitelistInclude: whitelistInclude,
                 whitelistExclude: whitelistExclude,
+                metadataOnlyPatterns: metadataOnlyPatterns,
                 applyImmediately: true
             )
 
@@ -267,6 +270,7 @@ extension AppModel {
                 savedBlacklistInclude = response.config.blacklistInclude
                 savedWhitelistInclude = response.config.whitelistInclude
                 savedWhitelistExclude = response.config.whitelistExclude
+                savedMetadataOnlyPatterns = response.config.metadataOnlyPatterns
 
                 // Sync local state
                 filterMode = response.config.mode
@@ -274,6 +278,7 @@ extension AppModel {
                 blacklistInclude = response.config.blacklistInclude
                 whitelistInclude = response.config.whitelistInclude
                 whitelistExclude = response.config.whitelistExclude
+                metadataOnlyPatterns = response.config.metadataOnlyPatterns
             } else {
                 filterConfigError = response.message
             }
@@ -291,6 +296,7 @@ extension AppModel {
         blacklistInclude = savedBlacklistInclude
         whitelistInclude = savedWhitelistInclude
         whitelistExclude = savedWhitelistExclude
+        metadataOnlyPatterns = savedMetadataOnlyPatterns
         filterConfigError = nil
     }
 
@@ -306,12 +312,14 @@ extension AppModel {
                     blacklistInclude = response.config.blacklistInclude
                     whitelistInclude = response.config.whitelistInclude
                     whitelistExclude = response.config.whitelistExclude
+                    metadataOnlyPatterns = response.config.metadataOnlyPatterns
 
                     savedFilterMode = response.config.mode
                     savedBlacklistExclude = response.config.blacklistExclude
                     savedBlacklistInclude = response.config.blacklistInclude
                     savedWhitelistInclude = response.config.whitelistInclude
                     savedWhitelistExclude = response.config.whitelistExclude
+                    savedMetadataOnlyPatterns = response.config.metadataOnlyPatterns
                 } else {
                     filterConfigError = response.message
                 }

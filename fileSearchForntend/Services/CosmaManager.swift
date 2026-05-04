@@ -881,6 +881,7 @@ class CosmaManager {
     /// `installedVersion` pair. Idempotent — call after any version-related
     /// change.
     private func refreshUpdateStatus() {
+        let previousStatus = updateStatus
         guard let installed = installedVersion else {
             updateStatus = .idle
             return
@@ -900,6 +901,18 @@ class CosmaManager {
             return
         }
         updateStatus = .downloadedPendingRestart(running: running, downloaded: installed)
+        // First entry into the pending-restart state — surface a system
+        // notification so the user finds out about the restart prompt
+        // even when the app is in the background. Idempotent: only
+        // fires when we cross the boundary, not on every refresh.
+        if !Self.isPendingRestart(previousStatus) {
+            NotificationManager.shared.notifyBackendUpdateReady(downloadedVersion: installed)
+        }
+    }
+
+    private static func isPendingRestart(_ status: UpdateStatus) -> Bool {
+        if case .downloadedPendingRestart = status { return true }
+        return false
     }
 
     /// Background variant of `upgradeCosmaIfNeeded` that runs *after* the

@@ -89,6 +89,17 @@ Backend is published to PyPI from the separate `cosma` repo; clients
 pick up new versions on next launch via `upgradeCosmaIfNeeded`. Full
 release steps: `docs/RELEASING.md`.
 
+### Frontend Releases (Sparkle)
+
+The .app self-updates via Sparkle 2.x. Two channels (Stable / Dev),
+selectable in Settings → General → App Updates. Appcast lives at
+`https://cosmasense.github.io/appcast/{stable,dev}.xml` (separate
+`cosmasense/appcast` repo). Releases are cut by
+`release/scripts/publish.sh` — see `docs/RELEASING.md`. Backend
+(PyPI) and frontend (Sparkle) versions ship in lockstep — same
+number across `cosma/pyproject.toml`, `MARKETING_VERSION`,
+`kPairedBackendVersion`, and the release tag.
+
 Setup stages: `.idle` → `.checkingUV` → `.installingUV` → `.checkingCosma` → `.installingCosma` → `.startingServer` → `.running`
 
 ### Real-Time Updates (SSE)

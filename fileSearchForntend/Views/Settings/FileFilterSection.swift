@@ -13,6 +13,7 @@ struct FileFilterSection: View {
     @Environment(AppModel.self) private var model
     @State private var newExcludePattern = ""
     @State private var newIncludePattern = ""
+    @State private var newMetadataOnlyPattern = ""
     @State private var showingHelp = false
 
     private var modeDescription: String {
@@ -130,6 +131,34 @@ struct FileFilterSection: View {
                 },
                 isLoading: model.isLoadingFilterConfig
             )
+
+            // Metadata-Only Patterns Block (v3 third tier)
+            //
+            // Files matching these are indexed by filename + metadata
+            // only — no parser, no LLM summary. Useful for movie /
+            // download / backup folders where filenames carry the
+            // search signal but the contents aren't worth GPU time.
+            VStack(alignment: .leading, spacing: 6) {
+                PatternTagBlock(
+                    title: "Metadata-Only Patterns",
+                    patterns: model.metadataOnlyPatterns,
+                    emptyText: "No metadata-only patterns",
+                    newPattern: $newMetadataOnlyPattern,
+                    onAdd: { pattern in
+                        if !model.metadataOnlyPatterns.contains(pattern) {
+                            model.metadataOnlyPatterns.append(pattern)
+                        }
+                    },
+                    onRemove: { pattern in
+                        model.metadataOnlyPatterns.removeAll { $0 == pattern }
+                    },
+                    isLoading: model.isLoadingFilterConfig
+                )
+                Text("Files matching these patterns are indexed by filename only — no LLM summary. Use for movie folders, backups, or any directory where you want fast filename search without spending GPU on descriptions.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             // Save/Discard buttons (shown when there are unsaved changes)
             if model.hasUnsavedFilterChanges {

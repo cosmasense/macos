@@ -29,6 +29,69 @@ struct ShutdownView: View {
     }
 }
 
+// MARK: - Restart-for-Update Prompt
+
+/// Modal-feeling popup shown the first time we detect that a new
+/// backend version has been downloaded and is waiting for a restart.
+/// Replaces the previous "tiny banner inside Settings" surface so the
+/// user actually sees the prompt instead of having to open Settings
+/// to discover it.
+struct RestartForUpdatePromptView: View {
+    let runningVersion: String
+    let downloadedVersion: String
+    let onRestart: () -> Void
+    let onLater: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 14) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(Color.brandBlue)
+
+                Text("Update Ready to Install")
+                    .font(.system(size: 16, weight: .semibold))
+
+                Text("A newer version of the search engine has been downloaded. Restart Cosma Sense to apply it.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("v\(runningVersion) → v\(downloadedVersion)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
+            .padding(.top, 24)
+            .padding(.horizontal, 28)
+
+            Spacer()
+
+            HStack(spacing: 12) {
+                Button("Later") {
+                    onLater()
+                }
+                .keyboardShortcut(.cancelAction)
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                Button("Restart Now") {
+                    onRestart()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(Color.brandBlue)
+                .controlSize(.regular)
+            }
+            .padding(.bottom, 20)
+            .padding(.horizontal, 28)
+        }
+        .frame(width: 380, height: 220)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+    }
+}
+
 // MARK: - Quit Confirmation
 
 struct QuitConfirmationView: View {
@@ -77,6 +140,7 @@ struct QuitConfirmationView: View {
                     }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .tint(Color.brandBlue)
                     .controlSize(.regular)
                 }
             }

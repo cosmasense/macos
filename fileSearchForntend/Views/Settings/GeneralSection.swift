@@ -13,6 +13,7 @@ import ServiceManagement
 struct GeneralSection: View {
     @Environment(AppModel.self) private var model
     @Environment(CosmaManager.self) private var cosmaManager
+    @Environment(SparkleUpdaterController.self) private var updater
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
     @State private var connectionTestState: ConnectionTestState = .idle
@@ -20,6 +21,7 @@ struct GeneralSection: View {
     @State private var currentVisibilityMode: AppVisibilityMode = .dockOnly
     @State private var showingLogs = false
     @State private var dialogsReset = false
+    @State private var showingLicenses = false
 
     /// True while a PyPI check (or a triggered download) is running.
     /// Used to swap the button label for a spinner + disable re-clicks.
@@ -96,6 +98,9 @@ struct GeneralSection: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
+
+            // App Updates (Sparkle)
+            AppUpdatesSection(updater: updater)
 
             // Managed Backend
             VStack(alignment: .leading, spacing: 8) {
@@ -232,6 +237,26 @@ struct GeneralSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Open-source licenses
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Open Source Licenses")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    showingLicenses = true
+                } label: {
+                    Label("View Acknowledgements", systemImage: "doc.text.below.ecg")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Text("Cosma Sense is built on a number of open-source libraries. View their licenses to verify compliance.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Backend URL
             VStack(alignment: .leading, spacing: 8) {
                 Text("Backend URL")
@@ -278,6 +303,9 @@ struct GeneralSection: View {
         }
         .sheet(isPresented: $showingLogs) {
             BackendLogView(cosmaManager: cosmaManager)
+        }
+        .sheet(isPresented: $showingLicenses) {
+            LicensesView()
         }
     }
 
