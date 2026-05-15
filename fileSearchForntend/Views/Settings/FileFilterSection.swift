@@ -15,6 +15,7 @@ struct FileFilterSection: View {
     @State private var newIncludePattern = ""
     @State private var newMetadataOnlyPattern = ""
     @State private var showingHelp = false
+    @State private var showingAdvanced = false
 
     private var modeDescription: String {
         switch model.filterMode {
@@ -83,24 +84,6 @@ struct FileFilterSection: View {
                 .foregroundStyle(.orange)
             }
 
-            // Filter Mode Picker
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Filter Mode")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                Picker("", selection: Binding(
-                    get: { model.filterMode },
-                    set: { model.updateFilterMode($0) }
-                )) {
-                    Text("Blacklist (exclude matching files)").tag("blacklist")
-                    Text("Whitelist (only include matching files)").tag("whitelist")
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(maxWidth: 350, alignment: .leading)
-            }
-
             // Exclude Patterns Block
             PatternTagBlock(
                 title: excludeLabel,
@@ -131,34 +114,6 @@ struct FileFilterSection: View {
                 },
                 isLoading: model.isLoadingFilterConfig
             )
-
-            // Metadata-Only Patterns Block (v3 third tier)
-            //
-            // Files matching these are indexed by filename + metadata
-            // only — no parser, no LLM summary. Useful for movie /
-            // download / backup folders where filenames carry the
-            // search signal but the contents aren't worth GPU time.
-            VStack(alignment: .leading, spacing: 6) {
-                PatternTagBlock(
-                    title: "Metadata-Only Patterns",
-                    patterns: model.metadataOnlyPatterns,
-                    emptyText: "No metadata-only patterns",
-                    newPattern: $newMetadataOnlyPattern,
-                    onAdd: { pattern in
-                        if !model.metadataOnlyPatterns.contains(pattern) {
-                            model.metadataOnlyPatterns.append(pattern)
-                        }
-                    },
-                    onRemove: { pattern in
-                        model.metadataOnlyPatterns.removeAll { $0 == pattern }
-                    },
-                    isLoading: model.isLoadingFilterConfig
-                )
-                Text("Files matching these patterns are indexed by filename only — no LLM summary. Use for movie folders, backups, or any directory where you want fast filename search without spending GPU on descriptions.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
 
             // Save/Discard buttons (shown when there are unsaved changes)
             if model.hasUnsavedFilterChanges {
@@ -206,10 +161,109 @@ struct FileFilterSection: View {
                 .font(.system(size: 12))
                 .disabled(model.isLoadingFilterConfig || model.hasUnsavedFilterChanges)
             }
+
+            Spacer(minLength: 8)
+
+            HStack {
+                Spacer()
+                Button {
+                    showingAdvanced = true
+                } label: {
+                    Label("Advanced…", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            }
         }
         .sheet(isPresented: $showingHelp) {
             FilterPatternHelpView()
         }
+        .sheet(isPresented: $showingAdvanced) {
+            FileFilterAdvancedSheet(
+                newMetadataOnlyPattern: $newMetadataOnlyPattern
+            )
+        }
+    }
+}
+
+// MARK: - File Filter Advanced Sheet
+
+/// Settings most users won't touch: filter-mode toggle (default
+/// blacklist works for ~everyone) and metadata-only patterns
+/// (a niche optimization for movie/backup folders).
+private struct FileFilterAdvancedSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @Binding var newMetadataOnlyPattern: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("File Filters — Advanced")
+                    .font(.system(size: 18, weight: .semibold))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+
+            Divider()
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Filter Mode")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+
+                        Picker("", selection: Binding(
+                            get: { model.filterMode },
+                            set: { model.updateFilterMode($0) }
+                        )) {
+                            Text("Blacklist (exclude matching files)").tag("blacklist")
+                            Text("Whitelist (only include matching files)").tag("whitelist")
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: 350, alignment: .leading)
+
+                        Text("Most users want Blacklist — index everything except a small list of patterns. Whitelist flips the relationship and only indexes files that match.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        PatternTagBlock(
+                            title: "Metadata-Only Patterns",
+                            patterns: model.metadataOnlyPatterns,
+                            emptyText: "No metadata-only patterns",
+                            newPattern: $newMetadataOnlyPattern,
+                            onAdd: { pattern in
+                                if !model.metadataOnlyPatterns.contains(pattern) {
+                                    model.metadataOnlyPatterns.append(pattern)
+                                }
+                            },
+                            onRemove: { pattern in
+                                model.metadataOnlyPatterns.removeAll { $0 == pattern }
+                            },
+                            isLoading: model.isLoadingFilterConfig
+                        )
+                        Text("Files matching these patterns are indexed by filename only — no LLM summary. Use for movie folders, backups, or any directory where you want fast filename search without spending GPU on descriptions.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .frame(width: 560, height: 480)
     }
 }
 

@@ -76,13 +76,49 @@ struct PermissionsSettingsView: View {
 
     private func refreshAll() {
         fdaGranted = checkFullDiskAccessPermission()
-        accessibilityGranted = AXIsProcessTrusted()
+        accessibilityGranted = detectAccessibilityCapability()
         Task {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
                 self.notificationsState = settings.authorizationStatus
             }
         }
+    }
+
+    /// AXIsProcessTrusted is the canonical accessibility check, but it
+    /// can lie in two situations a user actually hits:
+    ///   1. The TCC entry was created against a previous build's code
+    ///      signature (rebuilds in Xcode shuffle the dev signature).
+    ///      The toggle in System Settings stays ON, but for a *different
+    ///      identity* than the running process, so AXIsProcessTrusted
+    ///      keeps returning false.
+    ///   2. macOS occasionally lags before flipping the value after the
+    ///      user toggles the switch — fixed by a relaunch, but really
+    ///      annoying to be told "Needed" while the switch reads ON.
+    ///
+    /// Workaround: also probe the actual capability the dual-⌘ trigger
+    /// relies on by trying to create a passive CGEventTap. If we can
+    /// install the tap, we have effective hotkey permission regardless
+    /// of what the AX bit says. We invalidate immediately — this is a
+    /// permission probe, not the real listener.
+    private func detectAccessibilityCapability() -> Bool {
+        return AXIsProcessTrusted() || canCreateGlobalEventTap()
+    }
+
+    private func canCreateGlobalEventTap() -> Bool {
+        let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
+            userInfo: nil
+        ) else {
+            return false
+        }
+        CFMachPortInvalidate(tap)
+        return true
     }
 
     private func handleNotificationButton() {

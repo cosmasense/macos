@@ -22,6 +22,10 @@ private final class NonActivatingPanel: NSPanel {
         isFloatingPanel = true
         level = .floating
         collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // Force Light on the AppKit side too. NSApp.appearance is pinned at
+        // launch, but a custom-styled NSPanel can still resolve materials
+        // against the system appearance unless its own `appearance` is set.
+        appearance = NSAppearance(named: .aqua)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         // Drag handling is opt-in per-area via `WindowDragRegion` views in
@@ -145,6 +149,12 @@ final class QuickSearchOverlayController: NSObject, NSWindowDelegate {
             .environment(\.quickSearchDragState, { [weak self] isDragging in
                 self?.setDragThrough(isDragging)
             })
+            // Pin Light to the overlay's SwiftUI tree. The main WindowGroup
+            // gets `.preferredColorScheme(.light)` in fileSearchForntendApp,
+            // but this panel is mounted separately via NSHostingController
+            // and would otherwise track the system appearance — leaving the
+            // glass material very dark on a Dark-Mode system.
+            .preferredColorScheme(.light)
 
             let host = NSHostingController(rootView: AnyView(contentView))
             // The overlay now renders as a single unified rounded panel, so

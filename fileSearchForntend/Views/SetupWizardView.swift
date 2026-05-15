@@ -10,19 +10,26 @@ import SwiftUI
 import AppKit
 
 enum SetupStep: Int, CaseIterable {
-    case fullDiskAccess = 0
-    case shortcut = 1
-    case aiModel = 2
-    case backend = 3
+    case welcome = 0
+    case fullDiskAccess = 1
+    case shortcut = 2
+    case chooseBackend = 3
+    case settingUp = 4
 
     var title: String {
         switch self {
+        case .welcome: return "Welcome"
         case .fullDiskAccess: return "Full Disk Access"
         case .shortcut: return "Quick Search Shortcut"
-        case .aiModel: return "AI Model"
-        case .backend: return "Finishing Setup"
+        case .chooseBackend: return "Choose AI Backend"
+        case .settingUp: return "Setting Up"
         }
     }
+
+    /// Whether this step contributes to the visual step indicator.
+    /// Welcome is pre-flight onboarding chrome and intentionally
+    /// excluded so the dots show a meaningful 4-step progression.
+    var showsInIndicator: Bool { self != .welcome }
 }
 
 struct SetupWizardView: View {
@@ -30,7 +37,20 @@ struct SetupWizardView: View {
     @AppStorage("overlayHotkey") private var overlayHotkey = ""
     @AppStorage("overlayTriggerMode") private var overlayTriggerMode = "hotkey"
 
-    @State private var step: SetupStep = .fullDiskAccess
+    // Provider + per-provider model choices. Persisted across launches
+    // so re-running the wizard (after a model purge or first-launch
+    // crash) remembers what the user picked. Names are kept aligned
+    // with the backend setting paths in CosmaManager+Bootstrap.
+    @AppStorage("aiProvider") private var provider: String = "llamacpp"
+    @AppStorage("wizardLlamacppMode") private var llamacppMode: String = "default"
+    @AppStorage("wizardLlamacppRepo") private var llamacppRepo: String = "unsloth/Qwen3-VL-2B-Instruct-GGUF"
+    @AppStorage("wizardLlamacppFilename") private var llamacppFilename: String = "*Q4_K_M.gguf"
+    @AppStorage("wizardOllamaModel") private var ollamaModel: String = "qwen3-vl:2b-instruct"
+    @AppStorage("wizardOnlineEndpoint") private var onlineEndpoint: String = "https://api.openai.com/v1"
+    @AppStorage("wizardOnlineModel") private var onlineModel: String = "gpt-4.1-nano"
+    @AppStorage("wizardOnlineApiKey") private var onlineApiKey: String = ""
+
+    @State private var step: SetupStep = .welcome
     @State private var hasFullDiskAccess: Bool = false
     @State private var didStartBackend = false
 
@@ -38,14 +58,18 @@ struct SetupWizardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            StepIndicator(current: step)
-                .padding(.top, 28)
-                .padding(.bottom, 10)
+            if step.showsInIndicator {
+                StepIndicator(current: step)
+                    .padding(.top, 28)
+                    .padding(.bottom, 10)
 
-            Divider().opacity(0.35)
+                Divider().opacity(0.35)
+            }
 
             Group {
                 switch step {
+                case .welcome:
+                    WelcomeStep(onContinue: advance)
                 case .fullDiskAccess:
                     FullDiskAccessStep(
                         hasAccess: $hasFullDiskAccess,
@@ -57,16 +81,31 @@ struct SetupWizardView: View {
                         triggerMode: $overlayTriggerMode,
                         onContinue: advance
                     )
-                case .aiModel:
-                    AIModelStep(
-                        stage: cosmaManager.setupStage,
+                case .chooseBackend:
+                    ChooseBackendStep(
+                        provider: $provider,
+                        llamacppMode: $llamacppMode,
+                        llamacppRepo: $llamacppRepo,
+                        llamacppFilename: $llamacppFilename,
+                        ollamaModel: $ollamaModel,
+                        onlineEndpoint: $onlineEndpoint,
+                        onlineModel: $onlineModel,
+                        onlineApiKey: $onlineApiKey,
                         onContinue: advance,
                         onAppearAction: startBackendIfNeeded
                     )
-                case .backend:
-                    BackendStep(
-                        stage: cosmaManager.setupStage,
+                case .settingUp:
+                    SettingUpStep(
+                        provider: provider,
+                        llamacppMode: llamacppMode,
+                        llamacppRepo: llamacppRepo,
+                        llamacppFilename: llamacppFilename,
+                        ollamaModel: ollamaModel,
+                        onlineEndpoint: onlineEndpoint,
+                        onlineModel: onlineModel,
+                        onlineApiKey: onlineApiKey,
                         onContinue: onFinished,
+                        onGoBack: { step = .chooseBackend },
                         onAppearAction: startBackendIfNeeded
                     )
                 }
@@ -83,9 +122,6 @@ struct SetupWizardView: View {
         .animation(.easeInOut(duration: 0.25), value: step)
         .onAppear {
             hasFullDiskAccess = checkFullDiskAccessPermission()
-            if hasFullDiskAccess && step == .fullDiskAccess {
-                // Allow user to still see the step; don't auto-skip.
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             hasFullDiskAccess = checkFullDiskAccessPermission()
@@ -112,12 +148,18 @@ struct SetupWizardView: View {
 private struct StepIndicator: View {
     let current: SetupStep
 
+    /// Steps shown in the indicator. Welcome is excluded so the dots
+    /// reflect the four "real" setup steps and number them 1..4.
+    private var visibleSteps: [SetupStep] {
+        SetupStep.allCases.filter { $0.showsInIndicator }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(SetupStep.allCases, id: \.rawValue) { s in
+            ForEach(Array(visibleSteps.enumerated()), id: \.offset) { idx, s in
                 HStack(spacing: 10) {
-                    dot(for: s)
-                    if s != SetupStep.allCases.last {
+                    dot(for: s, displayNumber: idx + 1)
+                    if idx < visibleSteps.count - 1 {
                         Rectangle()
                             .fill(s.rawValue < current.rawValue ? Color.brandBlue : Color.secondary.opacity(0.25))
                             .frame(width: 36, height: 2)
@@ -129,7 +171,7 @@ private struct StepIndicator: View {
     }
 
     @ViewBuilder
-    private func dot(for s: SetupStep) -> some View {
+    private func dot(for s: SetupStep, displayNumber: Int) -> some View {
         let isDone = s.rawValue < current.rawValue
         let isCurrent = s == current
         ZStack {
@@ -145,11 +187,62 @@ private struct StepIndicator: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.white)
             } else {
-                Text("\(s.rawValue + 1)")
+                Text("\(displayNumber)")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isCurrent ? Color.brandBlue : .secondary)
             }
         }
+    }
+}
+
+// MARK: - Step 0: Welcome
+
+/// First-launch landing screen. Logo + name + one-sentence pitch +
+/// Get Started. Skipped from the step indicator so it feels like a
+/// hello rather than the first chore.
+private struct WelcomeStep: View {
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 40)
+
+            // App icon. NSApplication.applicationIconImage returns the
+            // bundle's icon at the largest available rep, which we
+            // size up to 128. NSImage → SwiftUI Image keeps Retina
+            // scaling correct (no mushy upscale of the 32pt rep).
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 128, height: 128)
+
+            VStack(spacing: 10) {
+                Text("Cosma Sense")
+                    .font(.system(size: 28, weight: .semibold))
+                Text("Vector search for your Mac — find files by meaning, not just by name.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 60)
+            }
+
+            Spacer()
+
+            Button(action: onContinue) {
+                HStack(spacing: 6) {
+                    Text("Get Started")
+                    Image(systemName: "arrow.right")
+                }
+                .frame(minWidth: 180)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandBlue)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .padding(.bottom, 40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -492,173 +585,456 @@ private struct InlineHotkeyCapture: NSViewRepresentable {
     }
 }
 
-// MARK: - Step 3: AI Model
+// MARK: - Step 3: Choose AI Backend
 
-/// Two-phase AI setup step:
-///   Phase A — Choose provider (radio group, default llama.cpp). User
-///     sees what they're agreeing to (model name + approximate size) and
-///     must explicitly confirm before any multi-GB download kicks off.
-///   Phase B — Download progress (driven by /api/bootstrap SSE).
-/// The old "auto-fallback" behavior was removed to make failures
-/// diagnosable: if the user picked llama.cpp, Ollama absence should not
-/// silently mask a real llama.cpp problem.
-private struct AIModelStep: View {
-    @Environment(CosmaManager.self) private var cosmaManager
-    let stage: CosmaManager.SetupStage
+/// Selection-only AI step. The user picks a provider and (where the
+/// provider has knobs) the specific model details. No download fires
+/// here — that's deferred to SettingUpStep so this screen stays a
+/// pure "I am committing to this configuration" surface.
+///
+/// Per-provider sub-forms:
+///   * llama.cpp: Default (recommended Qwen3-VL Q4_K_M GGUF) or
+///     Custom (HuggingFace repo + filename, validated downstream by
+///     the bootstrap install).
+///   * Ollama: model name + Test Connection button (pings local
+///     Ollama daemon, reports daemon/model status).
+///   * Online: OpenAI-compatible endpoint + model + API key. Three
+///     fields because users use Together/Groq/LM Studio/etc., not
+///     just OpenAI proper.
+///
+/// Ollama row only appears if the binary is installed locally — no
+/// point offering an option that can't possibly succeed.
+private struct ChooseBackendStep: View {
+    @Binding var provider: String
+    @Binding var llamacppMode: String          // "default" | "custom"
+    @Binding var llamacppRepo: String
+    @Binding var llamacppFilename: String
+    @Binding var ollamaModel: String
+    @Binding var onlineEndpoint: String
+    @Binding var onlineModel: String
+    @Binding var onlineApiKey: String
     let onContinue: () -> Void
     let onAppearAction: () -> Void
 
-    // Persisted across launches so re-running the wizard (after models got
-    // nuked) remembers the user's prior choice.
-    @AppStorage("aiProvider") private var provider: String = "llamacpp"
-    @AppStorage("aiConfirmed") private var confirmed: Bool = false
+    @State private var ollamaInstalled: Bool = ollamaIsInstalled()
+    @State private var ollamaTestResult: TestResult = .untested
+    @State private var ollamaTesting: Bool = false
 
-    private var bootstrapDone: Bool {
-        cosmaManager.bootstrapReady
-    }
-
-    // Provider → (model name, rough download size). These strings are
-    // shown to the user at confirmation time so they know what's about
-    // to hit their disk.
-    private var providerInfo: (model: String, size: String) {
-        switch provider {
-        case "llamacpp": return ("Qwen3-VL-2B-Instruct (Q4_K_M) + mmproj + Whisper base.en", "~2.1 GB")
-        case "ollama":   return ("qwen3-vl:2b-instruct via Ollama + Whisper base.en", "~1.6 GB")
-        case "online":   return ("OpenAI (gpt-4.1-nano + whisper-1)", "0 GB — requires OPENAI_API_KEY")
-        default:         return ("Unknown", "")
-        }
+    enum TestResult: Equatable {
+        case untested
+        case success(String)
+        case warning(String)
+        case failure(String)
     }
 
     var body: some View {
         StepShell(
             icon: "brain.head.profile",
-            title: confirmed ? "Downloading AI Models" : "Choose AI Backend",
-            subtitle: confirmed
-                ? "Components for your selected backend are downloading. This can take a few minutes on the first run."
-                : "Pick how Cosma Sense will run its AI. You can change this later in Settings."
+            title: "Choose AI Backend",
+            subtitle: "Pick how Cosma Sense will run its AI. You can change this later in Settings."
         ) {
-            if !confirmed {
-                providerPicker
-            } else {
-                progressList
+            VStack(spacing: 10) {
+                ProviderRow(
+                    key: "llamacpp",
+                    title: "llama.cpp built-in (recommended)",
+                    description: "Fully local. Self-contained. No setup required.",
+                    selected: provider == "llamacpp",
+                    onSelect: { provider = "llamacpp" }
+                )
+                if provider == "llamacpp" { llamacppSubForm }
+
+                if ollamaInstalled {
+                    ProviderRow(
+                        key: "ollama",
+                        title: "Ollama",
+                        description: "Local, uses the external Ollama daemon.",
+                        selected: provider == "ollama",
+                        onSelect: { provider = "ollama" }
+                    )
+                    if provider == "ollama" { ollamaSubForm }
+                }
+
+                ProviderRow(
+                    key: "online",
+                    title: "Online (OpenAI-compatible)",
+                    description: "Fastest setup. Sends file content to the configured endpoint.",
+                    selected: provider == "online",
+                    onSelect: { provider = "online" }
+                )
+                if provider == "online" { onlineSubForm }
             }
         } footer: {
-            if !confirmed {
-                Button {
-                    confirmed = true
-                    Task {
-                        await cosmaManager.setProviderAndBootstrap(
-                            summarizer: provider,
-                            whisper: provider == "online" ? "online" : "local",
-                        )
-                    }
-                } label: {
-                    Text("Confirm & Download").frame(minWidth: 180)
+            Button(action: onContinue) {
+                HStack(spacing: 6) {
+                    Text("Confirm")
+                    Image(systemName: "arrow.right")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.brandBlue)
-                .controlSize(.large)
-            } else {
-                Button(action: onContinue) {
-                    Text(bootstrapDone ? "Continue" : "Please wait…")
-                        .frame(minWidth: 160)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.brandBlue)
-                .controlSize(.large)
-                .disabled(!bootstrapDone)
+                .frame(minWidth: 180)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandBlue)
+            .controlSize(.large)
+            .disabled(!isReady)
         }
         .onAppear {
+            // Re-check installed state (user may have just installed
+            // Ollama via Homebrew while the wizard was open) and let
+            // the parent kick off the backend startup so it's warming
+            // up while the user reads this screen.
+            ollamaInstalled = Self.ollamaIsInstalled()
+            // Sanity: if the persisted provider is .ollama but Ollama
+            // disappeared since last launch, drop back to the default.
+            if provider == "ollama" && !ollamaInstalled {
+                provider = "llamacpp"
+            }
             onAppearAction()
-            // Wait for backend readiness, then decide what to do:
-            //   1. Fast path: everything already installed → auto-advance.
-            //   2. Previously confirmed but install incomplete (crash,
-            //      interrupted download, models deleted) → auto-resume
-            //      the install so the user doesn't sit staring at stale
-            //      bar state. Without this, they'd see bars at their last
-            //      known percentage and no events flowing.
-            //   3. Fresh: show picker so the user can choose a provider.
-            Task {
-                for _ in 0..<60 {
-                    if cosmaManager.isRunning { break }
-                    try? await Task.sleep(for: .milliseconds(500))
-                }
-                await cosmaManager.refreshBootstrapStatus()
-                if cosmaManager.bootstrapReady {
-                    confirmed = true
-                } else if confirmed {
-                    // Resume install — fire the same flow the Confirm button
-                    // would trigger. Idempotent on the backend side, so
-                    // repeated calls are safe.
-                    await cosmaManager.setProviderAndBootstrap(
-                        summarizer: provider,
-                        whisper: provider == "online" ? "online" : "local",
-                    )
-                }
-            }
-        }
-        .onChange(of: confirmed) { _, nowConfirmed in
-            guard nowConfirmed else { return }
-            Task { await cosmaManager.refreshBootstrapStatus() }
         }
     }
 
-    // MARK: - Subviews
-
-    private var providerPicker: some View {
-        VStack(spacing: 10) {
-            ProviderRow(
-                key: "llamacpp",
-                title: "Built-in (llama.cpp)",
-                description: "Fully local. Self-contained. Recommended.",
-                selected: provider == "llamacpp",
-                onSelect: { provider = "llamacpp" }
-            )
-            ProviderRow(
-                key: "ollama",
-                title: "Ollama",
-                description: "Local, uses the external Ollama daemon. Requires Ollama installed.",
-                selected: provider == "ollama",
-                onSelect: { provider = "ollama" }
-            )
-            ProviderRow(
-                key: "online",
-                title: "Online (OpenAI)",
-                description: "Fastest setup — but requires an OpenAI API key and sends file content to the cloud.",
-                selected: provider == "online",
-                onSelect: { provider = "online" }
-            )
-
-            // Model + size confirmation card
-            VStack(alignment: .leading, spacing: 4) {
-                Text("You're about to set up:")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text(providerInfo.model).font(.system(size: 13, weight: .medium))
-                Text("Download size: \(providerInfo.size)")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    /// Whether the user has filled in enough info to proceed.
+    /// Empty fields would PUT empty strings to the backend, which
+    /// `setProviderConfigAndBootstrap` already filters out — but
+    /// surfacing the gate as a disabled button is a clearer signal.
+    private var isReady: Bool {
+        switch provider {
+        case "llamacpp":
+            if llamacppMode == "default" { return true }
+            return !llamacppRepo.trimmingCharacters(in: .whitespaces).isEmpty
+                && !llamacppFilename.trimmingCharacters(in: .whitespaces).isEmpty
+        case "ollama":
+            return !ollamaModel.trimmingCharacters(in: .whitespaces).isEmpty
+        case "online":
+            return !onlineEndpoint.trimmingCharacters(in: .whitespaces).isEmpty
+                && !onlineModel.trimmingCharacters(in: .whitespaces).isEmpty
+                && !onlineApiKey.trimmingCharacters(in: .whitespaces).isEmpty
+        default:
+            return false
         }
     }
 
-    private var progressList: some View {
-        VStack(spacing: 12) {
-            if !cosmaManager.bootstrapComponents.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(cosmaManager.bootstrapComponents) { c in
-                        BootstrapRow(component: c)
+    // MARK: - llama.cpp sub-form
+
+    private var llamacppSubForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Model", selection: $llamacppMode) {
+                Text("Default — Qwen3-VL-2B-Instruct Q4_K_M (~2.1 GB)").tag("default")
+                Text("Custom (advanced)").tag("custom")
+            }
+            .pickerStyle(.radioGroup)
+
+            if llamacppMode == "custom" {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("HuggingFace Repo ID")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("e.g. unsloth/Qwen3-VL-2B-Instruct-GGUF", text: $llamacppRepo)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+
+                    Text("Filename pattern")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("e.g. *Q4_K_M.gguf", text: $llamacppFilename)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+
+                    Text("If the repo or filename can't be downloaded, you'll see the error in the next step and can come back to fix it.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Ollama sub-form
+
+    private var ollamaSubForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Model")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("qwen3-vl:2b-instruct", text: $ollamaModel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+                Button {
+                    runOllamaTest()
+                } label: {
+                    HStack(spacing: 4) {
+                        if ollamaTesting { ProgressView().controlSize(.mini) }
+                        Text("Test Connection")
                     }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(ollamaTesting || ollamaModel.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            switch ollamaTestResult {
+            case .untested:
+                Text("Click Test Connection to verify the daemon is running and the model is available.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            case .success(let msg):
+                Label(msg, systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.green)
+            case .warning(let msg):
+                Label(msg, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            case .failure(let msg):
+                Label(msg, systemImage: "xmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Online sub-form
+
+    private var onlineSubForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Endpoint URL")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("https://api.openai.com/v1", text: $onlineEndpoint)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Model name")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("gpt-4.1-nano", text: $onlineModel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("API key")
+                    .font(.caption).foregroundStyle(.secondary)
+                SecureField("sk-…", text: $onlineApiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+            }
+            Text("Works with any OpenAI-compatible API — OpenAI, Together, Groq, LM Studio, vLLM, etc. The key is stored in the backend's settings file (chmod 600).")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Ollama detection + test
+
+    /// Quick install probe — checks the two paths Homebrew installs
+    /// Ollama into. We don't try to launch `ollama` because that would
+    /// pop up a permission prompt or silently fail; just check
+    /// presence on disk.
+    static func ollamaIsInstalled() -> Bool {
+        let candidates = [
+            "/opt/homebrew/bin/ollama",
+            "/usr/local/bin/ollama",
+        ]
+        return candidates.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// Hits Ollama's tag-listing endpoint to verify the daemon is
+    /// running and the requested model is pulled. Distinguishes
+    /// three failure modes so we can guide the user accordingly:
+    ///   * daemon unreachable → tell them to start Ollama
+    ///   * daemon up, model missing → harmless warning, model will
+    ///     be auto-pulled on first use (we still let them proceed)
+    ///   * 200 with model present → green check
+    private func runOllamaTest() {
+        ollamaTesting = true
+        ollamaTestResult = .untested
+        let model = ollamaModel.trimmingCharacters(in: .whitespaces)
+        Task {
+            let result = await Self.probeOllama(model: model)
+            await MainActor.run {
+                ollamaTestResult = result
+                ollamaTesting = false
+            }
+        }
+    }
+
+    private static func probeOllama(model: String) async -> TestResult {
+        guard let url = URL(string: "http://localhost:11434/api/tags") else {
+            return .failure("Could not build request URL.")
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 4
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return .failure("Daemon responded with an unexpected status.")
+            }
+            // {"models":[{"name":"qwen3-vl:2b-instruct", ...}, ...]}
+            struct Tags: Decodable { struct Model: Decodable { let name: String }; let models: [Model]? }
+            let parsed = (try? JSONDecoder().decode(Tags.self, from: data)) ?? Tags(models: nil)
+            let names = parsed.models?.map(\.name) ?? []
+            if names.contains(model) {
+                return .success("Daemon reachable; model \"\(model)\" is installed.")
+            }
+            return .warning("Daemon reachable but model \"\(model)\" isn't pulled yet — it will be downloaded on first use.")
+        } catch {
+            return .failure("Could not reach Ollama at localhost:11434. Make sure the daemon is running.")
+        }
+    }
+}
+
+// MARK: - Step 4: Setting Up
+
+/// Combined "downloading models" + "starting backend" screen. Replaces
+/// the previous two separate AI-download and backend-startup steps so
+/// the user sees one progress surface for the whole post-confirm
+/// install flow. Triggers `setProviderConfigAndBootstrap` on appear
+/// with whatever the user picked in ChooseBackendStep.
+private struct SettingUpStep: View {
+    @Environment(CosmaManager.self) private var cosmaManager
+
+    let provider: String
+    let llamacppMode: String
+    let llamacppRepo: String
+    let llamacppFilename: String
+    let ollamaModel: String
+    let onlineEndpoint: String
+    let onlineModel: String
+    let onlineApiKey: String
+    let onContinue: () -> Void
+    let onGoBack: () -> Void
+    let onAppearAction: () -> Void
+
+    @State private var didKickInstall = false
+
+    private var backendReady: Bool {
+        if case .running = cosmaManager.setupStage { return true }
+        return false
+    }
+
+    private var bootstrapDone: Bool { cosmaManager.bootstrapReady }
+    private var allDone: Bool { backendReady && bootstrapDone }
+
+    private var backendStatusText: String {
+        switch cosmaManager.setupStage {
+        case .running: return "Backend running"
+        case .startingServer: return "Starting server…"
+        case .installingCosma: return "Installing cosma…"
+        case .checkingCosma: return "Checking for cosma…"
+        case .installingUV: return "Installing package manager…"
+        case .checkingUV: return "Checking for package manager…"
+        case .failed(let msg): return "Failed: \(msg)"
+        default: return "Preparing…"
+        }
+    }
+
+    var body: some View {
+        StepShell(
+            icon: "gearshape.2.fill",
+            title: "Setting Up",
+            subtitle: "Downloading models and starting the background service. This can take a few minutes on the first run."
+        ) {
+            VStack(spacing: 14) {
+                // Backend startup row.
+                HStack(spacing: 10) {
+                    Image(systemName: backendReady ? "checkmark.circle.fill" : "gearshape.2")
+                        .font(.system(size: 16))
+                        .foregroundStyle(backendReady ? .green : Color.brandBlue)
+                    Text(backendStatusText)
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    if !backendReady { ProgressView().controlSize(.small) }
                 }
                 .padding(12)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+                // Bootstrap component progress (model downloads).
+                if !cosmaManager.bootstrapComponents.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(cosmaManager.bootstrapComponents) { c in
+                            BootstrapRow(component: c)
+                        }
+                    }
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                if let err = cosmaManager.bootstrapError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Download error", systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Go Back & Edit") { onGoBack() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                    .padding(12)
+                    .background(Color.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.red.opacity(0.4))
+                    )
+                }
             }
-            if let err = cosmaManager.bootstrapError {
-                Text("Download error: \(err)")
-                    .font(.footnote).foregroundStyle(.red)
+        } footer: {
+            Button(action: onContinue) {
+                Text(allDone ? "Start Cosma Sense" : "Please wait…")
+                    .frame(minWidth: 180)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandBlue)
+            .controlSize(.large)
+            .disabled(!allDone)
+        }
+        .onAppear {
+            onAppearAction()
+            kickInstallOnce()
+        }
+    }
+
+    /// Wait for the backend to be reachable, then PUT the user's
+    /// chosen settings and kick off (or join) a bootstrap install.
+    /// Idempotent — guarded by didKickInstall so window resizes /
+    /// view re-mounts don't re-fire the install.
+    private func kickInstallOnce() {
+        guard !didKickInstall else { return }
+        didKickInstall = true
+        Task {
+            // Wait up to ~30s for the backend's HTTP listener.
+            for _ in 0..<60 {
+                if cosmaManager.isRunning { break }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            await cosmaManager.refreshBootstrapStatus()
+            if cosmaManager.bootstrapReady {
+                // Already installed — nothing to download. Settings
+                // still get written so a subsequent restart picks up
+                // the user's most recent choice.
+            }
+            // For the default llama.cpp path we deliberately pass
+            // nil for repo+filename so we don't blow away the user's
+            // (or backend's) defaults. Custom mode passes through
+            // exactly what the user typed.
+            let llamaRepoArg: String? = (provider == "llamacpp" && llamacppMode == "custom") ? llamacppRepo : nil
+            let llamaFileArg: String? = (provider == "llamacpp" && llamacppMode == "custom") ? llamacppFilename : nil
+            await cosmaManager.setProviderConfigAndBootstrap(
+                summarizer: provider,
+                whisper: provider == "online" ? "online" : "local",
+                llamacppRepo: llamaRepoArg,
+                llamacppFilename: llamaFileArg,
+                ollamaModel: provider == "ollama" ? ollamaModel : nil,
+                onlineModel: provider == "online" ? onlineModel : nil,
+                onlineBaseURL: provider == "online" ? onlineEndpoint : nil,
+                onlineApiKey: provider == "online" ? onlineApiKey : nil
+            )
         }
     }
 }
@@ -736,63 +1112,6 @@ private struct BootstrapRow: View {
             }
         }
         .frame(minHeight: done ? 22 : 34)
-    }
-}
-
-// MARK: - Step 4: Backend
-
-private struct BackendStep: View {
-    let stage: CosmaManager.SetupStage
-    let onContinue: () -> Void
-    let onAppearAction: () -> Void
-
-    private var isReady: Bool {
-        if case .running = stage { return true }
-        return false
-    }
-
-    private var statusText: String {
-        switch stage {
-        case .running: return "Backend running"
-        case .startingServer: return "Starting server…"
-        case .installingCosma: return "Installing cosma…"
-        case .checkingCosma: return "Checking for cosma…"
-        case .installingUV: return "Installing package manager…"
-        case .checkingUV: return "Checking for package manager…"
-        case .failed(let msg): return "Failed: \(msg)"
-        default: return "Preparing…"
-        }
-    }
-
-    var body: some View {
-        StepShell(
-            icon: "server.rack",
-            title: "Finishing Setup",
-            subtitle: "Starting the background service that indexes your files."
-        ) {
-            VStack(spacing: 14) {
-                HStack(spacing: 10) {
-                    Image(systemName: isReady ? "checkmark.circle.fill" : "gearshape.2")
-                        .font(.system(size: 18))
-                        .foregroundStyle(isReady ? .green : Color.brandBlue)
-                    Text(statusText)
-                        .font(.system(size: 14, weight: .medium))
-                    Spacer()
-                    if !isReady { ProgressView().controlSize(.small) }
-                }
-                .padding(12)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-            }
-        } footer: {
-            Button(action: onContinue) {
-                Text(isReady ? "Start Cosma Sense" : "Please wait…").frame(minWidth: 160)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brandBlue)
-            .controlSize(.large)
-            .disabled(!isReady)
-        }
-        .onAppear(perform: onAppearAction)
     }
 }
 

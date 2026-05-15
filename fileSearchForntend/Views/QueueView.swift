@@ -12,7 +12,6 @@ import SwiftUI
 enum QueueTab: String, CaseIterable, Identifiable {
     case current = "Current"
     case recent = "Recent"
-    case partial = "Partial"
     case failed = "Failed"
 
     var id: String { rawValue }
@@ -82,8 +81,6 @@ struct QueueContentView: View {
                 currentTabContent
             case .recent:
                 recentTabContent
-            case .partial:
-                partialTabContent
             case .failed:
                 failedTabContent
             }
@@ -102,8 +99,6 @@ struct QueueContentView: View {
                     await model.refreshQueueItems()
                 case .recent:
                     await model.refreshRecentFiles()
-                case .partial:
-                    await model.refreshPartialFiles()
                 case .failed:
                     await model.refreshFailedFiles()
                 }
@@ -231,46 +226,6 @@ struct QueueContentView: View {
         }
     }
 
-    // MARK: - Partial Tab
-
-    /// Files indexed by filename only (status=INDEXED_PARTIAL).
-    /// These are user-elected partials, not failures — same row UI
-    /// as Recent, distinct from Failed. The empty state explains the
-    /// feature so users who never opened a metadata-only pattern
-    /// understand why the tab is empty.
-    @ViewBuilder
-    private var partialTabContent: some View {
-        if model.partialFiles.isEmpty {
-            VStack(spacing: 18) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.quaternary)
-
-                Text("No Partial Files")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
-
-                Text("Files matching your Metadata-Only patterns appear here. They're indexed by filename only — no LLM summary — so they're searchable without the GPU cost of full processing.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 6) {
-                    ForEach(model.partialFiles) { file in
-                        RecentFileRow(file: file)
-                    }
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 4)
-                .padding(.bottom, 14)
-            }
-        }
-    }
-
     // MARK: - Failed Tab
 
     @ViewBuilder
@@ -295,13 +250,12 @@ struct QueueContentView: View {
         } else {
             VStack(spacing: 0) {
                 FailedTabHeader(files: model.failedFiles) {
-                    // Fire reindex for each failed file. Keep them as
-                    // separate tasks so one slow file doesn't serialize
-                    // the rest; the backend queue handles concurrency.
-                    let paths = model.failedFiles.map { $0.filePath }
-                    for path in paths {
-                        Task { await model.reindexFile(filePath: path) }
-                    }
+                    // One bulk backend call re-queues them all server-side —
+                    // far cheaper and more robust than fanning out a
+                    // /reindex request per file (a single transient DB
+                    // hiccup used to bubble up as an Internal Server Error
+                    // and abort the rest of the batch).
+                    Task { await model.retryAllFailed() }
                 }
                     .padding(.horizontal, 18)
                     .padding(.bottom, 8)
@@ -338,8 +292,6 @@ struct QueueContentView: View {
                     await model.refreshQueueItems()
                 case .recent:
                     await model.refreshRecentFiles()
-                case .partial:
-                    await model.refreshPartialFiles()
                 case .failed:
                     await model.refreshFailedFiles()
                 }

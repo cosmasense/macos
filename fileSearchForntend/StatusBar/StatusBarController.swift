@@ -15,6 +15,7 @@ final class StatusBarController: NSObject {
     // Existing callbacks
     var onShowMainWindow: (() -> Void)?
     var onShowQuickSearch: (() -> Void)?
+    var onShowSettings: (() -> Void)?
     var onQuit: (() -> Void)?
 
     // Backend management callbacks
@@ -149,6 +150,19 @@ final class StatusBarController: NSObject {
 
         newMenu.addItem(NSMenuItem.separator())
 
+        // Settings — the app's menu-bar app menu (the one next to the
+        // Apple icon) only exists while activation policy is .regular.
+        // In Menu Bar Only mode with no window open, that menu is gone
+        // and Cmd+, doesn't work. The status bar is the only path to
+        // Settings in that state, so it must be here.
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        newMenu.addItem(settingsItem)
+
         // Quit
         let quitItem = NSMenuItem(
             title: "Quit Cosma Sense",
@@ -168,6 +182,10 @@ final class StatusBarController: NSObject {
 
     @objc private func showQuickSearch() {
         onShowQuickSearch?()
+    }
+
+    @objc private func openSettings() {
+        onShowSettings?()
     }
 
     @objc private func startBackend() {

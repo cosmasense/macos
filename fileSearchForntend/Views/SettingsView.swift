@@ -9,23 +9,19 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case shortcut = "Shortcut"
     case general = "General"
     case permissions = "Permissions"
     case fileFilters = "File Filters"
     case feedback = "Feedback"
-    case advanced = "Advanced"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .shortcut: return "command.square"
         case .general: return "gearshape"
         case .permissions: return "lock.shield"
         case .fileFilters: return "line.3.horizontal.decrease.circle"
         case .feedback: return "bubble.left.and.bubble.right"
-        case .advanced: return "slider.horizontal.3"
         }
     }
 }
@@ -40,15 +36,11 @@ struct SettingsView: View {
         @Bindable var model = model
 
         TabView {
-            settingsPage(title: "Shortcut") {
-                HotkeySection(hotkey: $overlayHotkey)
-            }
-            .tabItem { Label(SettingsSection.shortcut.rawValue, systemImage: SettingsSection.shortcut.icon) }
-
             settingsPage(title: "General") {
                 GeneralSection(
                     launchAtStartup: $launchAtStartup,
-                    backendURL: $model.backendURL
+                    backendURL: $model.backendURL,
+                    hotkey: $overlayHotkey
                 )
             }
             .tabItem { Label(SettingsSection.general.rawValue, systemImage: SettingsSection.general.icon) }
@@ -67,11 +59,6 @@ struct SettingsView: View {
                 FeedbackSection()
             }
             .tabItem { Label(SettingsSection.feedback.rawValue, systemImage: SettingsSection.feedback.icon) }
-
-            settingsPage(title: nil) {
-                AdvancedSettingsView()
-            }
-            .tabItem { Label(SettingsSection.advanced.rawValue, systemImage: SettingsSection.advanced.icon) }
         }
         // Match the main window's footprint (720 x 560 default) so
         // jumping between Settings ↔ main UI doesn't reflow the user's

@@ -86,7 +86,7 @@ struct AppUpdatesSection: View {
 /// Inline result line — mirrors the backend `UpdateCheckStatusRow`
 /// pattern in GeneralSection.swift so the two update widgets read
 /// the same at a glance.
-private struct AppUpdateStatusRow: View {
+struct AppUpdateStatusRow: View {
     let state: SparkleUpdaterController.CheckState
     let currentVersion: String
     let lastCheckedAt: Date?

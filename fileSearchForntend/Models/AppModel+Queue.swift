@@ -121,18 +121,6 @@ extension AppModel {
         }
     }
 
-    /// Fetches files indexed by filename only (INDEXED_PARTIAL).
-    /// Distinct from Failed: these aren't problems, they're files
-    /// the user opted into metadata-only via filter rules.
-    func refreshPartialFiles() async {
-        do {
-            let response = try await apiClient.fetchPartialFiles()
-            partialFiles = response.files
-        } catch {
-            queueError = queueErrorMessage(from: error)
-        }
-    }
-
     /// Re-queues a failed file for reprocessing
     func reindexFile(filePath: String) async {
         // Optimistic UI update
@@ -144,6 +132,26 @@ extension AppModel {
         } catch {
             queueError = queueErrorMessage(from: error)
             // Revert optimistic update
+            await refreshFailedFiles()
+        }
+    }
+
+    /// Re-queues every failed file in one backend call. Used by the
+    /// "Retry All Failed" button — one round trip instead of dozens of
+    /// concurrent `/reindex` requests, and the backend skips (and logs)
+    /// any individual file it can't re-enqueue rather than failing the
+    /// whole batch with an Internal Server Error.
+    func retryAllFailed() async {
+        let snapshot = failedFiles
+        // Optimistic: clear the list; the backend is reprocessing them now.
+        failedFiles.removeAll()
+        do {
+            _ = try await apiClient.retryAllFailed()
+            await refreshQueueItems()
+            await refreshFailedFiles()
+        } catch {
+            queueError = queueErrorMessage(from: error)
+            failedFiles = snapshot          // revert optimistic update
             await refreshFailedFiles()
         }
     }

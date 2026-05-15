@@ -24,7 +24,16 @@ struct fileSearchForntendApp: App {
     @AppStorage("setupCompleted") private var setupCompleted = false
 
     var body: some Scene {
-        WindowGroup {
+        // Window (singleton) instead of WindowGroup (multi-instance):
+        // openWindow(id: "main") on a WindowGroup mints a fresh
+        // instance and SwiftUI then reconciles it against any
+        // leftover shell from the previously-closed instance,
+        // triggering the immediate onAppear → onDisappear loop the
+        // dock-reopen logs showed (the new window mounts then is
+        // torn down on the same runloop). Window is single-instance:
+        // openWindow(id:) reliably focuses the one window or creates
+        // it if it doesn't exist, with no shell-reconciliation churn.
+        Window("Cosma Sense", id: "main") {
             Group {
                 if !setupCompleted || !hasFullDiskAccess {
                     SetupWizardView {
@@ -131,6 +140,7 @@ struct fileSearchForntendApp: App {
                 }
             }
             .preferredColorScheme(.light)
+            .background(OpenMainWindowBinder(coordinator: coordinator))
             .onAppear {
                 // Store references in app delegate so they stay alive
                 // Do this early so menu bar actions work even before backend connects
@@ -421,4 +431,54 @@ struct fileSearchForntendApp: App {
         }
     }
 
+}
+
+/// Captures SwiftUI's `openWindow` action and stores it on the coordinator
+/// so AppDelegate can re-open the main WindowGroup window from outside the
+/// view hierarchy (status-bar "Show Cosma Sense", dock-icon reopen when the
+/// main window has been destroyed by Cmd+W). The action stays valid for
+/// the app's lifetime; reassigning on each onAppear is fine because the
+/// captured closure has no view-tree references.
+private struct OpenMainWindowBinder: View {
+    let coordinator: AppCoordinator
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        // Zero-size, untappable Color.clear: the binder needs to be
+        // inside the WindowGroup's view tree so onAppear/onDisappear
+        // mirror SwiftUI's window mount/unmount lifecycle, but it
+        // must be visually inert. (An earlier version used an
+        // NSViewRepresentable here to capture the NSWindow directly,
+        // but that triggered an immediate teardown of the WindowGroup
+        // on macOS — SwiftUI seems to treat the embedded NSView as a
+        // tree-shape change and unmount the whole subtree on the next
+        // runloop turn. We now rely on the mounted flag plus a tight
+        // NSApp.windows filter in AppDelegate.surfaceMainWindow.)
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onAppear {
+                coordinator.openMainWindowAction = { openWindow(id: "main") }
+                coordinator.isMainWindowMounted = true
+                // Wire AppDelegate's coordinator here (in addition to
+                // WindowGroup's outer .onAppear) — the binder fires
+                // before the outer onAppear AND before
+                // applicationDidFinishLaunching, so without this the
+                // first policy sync sees coordinator=nil.
+                if let appDelegate = NSApp.delegate as? AppDelegate {
+                    appDelegate.coordinator = coordinator
+                    appDelegate.notifyMainWindowMountChange(reason: "binder.onAppear")
+                } else {
+                    FELog.emit(FELog.window, "⚠️ binder onAppear: NSApp.delegate is not AppDelegate — policy will not sync")
+                }
+            }
+            .onDisappear {
+                coordinator.isMainWindowMounted = false
+                if let appDelegate = NSApp.delegate as? AppDelegate {
+                    appDelegate.notifyMainWindowMountChange(reason: "binder.onDisappear")
+                } else {
+                    FELog.emit(FELog.window, "⚠️ binder onDisappear: NSApp.delegate is not AppDelegate — dock dot will not drop")
+                }
+            }
+    }
 }

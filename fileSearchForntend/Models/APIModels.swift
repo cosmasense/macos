@@ -783,6 +783,16 @@ struct ReindexResponse: Codable {
     let message: String
 }
 
+/// Response from `POST /api/queue/retry_all_failed` — a single bulk call
+/// that re-queues every FAILED file server-side, instead of the client
+/// fanning out one `/reindex` request per file.
+struct RetryAllFailedResponse: Codable {
+    let success: Bool
+    let message: String
+    let count: Int
+    let skipped: Int?
+}
+
 // MARK: - Queue Models
 
 struct QueueStatusResponse: Codable {

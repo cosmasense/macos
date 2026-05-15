@@ -154,17 +154,62 @@ extension CosmaManager {
     /// write must finish *before* we POST /install — otherwise the
     /// runner will install the old provider's components.
     func setProviderAndBootstrap(summarizer: String, whisper: String) async {
+        await writeSettings(["summarizer.provider": summarizer,
+                             "parser.whisper.provider": whisper])
+        await runBootstrap()
+    }
+
+    /// Same as `setProviderAndBootstrap` but lets the wizard pass the
+    /// per-provider model details collected on the Choose-Backend step.
+    /// Settings are written first (so bootstrap reads the right repo /
+    /// model), then we kick off the install. Empty strings are dropped
+    /// from the payload so we don't blow away existing values when the
+    /// caller doesn't care about a particular field.
+    func setProviderConfigAndBootstrap(
+        summarizer: String,
+        whisper: String,
+        llamacppRepo: String? = nil,
+        llamacppFilename: String? = nil,
+        ollamaModel: String? = nil,
+        onlineModel: String? = nil,
+        onlineBaseURL: String? = nil,
+        onlineApiKey: String? = nil
+    ) async {
+        var body: [String: String] = [
+            "summarizer.provider": summarizer,
+            "parser.whisper.provider": whisper,
+        ]
+        if let v = llamacppRepo, !v.isEmpty {
+            body["summarizer.llamacpp.repo_id"] = v
+        }
+        if let v = llamacppFilename, !v.isEmpty {
+            body["summarizer.llamacpp.filename"] = v
+        }
+        if let v = ollamaModel, !v.isEmpty {
+            body["summarizer.ollama.model"] = v
+        }
+        if let v = onlineModel, !v.isEmpty {
+            body["summarizer.online.model"] = v
+        }
+        if let v = onlineBaseURL, !v.isEmpty {
+            body["summarizer.online.base_url"] = v
+        }
+        if let v = onlineApiKey, !v.isEmpty {
+            body["summarizer.online.api_key"] = v
+        }
+        await writeSettings(body)
+        await runBootstrap()
+    }
+
+    /// PUT a flat dict of dotted-path settings to /api/settings/.
+    /// Shared by the two setProvider entry points above.
+    private func writeSettings(_ body: [String: String]) async {
         guard let url = URL(string: "http://127.0.0.1:60534/api/settings/") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String] = [
-            "summarizer.provider": summarizer,
-            "parser.whisper.provider": whisper,
-        ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         _ = try? await URLSession.shared.data(for: req)
-        await runBootstrap()
     }
 
     /// Kick off (or join) a bootstrap install and stream progress events

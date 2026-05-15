@@ -60,7 +60,14 @@ class AppModel {
 
     nonisolated static let backendURLDefaultsKey = "backendURL"
     nonisolated static let bookmarksDefaultsKey = "watchedFolderBookmarks"
+    nonisolated static let preventSleepDefaultsKey = "preventSleepDuringIndexing"
     static let progressWindowSeconds: TimeInterval = 30 * 60 // 30 minutes
+    /// Cadence of the background poll that keeps the sleep assertion in
+    /// sync when ContentView isn't on screen (its own 4s poll stops when
+    /// the window is closed). 15s is short enough that we react well
+    /// before the next macOS idle-sleep tick fires, but slow enough to
+    /// not add measurable load.
+    static let sleepAssertionPollSeconds: TimeInterval = 15
 
     // MARK: - Navigation State
 
@@ -276,7 +283,9 @@ class AppModel {
 
     // MARK: - Queue State
 
-    var queueStatus: QueueStatusResponse?
+    var queueStatus: QueueStatusResponse? {
+        didSet { syncSleepAssertion() }
+    }
     var queueItems: [QueueItemResponse] = []
     var queueTotalCount: Int = 0
     var isLoadingQueue: Bool = false
@@ -284,11 +293,33 @@ class AppModel {
     var schedulerConfig: SchedulerResponse?
     var failedFiles: [ProcessedFileItem] = []
     var recentFiles: [ProcessedFileItem] = []
-    /// Files with status=INDEXED_PARTIAL — embedded by filename
-    /// only (no LLM summary) because the user's filter classified
-    /// them as metadata-only.
-    var partialFiles: [ProcessedFileItem] = []
     @ObservationIgnored var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
+
+    // MARK: - Sleep Prevention
+    //
+    // User preference: keep the Mac awake while the indexing queue is
+    // doing work. Big folders (Downloads with 30k files etc.) routinely
+    // got cut off mid-overnight-index because the system fell asleep
+    // after 10 min of "user idle." When this is on AND the queue isn't
+    // paused AND there are items in flight, we hold an IOPMAssertion
+    // that blocks idle sleep. Lid-close / battery-critical still sleep
+    // normally — see SleepAssertionManager for the rationale.
+    var preventSleepDuringIndexing: Bool {
+        didSet {
+            guard preventSleepDuringIndexing != oldValue else { return }
+            UserDefaults.standard.set(preventSleepDuringIndexing, forKey: Self.preventSleepDefaultsKey)
+            syncSleepAssertion()
+            // Start/stop the slow status poll so the assertion stays in
+            // sync even when ContentView's 4s poll is gone (window
+            // closed). When the preference is off we don't pay any cost.
+            if preventSleepDuringIndexing {
+                startSleepAssertionPolling()
+            } else {
+                stopSleepAssertionPolling()
+            }
+        }
+    }
+    @ObservationIgnored private var sleepAssertionPollTask: Task<Void, Never>?
 
     // MARK: - Services
 
@@ -307,11 +338,22 @@ class AppModel {
             ? storedURL!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.apiClient.currentBaseURL().absoluteString
 
+        // Load the preventSleep preference. Defaults to off so we don't
+        // change behavior for existing users without their consent.
+        self.preventSleepDuringIndexing = UserDefaults.standard.bool(forKey: Self.preventSleepDefaultsKey)
+
         // Only set up the URL — don't connect until backend is ready
         if let url = URL(string: backendURL) {
             apiClient?.updateBaseURL(url) ?? APIClient.shared.updateBaseURL(url)
         }
         loadSecurityBookmarks()
+
+        // Kick off the sleep-assertion poll if the user already enabled
+        // it in a prior session. The didSet on preventSleepDuringIndexing
+        // doesn't fire from init, so this branch handles that case.
+        if preventSleepDuringIndexing {
+            startSleepAssertionPolling()
+        }
     }
 
     /// Call this AFTER the backend is confirmed reachable.
@@ -394,6 +436,58 @@ class AppModel {
     deinit {
         updatesStream.disconnect()
         embedderPollTask?.cancel()
+        sleepAssertionPollTask?.cancel()
+        // Belt-and-suspenders: drop any held assertion at teardown so
+        // we don't leak a "keep awake" lease into the next session.
+        // SleepAssertionManager.setEnabled is @MainActor so hop there.
+        Task { @MainActor in
+            SleepAssertionManager.shared.setEnabled(false)
+        }
+    }
+
+    // MARK: - Sleep Prevention
+
+    /// Decide whether the system should be held awake right now and tell
+    /// the assertion manager. Called from:
+    /// * `preventSleepDuringIndexing` didSet — preference flip
+    /// * `queueStatus` didSet — anything that reassigns it (status poll,
+    ///   SSE-triggered refresh)
+    ///
+    /// "Indexing" means: queue isn't paused AND there's at least one
+    /// item in the queue (waiting / processing / cooling down). When
+    /// the queue empties we release the assertion immediately on the
+    /// next status update — no need to keep the Mac awake past the
+    /// actual work.
+    private func syncSleepAssertion() {
+        let shouldHold: Bool
+        if preventSleepDuringIndexing, let status = queueStatus {
+            shouldHold = !status.paused && status.totalItems > 0
+        } else {
+            shouldHold = false
+        }
+        SleepAssertionManager.shared.setEnabled(shouldHold)
+    }
+
+    /// Slow background poll of `/api/queue/status` so the sleep
+    /// assertion stays in sync when ContentView (which has its own 4s
+    /// poll) isn't on screen — the common overnight-indexing case where
+    /// the user has closed the window and walked away. Only runs while
+    /// the preference is on, so users who don't enable the feature
+    /// don't pay the request cost.
+    private func startSleepAssertionPolling() {
+        sleepAssertionPollTask?.cancel()
+        sleepAssertionPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshQueueStatus()
+                try? await Task.sleep(for: .seconds(Self.sleepAssertionPollSeconds))
+            }
+        }
+    }
+
+    private func stopSleepAssertionPolling() {
+        sleepAssertionPollTask?.cancel()
+        sleepAssertionPollTask = nil
     }
 
     // MARK: - Backend Connection

@@ -392,6 +392,16 @@ final class APIClient: @unchecked Sendable {
         return try await post(url: url, body: request)
     }
 
+    /// Re-queues every FAILED file in a single backend call. Preferred over
+    /// looping `reindexFile` per file — one round trip, and the backend
+    /// skips (and logs) any individual file that can't be re-enqueued
+    /// instead of failing the whole batch.
+    func retryAllFailed() async throws -> RetryAllFailedResponse {
+        struct EmptyBody: Encodable {}
+        let url = baseURL.appendingPathComponent("/api/queue/retry_all_failed")
+        return try await post(url: url, body: EmptyBody())
+    }
+
     // MARK: - Scheduler
 
     func fetchScheduler() async throws -> SchedulerResponse {

@@ -2,7 +2,11 @@
 //  GeneralSection.swift
 //  fileSearchForntend
 //
-//  General settings: launch at startup, app visibility, backend URL
+//  General settings: hotkey (top), launch at startup, app visibility,
+//  app updates, managed backend. Power-user knobs (backend URL, log
+//  viewer, update channel, dialogs, licenses, processing models,
+//  queue/scheduler) live in the Advanced sheet, opened from the
+//  button at the bottom.
 //
 
 import SwiftUI
@@ -16,12 +20,10 @@ struct GeneralSection: View {
     @Environment(SparkleUpdaterController.self) private var updater
     @Binding var launchAtStartup: Bool
     @Binding var backendURL: String
-    @State private var connectionTestState: ConnectionTestState = .idle
+    @Binding var hotkey: String
     @State private var loginItemError: String?
     @State private var currentVisibilityMode: AppVisibilityMode = .dockOnly
-    @State private var showingLogs = false
-    @State private var dialogsReset = false
-    @State private var showingLicenses = false
+    @State private var showingAdvanced = false
 
     /// True while a PyPI check (or a triggered download) is running.
     /// Used to swap the button label for a spinner + disable re-clicks.
@@ -34,16 +36,22 @@ struct GeneralSection: View {
         }
     }
 
-    enum ConnectionTestState: Equatable {
-        case idle
-        case testing
-        case success(String)
-        case failure(String)
-    }
-
     var body: some View {
         @Bindable var model = model
+        @Bindable var updater = updater
         VStack(alignment: .leading, spacing: 24) {
+            // Shortcut — top of the page so it's the first thing a
+            // returning user sees. Was its own tab before; folded in
+            // here because most users only set it once.
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Shortcut")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                HotkeySection(hotkey: $hotkey)
+            }
+
+            Divider()
+
             // Launch at Startup
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: Binding(
@@ -99,10 +107,49 @@ struct GeneralSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            // App Updates (Sparkle)
-            AppUpdatesSection(updater: updater)
+            // Prevent sleep during indexing. Overnight indexing runs on
+            // big folders were getting cut off because the Mac fell
+            // asleep after the system's user-idle timer. This toggle
+            // holds an IOPMAssertion (PreventUserIdleSystemSleep) while
+            // the queue is busy — lid-close / battery-critical still
+            // sleep normally.
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: $model.preventSleepDuringIndexing) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Prevent Sleep While Indexing")
+                            .font(.system(size: 14, weight: .medium))
 
-            // Managed Backend
+                        Text("Keeps your Mac awake while files are being indexed so long overnight runs finish. Doesn't override lid-close or low-battery sleep.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+
+            // App Updates — auto-check toggle + status row only.
+            // Channel picker and the manual "Check for Updates" button
+            // moved into the Advanced sheet.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("App Updates")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Toggle(isOn: $updater.automaticallyChecksForUpdates) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Automatically Check for Updates")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("We'll check in the background and prompt before installing.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+
+            // Managed Backend — toggle + status only. Logs, restart/
+            // stop, and manual update check moved into Advanced.
             VStack(alignment: .leading, spacing: 8) {
                 Toggle(isOn: Binding(
                     get: { cosmaManager.isManaged },
@@ -142,180 +189,28 @@ struct GeneralSection: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-
-                    if cosmaManager.isRunning {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                if cosmaManager.ownsProcess {
-                                    Button("Restart") {
-                                        Task { await cosmaManager.restartServer() }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-
-                                    Button("Stop") {
-                                        cosmaManager.stopServer()
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-
-                                Button {
-                                    Task { await cosmaManager.checkForUpdates() }
-                                } label: {
-                                    if isCheckInFlight {
-                                        HStack(spacing: 6) {
-                                            ProgressView().controlSize(.mini)
-                                            Text("Checking…")
-                                        }
-                                    } else {
-                                        Text("Check for Updates")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                // Block rapid re-clicks while a check
-                                // (or its triggered download) is in
-                                // flight — without this the user can
-                                // queue four PyPI hits in a row.
-                                .disabled(isCheckInFlight)
-                            }
-
-                            // Inline result for the check, so the user
-                            // can tell whether the click did anything.
-                            // Was previously silent — `updateStatus`
-                            // mutated but nothing on the page reflected
-                            // it, so the button felt broken.
-                            UpdateCheckStatusRow(
-                                status: cosmaManager.updateStatus,
-                                installedVersion: cosmaManager.installedVersion,
-                                latestVersion: cosmaManager.latestVersion,
-                                lastCheckedAt: cosmaManager.lastUpdateCheckAt
-                            )
-                        }
-                    }
-
-                    Button {
-                        showingLogs = true
-                    } label: {
-                        Label("View Logs", systemImage: "terminal")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
             }
 
-            // Reset Suppressed Dialogs
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Dialogs")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
 
-                HStack(spacing: 12) {
-                    Button {
-                        UserDefaults.standard.removeObject(forKey: AppDelegate.suppressQuitConfirmationKey)
-                        dialogsReset = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            dialogsReset = false
-                        }
-                    } label: {
-                        Label("Reset All Dialogs", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    if dialogsReset {
-                        Text("Done")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.green)
-                            .transition(.opacity)
-                    }
-                }
-
-                Text("Re-enable confirmation dialogs that were dismissed with \"Don't ask again\".")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-
-            // Open-source licenses
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Open Source Licenses")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-
+            // Advanced sheet trigger. Houses every knob a typical user
+            // shouldn't have to look at: backend URL, update channel,
+            // logs, restart/stop, dialog reset, licenses, processing
+            // models, queue/scheduler.
+            HStack {
+                Spacer()
                 Button {
-                    showingLicenses = true
+                    showingAdvanced = true
                 } label: {
-                    Label("View Acknowledgements", systemImage: "doc.text.below.ecg")
+                    Label("Advanced…", systemImage: "slider.horizontal.3")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Text("Cosma Sense is built on a number of open-source libraries. View their licenses to verify compliance.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // Backend URL
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Backend URL")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(cosmaManager.isManaged ? .tertiary : .secondary)
-
-                HStack(spacing: 8) {
-                    TextField("http://localhost:8000", text: $backendURL)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13, design: .monospaced))
-                        .disabled(cosmaManager.isManaged)
-                        .opacity(cosmaManager.isManaged ? 0.5 : 1.0)
-                        .layoutPriority(1)
-
-                    Button("Test") {
-                        testBackendConnection()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(cosmaManager.isManaged)
-
-                    if connectionTestState == .testing {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                .frame(maxWidth: 480)
-
-                if cosmaManager.isManaged {
-                    Text("URL is managed automatically when Managed Backend is enabled.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                }
-
-                switch connectionTestState {
-                case .success(let message):
-                    StatusText(message: message, color: .green, icon: "checkmark.circle.fill")
-                case .failure(let message):
-                    StatusText(message: message, color: .red, icon: "xmark.octagon.fill")
-                case .idle, .testing:
-                    EmptyView()
-                }
+                .controlSize(.regular)
             }
         }
-        .sheet(isPresented: $showingLogs) {
-            BackendLogView(cosmaManager: cosmaManager)
-        }
-        .sheet(isPresented: $showingLicenses) {
-            LicensesView()
-        }
-    }
-
-    private func testBackendConnection() {
-        connectionTestState = .testing
-        Task {
-            let result = await model.testBackendConnection()
-            await MainActor.run {
-                connectionTestState = result.success ? .success(result.message) : .failure(result.message)
-            }
+        .sheet(isPresented: $showingAdvanced) {
+            GeneralAdvancedSheet(backendURL: $backendURL)
         }
     }
 
@@ -448,7 +343,7 @@ struct StatusText: View {
 /// Inline result line shown next to the "Check for Updates" button.
 /// Reflects CosmaManager.updateStatus + lastCheckedAt so the user
 /// can tell that a click actually did something — and what it found.
-private struct UpdateCheckStatusRow: View {
+struct UpdateCheckStatusRow: View {
     let status: CosmaManager.UpdateStatus
     let installedVersion: String?
     let latestVersion: String?
@@ -472,11 +367,8 @@ private struct UpdateCheckStatusRow: View {
     }
 
     /// True when PyPI's latest is newer than what's installed — even
-    /// if `updateStatus` says `.upToDate`. This is the smoking gun for
-    /// "uv tool upgrade returned 0 but didn't actually upgrade", which
-    /// happens occasionally with version-resolution edge cases. We
-    /// surface it so the user sees the real situation instead of a
-    /// green "you're on the latest" lie.
+    /// if `updateStatus` says `.upToDate`. Surfaces the "uv tool
+    /// upgrade returned 0 but didn't actually upgrade" edge case.
     private var pypiAheadOfInstalled: Bool {
         guard let installed = installedVersion,
               let latest = latestVersion,
@@ -504,8 +396,6 @@ private struct UpdateCheckStatusRow: View {
         case .checking, .downloading:
             return .secondary
         case .upToDate:
-            // Green only when truly current. PyPI ahead → orange so
-            // the user can tell something's off at a glance.
             return pypiAheadOfInstalled ? .orange : .green
         case .downloadedPendingRestart:
             return .blue
@@ -523,10 +413,6 @@ private struct UpdateCheckStatusRow: View {
         case let .downloading(_, target):
             return "Downloading v\(target)…"
         case .upToDate:
-            // The runtime says we're up to date, but cross-check
-            // against latestVersion before claiming it. Otherwise we
-            // print "v1.0.1 is the latest" while PyPI is serving
-            // v1.0.2 because uv tool upgrade silently no-op'd.
             if let installed = installedVersion,
                let latest = latestVersion,
                compareSemver(installed, latest) < 0 {
@@ -546,10 +432,6 @@ private struct UpdateCheckStatusRow: View {
         case let .failed(reason):
             return "Check failed: \(reason)"
         case .idle:
-            // Pre-first-click state. Only happens before the user has
-            // clicked the button at all — once they have, the status
-            // moves to .checking and stays in a populated state from
-            // then on.
             if lastCheckedAt == nil {
                 return "Click \"Check for Updates\" to look for a new release."
             }
@@ -557,12 +439,6 @@ private struct UpdateCheckStatusRow: View {
         }
     }
 
-    /// Element-wise semver comparison up to three components.
-    /// Returns -1 / 0 / 1 like strcmp; missing components count as 0
-    /// and any non-numeric tail is stripped. Mirrors
-    /// BackendCompatibility.compareSemver but we keep a private copy
-    /// here rather than depending on that file's internals from a
-    /// view.
     private func compareSemver(_ a: String, _ b: String) -> Int {
         func parts(_ s: String) -> [Int] {
             s.split(separator: ".")
@@ -582,13 +458,8 @@ private struct UpdateCheckStatusRow: View {
         return 0
     }
 
-    /// "checked just now" / "checked 3m ago". Shown next to terminal
-    /// states (upToDate, downloadedPendingRestart, failed) so the user
-    /// can tell the click went through and how fresh the result is.
     private var checkedStamp: String? {
         guard let when = lastCheckedAt else { return nil }
-        // Don't bother stamping while a check is mid-flight — the
-        // spinner already conveys "happening right now".
         switch status {
         case .checking, .downloading:
             return nil

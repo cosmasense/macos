@@ -86,6 +86,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Install signal handlers so the backend is killed even on
         // unexpected termination (SIGTERM from Activity Monitor, Cmd+Q, etc).
         installSignalHandlers()
+
+        // Watch for any NSWindow closing — this is a belt-and-suspenders
+        // backup for the binder's onDisappear policy hook. If the SwiftUI
+        // path doesn't fire syncActivationPolicy (we hit one repro of
+        // exactly this), the willClose observer will pick it up and drop
+        // the dock dot anyway.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWindowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
     }
 
     /// Kill the backend on any normal termination signal.
@@ -113,6 +125,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
               let mode = AppVisibilityMode(rawValue: rawValue) else { return }
         print("📬 Received visibility mode change notification: \(mode.rawValue)")
         applyVisibilityMode(mode)
+    }
+
+    /// Keep the app alive when the user closes the main window with the
+    /// red traffic-light button. SwiftUI's default for a single
+    /// `WindowGroup` is to terminate after the last window closes, but
+    /// our design relies on the process surviving — the backend keeps
+    /// indexing, the global hotkey stays armed, and `applicationShould-
+    /// HandleReopen` / `showMainWindow()` rebuild the window on dock or
+    /// menu-bar click.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -358,47 +381,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Always try to surface the main search window on dock/icon reopen,
-        // even if Settings happens to be visible. Previously, if the user
-        // had Settings open when they quit (or closed the main window and
-        // left Settings as the front window), clicking the dock icon would
-        // restore only Settings and leave the user with no way to reach the
-        // search UI. Finding and surfacing the existing main window here
-        // covers that case without creating a duplicate.
-        if surfaceHiddenMainWindow() { return false }
-
-        // Genuinely no main window exists — let SwiftUI build one. Returning
-        // true is still safe when Settings is open because SwiftUI only
-        // recreates the main WindowGroup window, not the Settings scene.
-        return true
-    }
-
-    /// Bring an existing (possibly hidden) main window back to front.
-    /// Returns true only if a window actually became visible — otherwise
-    /// the caller lets SwiftUI create a fresh one. Previously we returned
-    /// true whenever a candidate NSWindow was found in NSApp.windows, even
-    /// if the window had already been released/destroyed by SwiftUI; in
-    /// that case ``makeKeyAndOrderFront`` silently failed and the dock
-    /// icon clicked to nothing.
-    @discardableResult
-    private func surfaceHiddenMainWindow() -> Bool {
-        let candidates = NSApp.windows.filter {
-            $0.contentView != nil && $0.level != .floating && $0.title != "Settings"
-        }
-        guard !candidates.isEmpty else { return false }
-        NSApp.activate(ignoringOtherApps: true)
-        // Prefer an already-visible candidate if there is one — avoids
-        // raising a stale hidden window over a live one.
-        let window = candidates.first(where: \.isVisible) ?? candidates[0]
-        window.makeKeyAndOrderFront(nil)
-        // Match showMainWindow: surface the window without stealing focus
-        // into the search field.
-        window.makeFirstResponder(nil)
-        // Verify the window is actually on screen. If SwiftUI destroyed the
-        // backing window (Cmd+W on a single-window WindowGroup can leave a
-        // zombie entry in NSApp.windows that can't be re-shown), report
-        // failure so the caller lets SwiftUI build a fresh window.
-        return window.isVisible
+        showMainWindow()
+        return false
     }
 
     // MARK: - Hotkey
@@ -452,6 +436,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Use direct overlay presentation (works even when main window is closed)
             self?.toggleOverlay()
         }
+        statusBarController?.onShowSettings = { [weak self] in
+            self?.openSettingsWindow()
+        }
         statusBarController?.onQuit = {
             NSApplication.shared.terminate(nil)
         }
@@ -489,27 +476,68 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Surface the main SwiftUI window. Safe to call when already visible.
+    /// Used by the dock-icon reopen handler, the status-bar "Show Cosma
+    /// Sense" item, and the overlay "expand to main" button — all three
+    /// have to work regardless of which state the main window is in
+    /// (hidden, miniaturized, Cmd+W zombie, behind Settings, never opened
+    /// yet). Steps:
+    ///   1. Unhide + activate the app so AppKit can actually show a window.
+    ///   2. Surface any existing main NSWindow we can find.
+    ///   3. If no surfaceable window exists (or `makeKeyAndOrderFront`
+    ///      didn't actually flip `isVisible` — happens with Cmd+W zombies),
+    ///      ask SwiftUI to (re)open the WindowGroup via its captured
+    ///      `openWindow(id: "main")` action. SwiftUI focuses an existing
+    ///      window for that id or creates a new one, so this is safe to
+    ///      call unconditionally as a fallback.
     func showMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: {
-            $0.contentView != nil && $0.level != .floating && $0.title != "Settings"
-        }) {
-            window.makeKeyAndOrderFront(nil)
-            // Don't auto-focus the search field when the window surfaces.
-            // Users should click the field to start typing — SwiftUI's
-            // TextField otherwise grabs first responder as the only
-            // focusable control.
-            window.makeFirstResponder(nil)
-            // If Settings is also visible, push it behind the main window.
-            // Without this, the overlay's enlarge button (and dock reopen)
-            // could surface main but leave Settings on top — the user sees
-            // the settings page and loses access to search.
-            if let settings = NSApp.windows.first(where: {
-                $0.isVisible && $0.title == "Settings"
-            }) {
-                settings.order(.below, relativeTo: window.windowNumber)
-            }
+        let mounted = coordinator?.isMainWindowMounted ?? false
+        // Pre-upgrade away from .accessory before invoking openWindow.
+        // .accessory apps don't show new SwiftUI windows reliably and
+        // have no dock dot / app menu entries. Switching to .regular
+        // first lets openWindow present a usable window and gives the
+        // user the Settings/Quit menu while a window is on screen.
+        if NSApp.activationPolicy() == .accessory {
+            NSApp.setActivationPolicy(.regular)
         }
+        if NSApp.isHidden { NSApp.unhide(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Path A: SwiftUI view tree is mounted → a real main NSWindow
+        // exists; surface it.
+        if mounted, surfaceMainWindow() { return }
+
+        // Path B: torn down (Cmd+W) or surface failed → ask SwiftUI
+        // to (re)create the window. onAppear flips mounted true again.
+        coordinator?.openMainWindowAction?()
+    }
+
+    /// Locate and raise the real main NSWindow. Caller must verify
+    /// `coordinator.isMainWindowMounted == true` before calling — when
+    /// the SwiftUI view tree is torn down everything in NSApp.windows
+    /// is some flavor of empty placeholder shell, so this routine has
+    /// no way to tell them apart and shouldn't be trusted in that
+    /// state.
+    @discardableResult
+    private func surfaceMainWindow() -> Bool {
+        let candidates = NSApp.windows.filter { window in
+            // level=normal skips overlay panel / status-bar host /
+            // SwiftUI level=25 ghosts. Subviews-non-empty rejects
+            // empty shells (post-Cmd+W). Toolbar==nil rejects the
+            // SwiftUI Settings scene (hiddenTitleBar main window
+            // has no toolbar).
+            guard window.level == .normal else { return false }
+            guard let cv = window.contentView, !cv.subviews.isEmpty else { return false }
+            if window.toolbar != nil { return false }
+            return true
+        }
+        guard !candidates.isEmpty else { return false }
+        let window = candidates.first(where: \.isVisible)
+            ?? candidates.first(where: \.isMiniaturized)
+            ?? candidates[0]
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(nil)
+        return window.isVisible
     }
 
     // MARK: - CosmaManager Sync
@@ -670,20 +698,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var currentVisibilityMode: AppVisibilityMode {
         get {
             let rawValue = UserDefaults.standard.string(forKey: Self.visibilityModeKey) ?? AppVisibilityMode.dockOnly.rawValue
-            let mode = AppVisibilityMode(rawValue: rawValue) ?? .dockOnly
-            print("🔍 Getting visibility mode: \(mode.rawValue)")
-            return mode
+            return AppVisibilityMode(rawValue: rawValue) ?? .dockOnly
         }
         set {
-            print("⚙️ Setting visibility mode to: \(newValue.rawValue)")
+            FELog.emit(FELog.lifecycle, "⚙️ visibility mode → \(newValue.rawValue)")
             UserDefaults.standard.set(newValue.rawValue, forKey: Self.visibilityModeKey)
             applyVisibilityMode(newValue)
         }
     }
 
     func applyVisibilityMode(_ mode: AppVisibilityMode) {
-        print("🔄 applyVisibilityMode() called with: \(mode.rawValue)")
-        print("   showInMenuBar: \(mode.showInMenuBar), showInDock: \(mode.showInDock)")
+        FELog.emit(FELog.lifecycle, "🔄 applyVisibilityMode → \(mode.rawValue) (dock=\(mode.showInDock) menuBar=\(mode.showInMenuBar))")
 
         // Ensure we're on main thread
         guard Thread.isMainThread else {
@@ -693,26 +718,132 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // IMPORTANT: Set up status bar FIRST before changing dock visibility
-        // This ensures the menu bar icon exists before we potentially hide from dock
+        // Set up status bar BEFORE changing dock visibility so the
+        // menu bar icon exists before we potentially hide from dock.
         if mode.showInMenuBar || !mode.showInDock {
-            // Need status bar if: explicitly requested OR hiding from dock (fallback)
-            print("📍 Setting up status bar (showInMenuBar=\(mode.showInMenuBar), showInDock=\(mode.showInDock))")
             setupStatusBar()
         } else {
-            print("📍 Removing status bar (not needed)")
             removeStatusBar()
         }
 
-        // Handle dock visibility AFTER status bar is set up
-        if mode.showInDock {
-            print("📍 Setting activation policy to .regular (show in dock)")
-            NSApp.setActivationPolicy(.regular)
-        } else {
-            print("📍 Setting activation policy to .accessory (hide from dock)")
-            NSApp.setActivationPolicy(.accessory)
-        }
+        // Activation policy is resolved by syncActivationPolicy so
+        // .menuBarOnly / .dockOnly can toggle .regular ↔ .accessory
+        // based on window visibility (see contract docs there).
+        syncActivationPolicy()
+    }
 
-        print("✅ Applied visibility mode: \(mode.rawValue)")
+    // MARK: - Settings (programmatic open)
+
+    /// Open the SwiftUI Settings scene from AppKit. Used by the status
+    /// bar menu, which is the only Settings entry-point while the app
+    /// is in pure .accessory state (no app menu, so Cmd+, is gone).
+    ///
+    /// Pre-upgrades activation policy off .accessory so the Settings
+    /// window can actually present (same teardown trap as the main
+    /// window). Then sends the modern `showSettingsWindow:` action
+    /// (macOS 13+) — there's no public API; the selector is delivered
+    /// through the responder chain and the SwiftUI Settings scene
+    /// installs a handler for it.
+    func openSettingsWindow() {
+        if NSApp.activationPolicy() == .accessory {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        // macOS 13+: showSettingsWindow:. macOS 12 and earlier used
+        // showPreferencesWindow: — we try both so the user isn't left
+        // with a no-op if they're on an older system.
+        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
+    }
+
+    // MARK: - Activation Policy
+
+    /// Choose the right activation policy for the current visibility
+    /// mode and window state, and apply it iff it changed.
+    ///
+    /// Contract per mode:
+    /// * `.both`: always `.regular`. Status bar always present, dock
+    ///   dot always present. The "loud" mode for users who want both
+    ///   entry-points visible at all times.
+    /// * `.dockOnly`: dynamic. Dock dot follows window visibility — on
+    ///   when a window is open, off when the last one closes. No
+    ///   status-bar fallback by design (the user picked "Dock Only").
+    ///   To re-open when no window is visible: relaunch from Spotlight
+    ///   / Finder (which fires applicationShouldHandleReopen).
+    /// * `.menuBarOnly`: dynamic. Dock dot follows window visibility,
+    ///   like `.dockOnly`. Status bar item always present so the user
+    ///   can re-open the window without leaving the app.
+    ///
+    /// Side-effect: as `.accessory`, SwiftUI's openWindow(id:) silently
+    /// fails (the WindowGroup mounts the window and immediately tears
+    /// it down on the same runloop turn). showMainWindow pre-upgrades
+    /// before calling openWindow so the new window actually sticks.
+    func syncActivationPolicy() {
+        let mode = currentVisibilityMode
+        let target: NSApplication.ActivationPolicy
+        switch mode {
+        case .both:
+            target = .regular
+        case .dockOnly, .menuBarOnly:
+            target = hasVisibleUserFacingWindow() ? .regular : .accessory
+        }
+        let current = NSApp.activationPolicy()
+        if current != target {
+            FELog.emit(FELog.policy, "activation policy \(current.rawValue) → \(target.rawValue) (mode=\(mode.rawValue))")
+            NSApp.setActivationPolicy(target)
+        }
+    }
+
+    /// True if the main WindowGroup's view tree is currently mounted.
+    /// Strictly uses the binder's `isMainWindowMounted` flag — we don't
+    /// fall back to walking `NSApp.windows`, because:
+    ///   * at the moment the user clicks the close button, the closing
+    ///     NSWindow's `isVisible` is still true on this runloop turn,
+    ///     so a fallback scan would falsely report a window present
+    ///     and we'd never drop to .accessory; the dock dot would stay.
+    ///   * SwiftUI also leaves leftover shell NSWindows around that
+    ///     pass the level=normal + has-subviews tests but aren't real
+    ///     user-facing surfaces.
+    /// Settings is intentionally NOT counted here. If the user has
+    /// Settings open with the main window closed, dropping to
+    /// .accessory is fine — Settings stays visible, and the user can
+    /// still interact with it; only the app menu and dock dot go away
+    /// (which is the contract of "no main window open").
+    ///
+    /// Coordinator can be nil before its first wire-up; when nil we
+    /// optimistically assume the main window is mounted, because
+    /// SwiftUI shows the main WindowGroup window on launch by default.
+    /// This avoids dropping to .accessory in the brief window before
+    /// the binder has run its onAppear.
+    private func hasVisibleUserFacingWindow() -> Bool {
+        return coordinator?.isMainWindowMounted ?? true
+    }
+
+    /// Called from OpenMainWindowBinder when the main window's view
+    /// tree mounts or unmounts. Now that hasVisibleUserFacingWindow
+    /// strictly trusts the binder's `isMainWindowMounted` flag (no
+    /// NSApp.windows scan), we don't need to defer a runloop tick to
+    /// wait for window state to settle — call sync so the policy
+    /// flip happens before the user can perceive a delay.
+    @MainActor
+    func notifyMainWindowMountChange(reason: String) {
+        syncActivationPolicy()
+    }
+
+    /// NSWindow.willCloseNotification observer — installed in
+    /// applicationDidFinishLaunching as a belt-and-suspenders backup
+    /// in case the SwiftUI binder's onDisappear path is unreliable
+    /// (we saw at least one log where it fired but the AppDelegate
+    /// hop never ran). Schedules a sync 200ms later so the closing
+    /// window has fully orderedOut before we re-check policy.
+    @objc func handleWindowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        // Ignore the floating overlay panel and the level=25 ghost
+        // placeholder — neither closing affects activation policy.
+        guard window.level == .normal else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.syncActivationPolicy()
+        }
     }
 }
