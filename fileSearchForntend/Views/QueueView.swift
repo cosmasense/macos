@@ -12,6 +12,12 @@ import SwiftUI
 enum QueueTab: String, CaseIterable, Identifiable {
     case current = "Current"
     case recent = "Recent"
+    // "Partial" = INDEXED_PARTIAL on the backend: oversize files,
+    // blank docs, user-elected metadata-only patterns. These are
+    // by-design partials — the file IS searchable by filename — so
+    // they live separately from the Failed tab (which now means
+    // "something actually went wrong").
+    case partial = "Partial"
     case failed = "Failed"
 
     var id: String { rawValue }
@@ -81,6 +87,8 @@ struct QueueContentView: View {
                 currentTabContent
             case .recent:
                 recentTabContent
+            case .partial:
+                partialTabContent
             case .failed:
                 failedTabContent
             }
@@ -99,6 +107,8 @@ struct QueueContentView: View {
                     await model.refreshQueueItems()
                 case .recent:
                     await model.refreshRecentFiles()
+                case .partial:
+                    await model.refreshPartialFiles()
                 case .failed:
                     await model.refreshFailedFiles()
                 }
@@ -226,6 +236,48 @@ struct QueueContentView: View {
         }
     }
 
+    // MARK: - Partial Tab
+    //
+    // INDEXED_PARTIAL files: indexed by filename only because the
+    // backend deliberately skipped deep parsing (file > parse cap,
+    // blank document, user-elected metadata-only). The file is still
+    // searchable — this tab is a transparency surface so the user
+    // knows what got the lighter treatment. Distinct from the Failed
+    // tab, which is now reserved for genuine processing errors.
+
+    @ViewBuilder
+    private var partialTabContent: some View {
+        if model.partialFiles.isEmpty {
+            VStack(spacing: 18) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.quaternary)
+
+                Text("No Filename-Only Files")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("Files indexed by filename only — typically oversized media or blank documents — will appear here. They're still searchable by name.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 6) {
+                    ForEach(model.partialFiles) { file in
+                        PartialFileRow(file: file)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 4)
+                .padding(.bottom, 14)
+            }
+        }
+    }
+
     // MARK: - Failed Tab
 
     @ViewBuilder
@@ -292,6 +344,8 @@ struct QueueContentView: View {
                     await model.refreshQueueItems()
                 case .recent:
                     await model.refreshRecentFiles()
+                case .partial:
+                    await model.refreshPartialFiles()
                 case .failed:
                     await model.refreshFailedFiles()
                 }
@@ -558,6 +612,70 @@ struct FailedFileRow: View {
         -----
         \(file.processingError ?? "(no error message)")
         """
+    }
+}
+
+// MARK: - Partial File Row
+//
+// One INDEXED_PARTIAL file. Visually softer than the Failed row (orange
+// info icon, not red exclamation) because nothing actually failed —
+// these are filename-only by design (oversize, blank doc, user-elected
+// metadata-only). The reason string surfaced from processingError says
+// which kind.
+
+struct PartialFileRow: View {
+    let file: ProcessedFileItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(.orange)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.filename)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(1)
+
+                Text(file.filePath)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+
+                if let reason = file.processingError {
+                    Text(reason)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            if let ts = file.updatedAt {
+                Text(relativeTime(from: ts))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 8)
+        .contextMenu {
+            Button("Copy File Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(file.filePath, forType: .string)
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.filePath)])
+            }
+        }
+    }
+
+    private func relativeTime(from timestamp: Int) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

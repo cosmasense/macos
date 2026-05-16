@@ -293,6 +293,12 @@ class AppModel {
     var schedulerConfig: SchedulerResponse?
     var failedFiles: [ProcessedFileItem] = []
     var recentFiles: [ProcessedFileItem] = []
+    // INDEXED_PARTIAL: files that succeeded with filename-only indexing
+    // (oversize beyond the parse cap, blank docs with no extractable
+    // content, user-elected metadata-only patterns). These were
+    // historically lumped into `failedFiles`, which was alarming for
+    // by-design partials. Backend ProcessingStatus = INDEXED_PARTIAL.
+    var partialFiles: [ProcessedFileItem] = []
     @ObservationIgnored var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
 
     // MARK: - Sleep Prevention
