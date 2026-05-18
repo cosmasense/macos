@@ -173,6 +173,9 @@ extension AppModel {
             whitelistInclude = config.whitelistInclude
             whitelistExclude = config.whitelistExclude
             metadataOnlyPatterns = config.metadataOnlyPatterns
+            tierRules = config.tierRules
+            defaultTierRules = config.defaultTierRules
+            largeFileDowngradeMb = config.largeFileDowngradeMb
             fileFilterEnabled = true
 
             // Save as "clean" state for dirty tracking
@@ -182,6 +185,8 @@ extension AppModel {
             savedWhitelistInclude = config.whitelistInclude
             savedWhitelistExclude = config.whitelistExclude
             savedMetadataOnlyPatterns = config.metadataOnlyPatterns
+            savedTierRules = config.tierRules
+            savedLargeFileDowngradeMb = config.largeFileDowngradeMb
         } catch let error as APIError {
             filterConfigError = error.localizedDescription
             #if DEBUG
@@ -260,6 +265,8 @@ extension AppModel {
                 whitelistInclude: whitelistInclude,
                 whitelistExclude: whitelistExclude,
                 metadataOnlyPatterns: metadataOnlyPatterns,
+                tierRules: tierRules,
+                largeFileDowngradeMb: largeFileDowngradeMb,
                 applyImmediately: true
             )
 
@@ -271,6 +278,8 @@ extension AppModel {
                 savedWhitelistInclude = response.config.whitelistInclude
                 savedWhitelistExclude = response.config.whitelistExclude
                 savedMetadataOnlyPatterns = response.config.metadataOnlyPatterns
+                savedTierRules = response.config.tierRules
+                savedLargeFileDowngradeMb = response.config.largeFileDowngradeMb
 
                 // Sync local state
                 filterMode = response.config.mode
@@ -279,6 +288,9 @@ extension AppModel {
                 whitelistInclude = response.config.whitelistInclude
                 whitelistExclude = response.config.whitelistExclude
                 metadataOnlyPatterns = response.config.metadataOnlyPatterns
+                tierRules = response.config.tierRules
+                defaultTierRules = response.config.defaultTierRules
+                largeFileDowngradeMb = response.config.largeFileDowngradeMb
             } else {
                 filterConfigError = response.message
             }
@@ -297,6 +309,8 @@ extension AppModel {
         whitelistInclude = savedWhitelistInclude
         whitelistExclude = savedWhitelistExclude
         metadataOnlyPatterns = savedMetadataOnlyPatterns
+        tierRules = savedTierRules
+        largeFileDowngradeMb = savedLargeFileDowngradeMb
         filterConfigError = nil
     }
 

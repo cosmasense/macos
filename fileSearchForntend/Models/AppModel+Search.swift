@@ -107,8 +107,12 @@ extension AppModel {
                 return
             }
             searchResults = response.results
+            // Backend always returns apps when any match the query.
+            // Frontend hides them when the user has the toggle on so
+            // they can't peek through after switching modes.
+            searchApps = disableAppsSearch ? [] : (response.apps ?? [])
             cacheSearchResults(key: cacheKey, results: response.results)
-            searchLog.info("search.ok id=\(shortID) elapsed=\(elapsedMs)ms results=\(response.results.count)")
+            searchLog.info("search.ok id=\(shortID) elapsed=\(elapsedMs)ms results=\(response.results.count) apps=\(self.searchApps.count)")
         } catch let error as APIError {
             let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
             guard activeSearchRequestID == requestID else {
@@ -274,6 +278,7 @@ extension AppModel {
 
             guard activePopupSearchRequestID == requestID else { return }
             popupSearchResults = response.results
+            popupSearchApps = disableAppsSearch ? [] : (response.apps ?? [])
         } catch let error as APIError {
             guard activePopupSearchRequestID == requestID else { return }
             popupSearchError = error.localizedDescription

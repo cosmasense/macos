@@ -81,6 +81,21 @@ struct SearchResultsView: View {
         filteredResults.first { $0.id == selectedResultID }
     }
 
+    /// Header text shown above the results. When apps and docs are
+    /// both present, surface the docs count to match the historical
+    /// "N results" wording — apps live in their own section that has
+    /// its own header chip. When only apps matched (zero docs after
+    /// filtering) we surface that explicitly so the header isn't a
+    /// confusing "0 results."
+    private var resultsHeaderText: String {
+        let docCount = filteredResults.count
+        let appCount = model.searchApps.count
+        if docCount == 0 && appCount > 0 {
+            return appCount == 1 ? "1 application" : "\(appCount) applications"
+        }
+        return "\(docCount) result\(docCount == 1 ? "" : "s")"
+    }
+
     private func openResult(_ result: SearchResultItem) {
         do {
             try model.withSecurityScopedAccess(for: result.file.filePath) {
@@ -206,10 +221,13 @@ struct SearchResultsView: View {
                         ErrorStateView(error: error)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 40)
-                    } else if !filteredResults.isEmpty {
-                        // Header with result count + view mode toggle
+                    } else if !filteredResults.isEmpty || !model.searchApps.isEmpty {
+                        // Header with result count + view mode toggle.
+                        // Apps are counted separately so users can see at
+                        // a glance whether the divider is there because of
+                        // apps or empty docs.
                         HStack {
-                            Text("\(filteredResults.count) result\(filteredResults.count == 1 ? "" : "s")")
+                            Text(resultsHeaderText)
                                 .font(.system(size: 18, weight: .semibold))
                             Spacer()
                             ViewModeToggle(
@@ -222,28 +240,47 @@ struct SearchResultsView: View {
                         }
                         .padding(.horizontal, 4)
 
+                        // Apps section, only when there are app hits.
+                        // Matches the docs view-mode so the two sections
+                        // visually line up (list above list, grid above
+                        // grid).
                         if viewMode == .list {
-                            ResultsListView(
-                                results: filteredResults,
-                                selectedResultID: $selectedResultID,
-                                onSelect: { id in
-                                    selectedResultID = id
-                                    resultsKeyFocus = true
-                                },
-                                onOpen: { openResult($0) },
-                                onPreview: { previewResult($0) }
+                            AppSearchListSection(
+                                apps: model.searchApps,
+                                onOpen: { openApplicationBundle($0) }
                             )
                         } else {
-                            ResultsGridView(
-                                results: filteredResults,
-                                selectedResultID: $selectedResultID,
-                                onSelect: { id in
-                                    selectedResultID = id
-                                    resultsKeyFocus = true
-                                },
-                                onOpen: { openResult($0) },
-                                onPreview: { previewResult($0) }
+                            AppSearchGridSection(
+                                apps: model.searchApps,
+                                columnCount: gridColumnCount,
+                                onOpen: { openApplicationBundle($0) }
                             )
+                        }
+
+                        if !filteredResults.isEmpty {
+                            if viewMode == .list {
+                                ResultsListView(
+                                    results: filteredResults,
+                                    selectedResultID: $selectedResultID,
+                                    onSelect: { id in
+                                        selectedResultID = id
+                                        resultsKeyFocus = true
+                                    },
+                                    onOpen: { openResult($0) },
+                                    onPreview: { previewResult($0) }
+                                )
+                            } else {
+                                ResultsGridView(
+                                    results: filteredResults,
+                                    selectedResultID: $selectedResultID,
+                                    onSelect: { id in
+                                        selectedResultID = id
+                                        resultsKeyFocus = true
+                                    },
+                                    onOpen: { openResult($0) },
+                                    onPreview: { previewResult($0) }
+                                )
+                            }
                         }
                     } else if !model.searchResults.isEmpty {
                         FilteredResultsEmptyView()

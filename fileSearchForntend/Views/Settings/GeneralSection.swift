@@ -128,6 +128,25 @@ struct GeneralSection: View {
                 .toggleStyle(.switch)
             }
 
+            // Hide the applications section that normally appears above
+            // file results when a query matches both. Off by default —
+            // app search is a discoverability feature most users want;
+            // power users who only ever search docs can suppress it.
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: $model.disableAppsSearch) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Hide Applications in Search")
+                            .font(.system(size: 14, weight: .medium))
+
+                        Text("Only show documents in search results. When off, matching apps appear above docs with a thin divider between them.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+
             // App Updates — auto-check toggle + status row only.
             // Channel picker and the manual "Check for Updates" button
             // moved into the Advanced sheet.

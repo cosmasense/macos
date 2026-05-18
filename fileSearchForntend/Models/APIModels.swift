@@ -267,10 +267,23 @@ struct SearchRequest: Codable {
 struct SearchResponse: Codable {
     let results: [SearchResultItem]
     let totalCount: Int
+    /// Applications matching the same query, returned as a parallel
+    /// list so the frontend can render an apps section above docs.
+    /// `nil` is the historical shape (no apps, no divider, no UX
+    /// change); a non-empty array triggers the new divider layout.
+    let apps: [ApplicationResultItem]?
 
     enum CodingKeys: String, CodingKey {
         case results
         case totalCount = "total_count"
+        case apps
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        results = try c.decode([SearchResultItem].self, forKey: .results)
+        totalCount = try c.decode(Int.self, forKey: .totalCount)
+        apps = try c.decodeIfPresent([ApplicationResultItem].self, forKey: .apps)
     }
 }
 
@@ -291,6 +304,55 @@ struct SearchResultItem: Codable, Identifiable, Hashable {
 
     static func == (lhs: SearchResultItem, rhs: SearchResultItem) -> Bool {
         lhs.file.filePath == rhs.file.filePath
+    }
+}
+
+/// One app hit returned alongside file hits in /api/search/'s response.
+struct ApplicationResultItem: Codable, Identifiable, Hashable {
+    let id: Int
+    let appPath: String
+    let displayName: String
+    let bundleId: String?
+    let shortVersion: String?
+    let category: String?
+    let description: String?
+    let useCases: String?
+    let iconPath: String?
+    let relevanceScore: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case appPath = "app_path"
+        case displayName = "display_name"
+        case bundleId = "bundle_id"
+        case shortVersion = "short_version"
+        case category
+        case description
+        case useCases = "use_cases"
+        case iconPath = "icon_path"
+        case relevanceScore = "relevance_score"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        appPath = try c.decode(String.self, forKey: .appPath)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        bundleId = try c.decodeIfPresent(String.self, forKey: .bundleId)
+        shortVersion = try c.decodeIfPresent(String.self, forKey: .shortVersion)
+        category = try c.decodeIfPresent(String.self, forKey: .category)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        useCases = try c.decodeIfPresent(String.self, forKey: .useCases)
+        iconPath = try c.decodeIfPresent(String.self, forKey: .iconPath)
+        relevanceScore = try c.decodeIfPresent(Double.self, forKey: .relevanceScore) ?? 0
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(appPath)
+    }
+
+    static func == (lhs: ApplicationResultItem, rhs: ApplicationResultItem) -> Bool {
+        lhs.appPath == rhs.appPath
     }
 }
 
@@ -595,6 +657,22 @@ enum FilterMode: String, Codable {
     case whitelist
 }
 
+/// One row in the declarative tier table.
+///
+/// `tier` is one of "full" | "semantic_name" | "literal_name".
+/// We use a String here rather than a Swift enum so the type can
+/// round-trip an unknown tier value (a forward-compat shim — if
+/// the backend ever adds a fourth tier the frontend won't crash
+/// trying to decode it).
+struct TierRuleDTO: Codable, Equatable, Identifiable {
+    let pattern: String
+    let tier: String
+
+    // Identity is (pattern, tier) — patterns can repeat across
+    // different tiers, so identity needs both fields.
+    var id: String { "\(pattern)|\(tier)" }
+}
+
 /// Response containing the current filter configuration
 struct FilterConfigResponse: Codable {
     let version: Int
@@ -612,6 +690,13 @@ struct FilterConfigResponse: Codable {
     // that doesn't yet send the field.
     let metadataOnlyPatterns: [String]
     let configPath: String
+    // v5: declarative tier rules. Empty user list means "use the
+    // curated defaults" — those defaults come back in
+    // `defaultTierRules` so the editor can show what an empty list
+    // resolves to without a second round-trip.
+    let tierRules: [TierRuleDTO]
+    let defaultTierRules: [TierRuleDTO]
+    let largeFileDowngradeMb: Int
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -624,6 +709,9 @@ struct FilterConfigResponse: Codable {
         case whitelistExclude = "whitelist_exclude"
         case metadataOnlyPatterns = "metadata_only_patterns"
         case configPath = "config_path"
+        case tierRules = "tier_rules"
+        case defaultTierRules = "default_tier_rules"
+        case largeFileDowngradeMb = "large_file_downgrade_mb"
     }
 
     init(from decoder: Decoder) throws {
@@ -638,6 +726,12 @@ struct FilterConfigResponse: Codable {
         whitelistExclude = try c.decodeIfPresent([String].self, forKey: .whitelistExclude) ?? []
         metadataOnlyPatterns = try c.decodeIfPresent([String].self, forKey: .metadataOnlyPatterns) ?? []
         configPath = try c.decodeIfPresent(String.self, forKey: .configPath) ?? ""
+        tierRules = try c.decodeIfPresent([TierRuleDTO].self, forKey: .tierRules) ?? []
+        defaultTierRules = try c.decodeIfPresent([TierRuleDTO].self, forKey: .defaultTierRules) ?? []
+        // 200 MB matches the backend DEFAULT_LARGE_FILE_DOWNGRADE_MB
+        // so an old backend missing the field doesn't flip the cap
+        // to 0 and downgrade everything.
+        largeFileDowngradeMb = try c.decodeIfPresent(Int.self, forKey: .largeFileDowngradeMb) ?? 200
     }
 }
 
@@ -654,6 +748,11 @@ struct UpdateFilterConfigRequest: Codable {
     let whitelistExclude: [String]?
     // v3: metadata-only patterns
     let metadataOnlyPatterns: [String]?
+    // v5: tier rules + size-downgrade cap. nil means "no change";
+    // an explicit empty array means "use defaults" (same on-disk
+    // semantics as the backend).
+    let tierRules: [TierRuleDTO]?
+    let largeFileDowngradeMb: Int?
     // Control whether to apply changes immediately
     let applyImmediately: Bool
 
@@ -666,6 +765,8 @@ struct UpdateFilterConfigRequest: Codable {
         case whitelistInclude = "whitelist_include"
         case whitelistExclude = "whitelist_exclude"
         case metadataOnlyPatterns = "metadata_only_patterns"
+        case tierRules = "tier_rules"
+        case largeFileDowngradeMb = "large_file_downgrade_mb"
         case applyImmediately = "apply_immediately"
     }
 }

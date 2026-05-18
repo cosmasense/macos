@@ -121,18 +121,6 @@ extension AppModel {
         }
     }
 
-    /// Fetches files indexed by filename only (status=INDEXED_PARTIAL).
-    /// These are by-design partials: oversize files, blank documents,
-    /// user-elected metadata-only patterns. Surfaced in the Partial tab.
-    func refreshPartialFiles() async {
-        do {
-            let response = try await apiClient.fetchPartialFiles()
-            partialFiles = response.files
-        } catch {
-            queueError = queueErrorMessage(from: error)
-        }
-    }
-
     /// Re-queues a failed file for reprocessing
     func reindexFile(filePath: String) async {
         // Optimistic UI update

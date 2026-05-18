@@ -251,6 +251,8 @@ final class APIClient: @unchecked Sendable {
         whitelistInclude: [String]? = nil,
         whitelistExclude: [String]? = nil,
         metadataOnlyPatterns: [String]? = nil,
+        tierRules: [TierRuleDTO]? = nil,
+        largeFileDowngradeMb: Int? = nil,
         applyImmediately: Bool = true
     ) async throws -> UpdateFilterConfigResponse {
         let url = baseURL.appendingPathComponent("/api/filters/config")
@@ -263,6 +265,8 @@ final class APIClient: @unchecked Sendable {
             whitelistInclude: whitelistInclude,
             whitelistExclude: whitelistExclude,
             metadataOnlyPatterns: metadataOnlyPatterns,
+            tierRules: tierRules,
+            largeFileDowngradeMb: largeFileDowngradeMb,
             applyImmediately: applyImmediately
         )
         return try await put(url: url, body: request)
@@ -356,24 +360,6 @@ final class APIClient: @unchecked Sendable {
 
     func fetchRecentFiles(offset: Int = 0, limit: Int = 500) async throws -> ProcessedFilesResponse {
         guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/recent"), resolvingAgainstBaseURL: false) else {
-            throw APIError.invalidURL
-        }
-        components.queryItems = [
-            URLQueryItem(name: "offset", value: "\(offset)"),
-            URLQueryItem(name: "limit", value: "\(limit)"),
-        ]
-        guard let url = components.url else {
-            throw APIError.invalidURL
-        }
-        return try await get(url: url)
-    }
-
-    /// List files indexed by filename only (status=INDEXED_PARTIAL).
-    /// Backed by `/api/queue/partial`. The cap matches the recent
-    /// endpoint — partial counts can be large for users who pointed
-    /// metadata-only patterns at big folders.
-    func fetchPartialFiles(offset: Int = 0, limit: Int = 2000) async throws -> ProcessedFilesResponse {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/queue/partial"), resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }
         components.queryItems = [

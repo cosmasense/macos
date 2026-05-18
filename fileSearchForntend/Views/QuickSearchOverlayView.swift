@@ -492,7 +492,7 @@ struct QuickSearchOverlayView: View {
                 ProgressView()
                     .controlSize(.regular)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredResults.isEmpty {
+            } else if filteredResults.isEmpty && model.popupSearchApps.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "doc.questionmark")
                         .font(.system(size: 32))
@@ -504,31 +504,44 @@ struct QuickSearchOverlayView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible(), spacing: 2, alignment: .top),
-                            count: tileGridColumnCount
-                        ),
-                        alignment: .center,
-                        spacing: 6
-                    ) {
-                        ForEach(Array(filteredResults.prefix(50).enumerated()), id: \.element.id) { index, item in
-                            OverlayFileTile(
-                                result: item,
-                                appearIndex: index,
-                                isSelected: selectedTileID == item.id,
-                                onSelect: {
-                                    selectedTileID = item.id
-                                    isSearchFocused = false
-                                    isTileFocused = true
-                                },
-                                onOpen: { openTile(item) },
-                                onPreview: { previewTile(item) }
-                            )
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Apps section sits above the file grid with a
+                        // thin divider; renders to nothing when no apps
+                        // matched so the historical popup layout stays
+                        // pixel-identical.
+                        AppSearchGridSection(
+                            apps: model.popupSearchApps,
+                            columnCount: max(2, tileGridColumnCount - 1),
+                            onOpen: { openApplicationBundle($0) }
+                        )
+                        .padding(.horizontal, 4)
+
+                        LazyVGrid(
+                            columns: Array(
+                                repeating: GridItem(.flexible(), spacing: 2, alignment: .top),
+                                count: tileGridColumnCount
+                            ),
+                            alignment: .center,
+                            spacing: 6
+                        ) {
+                            ForEach(Array(filteredResults.prefix(50).enumerated()), id: \.element.id) { index, item in
+                                OverlayFileTile(
+                                    result: item,
+                                    appearIndex: index,
+                                    isSelected: selectedTileID == item.id,
+                                    onSelect: {
+                                        selectedTileID = item.id
+                                        isSearchFocused = false
+                                        isTileFocused = true
+                                    },
+                                    onOpen: { openTile(item) },
+                                    onPreview: { previewTile(item) }
+                                )
+                            }
                         }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
                 }
                 .frame(maxWidth: .infinity)
             }

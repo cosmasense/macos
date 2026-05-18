@@ -61,6 +61,7 @@ class AppModel {
     nonisolated static let backendURLDefaultsKey = "backendURL"
     nonisolated static let bookmarksDefaultsKey = "watchedFolderBookmarks"
     nonisolated static let preventSleepDefaultsKey = "preventSleepDuringIndexing"
+    nonisolated static let disableAppsSearchDefaultsKey = "disableAppsSearch"
     static let progressWindowSeconds: TimeInterval = 30 * 60 // 30 minutes
     /// Cadence of the background poll that keeps the sleep assertion in
     /// sync when ContentView isn't on screen (its own 4s poll stops when
@@ -94,6 +95,12 @@ class AppModel {
     var searchText: String = ""
     var searchTokens: [SearchToken] = []
     var searchResults: [SearchResultItem] = []
+    /// Applications matching the current search. Parallel to
+    /// ``searchResults`` so the results view can render an apps
+    /// section above docs with a thin divider between them. Empty
+    /// when no apps match OR when ``disableAppsSearch`` is on —
+    /// the results view treats empty as "no divider, original UX".
+    var searchApps: [ApplicationResultItem] = []
     var isSearching: Bool = false
     var searchError: String?
     var isSearchFieldFocused: Bool = false
@@ -132,6 +139,8 @@ class AppModel {
     var popupSearchText: String = ""
     var popupSearchTokens: [SearchToken] = []
     var popupSearchResults: [SearchResultItem] = []
+    /// Same as ``searchApps`` but for the quick-search popup overlay.
+    var popupSearchApps: [ApplicationResultItem] = []
     var popupIsSearching: Bool = false
     var popupSearchError: String?
     var popupOpenCount: Int = 0
@@ -159,13 +168,29 @@ class AppModel {
     /// v3 third tier: files matching these get an embedding from
     /// filename + metadata only — no LLM summary. Status =
     /// INDEXED_PARTIAL on the backend.
+    ///
+    /// Migrated into ``tierRules`` (Tier B) on the backend at v4→v5,
+    /// preserved here as a no-op echo of the round-trip field so the
+    /// existing dirty-tracking doesn't break.
     var metadataOnlyPatterns: [String] = []
+    /// v5 declarative tier rules. Empty array means "use the
+    /// defaults" — same encoding as the backend.
+    var tierRules: [TierRuleDTO] = []
+    /// Curated defaults from the backend, shown read-only when the
+    /// user resets or first lands on the editor.
+    var defaultTierRules: [TierRuleDTO] = []
+    /// Size in MB above which a FULL-tiered file gets auto-downgraded
+    /// to SEMANTIC_NAME. Lets a single rule cover both "short clip"
+    /// and "long movie" cases for the same extension.
+    var largeFileDowngradeMb: Int = 200
     var savedFilterMode: String = "blacklist"
     var savedBlacklistExclude: [String] = []
     var savedBlacklistInclude: [String] = []
     var savedWhitelistInclude: [String] = []
     var savedWhitelistExclude: [String] = []
     var savedMetadataOnlyPatterns: [String] = []
+    var savedTierRules: [TierRuleDTO] = []
+    var savedLargeFileDowngradeMb: Int = 200
     var isLoadingFilterConfig: Bool = false
     var filterConfigError: String?
 
@@ -186,7 +211,9 @@ class AppModel {
         blacklistInclude != savedBlacklistInclude ||
         whitelistInclude != savedWhitelistInclude ||
         whitelistExclude != savedWhitelistExclude ||
-        metadataOnlyPatterns != savedMetadataOnlyPatterns
+        metadataOnlyPatterns != savedMetadataOnlyPatterns ||
+        tierRules != savedTierRules ||
+        largeFileDowngradeMb != savedLargeFileDowngradeMb
     }
 
     /// Filter patterns for UI display
@@ -293,12 +320,6 @@ class AppModel {
     var schedulerConfig: SchedulerResponse?
     var failedFiles: [ProcessedFileItem] = []
     var recentFiles: [ProcessedFileItem] = []
-    // INDEXED_PARTIAL: files that succeeded with filename-only indexing
-    // (oversize beyond the parse cap, blank docs with no extractable
-    // content, user-elected metadata-only patterns). These were
-    // historically lumped into `failedFiles`, which was alarming for
-    // by-design partials. Backend ProcessingStatus = INDEXED_PARTIAL.
-    var partialFiles: [ProcessedFileItem] = []
     @ObservationIgnored var queueProgressItems: [String: (addedAt: Date, completed: Bool)] = [:]
 
     // MARK: - Sleep Prevention
@@ -327,6 +348,27 @@ class AppModel {
     }
     @ObservationIgnored private var sleepAssertionPollTask: Task<Void, Never>?
 
+    /// Hide applications from search results entirely.
+    ///
+    /// When true: the apps section above docs is suppressed in every
+    /// results surface (main grid/list + popup grid). The backend
+    /// still returns `apps` in the /api/search/ response — we just
+    /// drop it on the floor. Toggling this doesn't require any
+    /// re-fetch; the next search picks up the new behavior. Default
+    /// off so users discover the apps feature naturally.
+    var disableAppsSearch: Bool {
+        didSet {
+            guard disableAppsSearch != oldValue else { return }
+            UserDefaults.standard.set(disableAppsSearch, forKey: Self.disableAppsSearchDefaultsKey)
+            // Clear any apps already on screen so the toggle takes
+            // effect immediately, not just on the next search.
+            if disableAppsSearch {
+                searchApps = []
+                popupSearchApps = []
+            }
+        }
+    }
+
     // MARK: - Services
 
     @ObservationIgnored let apiClient: APIClient
@@ -347,6 +389,9 @@ class AppModel {
         // Load the preventSleep preference. Defaults to off so we don't
         // change behavior for existing users without their consent.
         self.preventSleepDuringIndexing = UserDefaults.standard.bool(forKey: Self.preventSleepDefaultsKey)
+        // Apps search shows up by default — UserDefaults.bool returns
+        // false for a missing key, which is the intended default.
+        self.disableAppsSearch = UserDefaults.standard.bool(forKey: Self.disableAppsSearchDefaultsKey)
 
         // Only set up the URL — don't connect until backend is ready
         if let url = URL(string: backendURL) {
