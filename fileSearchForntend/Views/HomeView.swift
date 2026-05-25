@@ -659,11 +659,32 @@ struct SearchFieldView: View {
         let word = String(lastWord)
         guard word.hasPrefix("@"), word.count > 1 else { return }
 
-        let folderName = String(word.dropFirst())
-        let matchingFolder = model.watchedFolders.first {
-            $0.name.caseInsensitiveCompare(folderName) == .orderedSame
+        let body = String(word.dropFirst())
+
+        // `@Applications` — applicationsOnly scope. Reserved keyword,
+        // checked before folder names so a user-created folder named
+        // "Applications" can't shadow it (rare but possible).
+        if body.caseInsensitiveCompare("Applications") == .orderedSame {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                createScopeToken(rawText: word)
+            }
+            return
         }
 
+        // `@*.pdf`, `@*report*`, `@?.txt`, … — glob filter. We commit
+        // the token as soon as the user types a metacharacter (and at
+        // least one literal character so a bare `@*` doesn't fire).
+        if (body.contains("*") || body.contains("?")) && body.count >= 2 {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                createGlobToken(rawText: word, glob: body)
+            }
+            return
+        }
+
+        // Folder name — matched against the watched-folder list.
+        let matchingFolder = model.watchedFolders.first {
+            $0.name.caseInsensitiveCompare(body) == .orderedSame
+        }
         if let folder = matchingFolder {
             withAnimation(.easeInOut(duration: 0.2)) {
                 createToken(for: folder.name)
@@ -679,6 +700,28 @@ struct SearchFieldView: View {
         // Remove the @folder from text
         model.searchText = model.searchText
             .replacingOccurrences(of: "@\(folderName)", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func createScopeToken(rawText: String) {
+        let newToken = SearchToken(kind: .applicationsOnly, value: "Applications")
+        if !model.searchTokens.contains(where: { $0.kind == .applicationsOnly }) {
+            model.searchTokens.append(newToken)
+        }
+        model.searchText = model.searchText
+            .replacingOccurrences(of: rawText, with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func createGlobToken(rawText: String, glob: String) {
+        let newToken = SearchToken(kind: .glob, value: glob)
+        // Allow multiple glob tokens to coexist? Today the backend
+        // honors a single path_pattern, so we replace any existing
+        // glob token rather than stack.
+        model.searchTokens.removeAll { $0.kind == .glob }
+        model.searchTokens.append(newToken)
+        model.searchText = model.searchText
+            .replacingOccurrences(of: rawText, with: "")
             .trimmingCharacters(in: .whitespaces)
     }
 

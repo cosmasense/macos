@@ -169,14 +169,18 @@ final class APIClient: @unchecked Sendable {
         query: String,
         directory: String? = nil,
         filters: [String: String]? = nil,
-        limit: Int = 50
+        limit: Int = 50,
+        scope: String? = nil,
+        pathPattern: String? = nil
     ) async throws -> SearchResponse {
         let url = baseURL.appendingPathComponent("/api/search/")
         let request = SearchRequest(
             query: query,
             directory: directory,
             filters: filters,
-            limit: limit
+            limit: limit,
+            scope: scope,
+            pathPattern: pathPattern
         )
         return try await post(url: url, body: request)
     }

@@ -1250,11 +1250,25 @@ struct PopupSearchFieldView: View {
         let word = String(lastWord)
         guard word.hasPrefix("@"), word.count > 1 else { return }
 
-        let folderName = String(word.dropFirst())
-        let matchingFolder = model.watchedFolders.first {
-            $0.name.caseInsensitiveCompare(folderName) == .orderedSame
+        let body = String(word.dropFirst())
+
+        if body.caseInsensitiveCompare("Applications") == .orderedSame {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                createScopeToken(rawText: word)
+            }
+            return
         }
 
+        if (body.contains("*") || body.contains("?")) && body.count >= 2 {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                createGlobToken(rawText: word, glob: body)
+            }
+            return
+        }
+
+        let matchingFolder = model.watchedFolders.first {
+            $0.name.caseInsensitiveCompare(body) == .orderedSame
+        }
         if let folder = matchingFolder {
             withAnimation(.easeInOut(duration: 0.2)) {
                 createToken(for: folder.name)
@@ -1269,6 +1283,25 @@ struct PopupSearchFieldView: View {
         }
         model.popupSearchText = model.popupSearchText
             .replacingOccurrences(of: "@\(folderName)", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func createScopeToken(rawText: String) {
+        let newToken = SearchToken(kind: .applicationsOnly, value: "Applications")
+        if !model.popupSearchTokens.contains(where: { $0.kind == .applicationsOnly }) {
+            model.popupSearchTokens.append(newToken)
+        }
+        model.popupSearchText = model.popupSearchText
+            .replacingOccurrences(of: rawText, with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func createGlobToken(rawText: String, glob: String) {
+        let newToken = SearchToken(kind: .glob, value: glob)
+        model.popupSearchTokens.removeAll { $0.kind == .glob }
+        model.popupSearchTokens.append(newToken)
+        model.popupSearchText = model.popupSearchText
+            .replacingOccurrences(of: rawText, with: "")
             .trimmingCharacters(in: .whitespaces)
     }
 

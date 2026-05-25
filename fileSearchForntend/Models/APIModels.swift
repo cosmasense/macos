@@ -262,6 +262,22 @@ struct SearchRequest: Codable {
     let directory: String?
     let filters: [String: String]?
     let limit: Int?
+    /// `"all"`, `"files"`, or `"applications"`. nil → backend defaults to `"all"`.
+    /// Set from the `@Applications` search token.
+    let scope: String?
+    /// Glob pattern (`*.pdf`, `*report*`) pushed into the backend
+    /// search as a LIKE filter on file_path and app_path. Set from
+    /// `@*.pdf`-style tokens.
+    let pathPattern: String?
+
+    enum CodingKeys: String, CodingKey {
+        case query
+        case directory
+        case filters
+        case limit
+        case scope
+        case pathPattern = "path_pattern"
+    }
 }
 
 struct SearchResponse: Codable {

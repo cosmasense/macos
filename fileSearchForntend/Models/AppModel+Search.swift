@@ -55,20 +55,27 @@ extension AppModel {
     func searchFiles(query: String) async {
         let cleanedQuery = stripTokensFromQuery(query)
         let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scope = scopeFromTokens(searchTokens)
         let directory = directoryFromTokens()
+        let pathPattern = globFromTokens(searchTokens)
 
-        // Allow search with empty query if directory filter is set
-        guard !normalizedQuery.isEmpty || directory != nil else { return }
+        // Allow search with empty query if any non-text filter (folder, scope, glob) is set.
+        let hasFilter = directory != nil || scope != nil || pathPattern != nil
+        guard !normalizedQuery.isEmpty || hasFilter else { return }
 
         let requestID = UUID()
         activeSearchRequestID = requestID
         lastSearchQuery = query
         searchError = nil
 
-        // Check cache for instant results
+        // Check cache for instant results. The cache key embeds the
+        // full filter set — switching scope or glob must not serve a
+        // stale list from a previous query.
         let cacheKey = Self.cacheKey(
             query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
             directory: directory,
+            scope: scope,
+            pathPattern: pathPattern,
             limit: 50
         )
         let now = Date()
@@ -98,7 +105,9 @@ extension AppModel {
                 query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
                 directory: directory,
                 filters: nil,
-                limit: 50
+                limit: 50,
+                scope: scope,
+                pathPattern: pathPattern
             )
 
             let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
@@ -107,9 +116,11 @@ extension AppModel {
                 return
             }
             searchResults = response.results
-            // Backend always returns apps when any match the query.
-            // Frontend hides them when the user has the toggle on so
-            // they can't peek through after switching modes.
+            // Apps now compete with files in the same RRF, so the
+            // backend only returns apps that earned a slot in the
+            // top-N (or none at all when the query is unrelated to
+            // apps). The disableAppsSearch toggle still wins as a
+            // hard UI override for users who want apps suppressed.
             searchApps = disableAppsSearch ? [] : (response.apps ?? [])
             cacheSearchResults(key: cacheKey, results: response.results)
             searchLog.info("search.ok id=\(shortID) elapsed=\(elapsedMs)ms results=\(response.results.count) apps=\(self.searchApps.count)")
@@ -136,9 +147,11 @@ extension AppModel {
         }
     }
 
-    /// Builds a stable cache key for a search.
-    nonisolated static func cacheKey(query: String, directory: String?, limit: Int) -> String {
-        "\(query)|\(directory ?? "")|\(limit)"
+    /// Builds a stable cache key for a search. Scope and pathPattern
+    /// are part of the key so a user toggling between `@Applications`
+    /// or a glob filter doesn't see a stale, differently-scoped list.
+    nonisolated static func cacheKey(query: String, directory: String?, scope: String? = nil, pathPattern: String? = nil, limit: Int) -> String {
+        "\(query)|\(directory ?? "")|\(scope ?? "")|\(pathPattern ?? "")|\(limit)"
     }
 
     /// Stores results in the cache, evicting the oldest entries if over the cap.
@@ -199,19 +212,27 @@ extension AppModel {
         return components.joined(separator: " ").trimmingCharacters(in: .whitespaces)
     }
 
-    /// Removes @folder tokens from the query string
+    /// Removes @-tokens (folder, applicationsOnly, glob) from the
+    /// query string so only the human search terms reach the backend.
+    /// Each token kind has its own filter field on the API request.
     internal func stripTokensFromQuery(_ query: String) -> String {
         var result = query
         for token in searchTokens {
             result = result.replacingOccurrences(of: "@\(token.value)", with: "")
         }
 
-        // Also remove any remaining @ patterns matching watched folders
+        // Also remove any remaining @ patterns that look like one of
+        // our recognized token forms — watched folders, the literal
+        // word "Applications", or a glob (contains * or ?).
         let words = result.split(separator: " ")
         let cleanedWords = words.filter { word in
             if word.hasPrefix("@") {
-                let folderName = String(word.dropFirst())
-                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
+                let body = String(word.dropFirst())
+                if body.isEmpty { return true }
+                if body.caseInsensitiveCompare("Applications") == .orderedSame { return false }
+                if body.contains("*") || body.contains("?") { return false }
+                let isFolder = watchedFolders.contains { $0.name.caseInsensitiveCompare(body) == .orderedSame }
+                return !isFolder
             }
             return true
         }
@@ -227,6 +248,21 @@ extension AppModel {
             return folder.path
         }
         return token.value
+    }
+
+    /// Maps tokens to the backend's `scope` API field. Only honors
+    /// `.applicationsOnly` today — file-only is not user-exposed.
+    internal func scopeFromTokens(_ tokens: [SearchToken]) -> String? {
+        if tokens.contains(where: { $0.kind == .applicationsOnly }) {
+            return "applications"
+        }
+        return nil
+    }
+
+    /// Returns the first `.glob` token's value, or nil. Backend
+    /// applies it as a SQL LIKE filter on file_path / app_path.
+    internal func globFromTokens(_ tokens: [SearchToken]) -> String? {
+        tokens.first(where: { $0.kind == .glob })?.value
     }
 }
 
@@ -251,9 +287,12 @@ extension AppModel {
     func popupSearchFiles(query: String) async {
         let cleanedQuery = stripPopupTokensFromQuery(query)
         let normalizedQuery = cleanedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scope = scopeFromTokens(popupSearchTokens)
         let directory = popupDirectoryFromTokens()
+        let pathPattern = globFromTokens(popupSearchTokens)
 
-        guard !normalizedQuery.isEmpty || directory != nil else { return }
+        let hasFilter = directory != nil || scope != nil || pathPattern != nil
+        guard !normalizedQuery.isEmpty || hasFilter else { return }
 
         let requestID = UUID()
         activePopupSearchRequestID = requestID
@@ -273,7 +312,9 @@ extension AppModel {
                 query: normalizedQuery.isEmpty ? "*" : normalizedQuery,
                 directory: directory,
                 filters: nil,
-                limit: 50
+                limit: 50,
+                scope: scope,
+                pathPattern: pathPattern
             )
 
             guard activePopupSearchRequestID == requestID else { return }
@@ -313,8 +354,12 @@ extension AppModel {
         let words = result.split(separator: " ")
         let cleanedWords = words.filter { word in
             if word.hasPrefix("@") {
-                let folderName = String(word.dropFirst())
-                return !watchedFolders.contains { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }
+                let body = String(word.dropFirst())
+                if body.isEmpty { return true }
+                if body.caseInsensitiveCompare("Applications") == .orderedSame { return false }
+                if body.contains("*") || body.contains("?") { return false }
+                let isFolder = watchedFolders.contains { $0.name.caseInsensitiveCompare(body) == .orderedSame }
+                return !isFolder
             }
             return true
         }
